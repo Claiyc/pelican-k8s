@@ -131,13 +131,6 @@ func (r *GameServerReconciler) now() time.Time {
 	return time.Now()
 }
 
-func (r *GameServerReconciler) updateStatus(s *scope) error {
-	if equalStatus(&s.orig.Status, &s.gs.Status) {
-		return nil
-	}
-	return r.Status().Update(s.ctx, s.gs)
-}
-
 func (r *GameServerReconciler) reconcile(s *scope) error {
 	if err := r.loadClassAndSettings(s); err != nil {
 		return err
@@ -809,10 +802,6 @@ func computePhase(s *scope) v1alpha1.Phase {
 	default:
 		return v1alpha1.PhaseStopped
 	}
-}
-
-func equalStatus(a, b *v1alpha1.GameServerStatus) bool {
-	return render.Hash(a) == render.Hash(b)
 }
 
 // quantityString is a small helper for events.
