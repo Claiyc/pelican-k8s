@@ -201,19 +201,19 @@ func remoteCalls(t *testing.T, dir string) []string {
 
 // remoteAPI is what the gateway serves to agents (remoteapi package).
 var remoteAPI = map[string]string{
-	"Get /servers":                                "listServers",
-	"Post /servers/reset":                         "ack",
-	"Get /servers/%s":                             "getServer",
-	"Get /servers/%s/install":                     "getInstall",
-	"Post /servers/%s/install":                    "installResult",
-	"Post /servers/%s/archive":                    "not served: dead Panel route (contract doc 3)",
-	"Post /servers/%s/transfer/%s":                "not served: transfers unsupported",
-	"Post /sftp/auth":                             "sftpAuth",
-	"Get /backups/%s":                             "backup",
-	"Post /backups/%s":                            "backup",
-	"Post /backups/%s/restore":                    "backup",
-	"Post /activity":                              "activity",
-	"Post /servers/%s/container/status":           "containerStatus",
+	"Get /servers":                      "listServers",
+	"Post /servers/reset":               "ack",
+	"Get /servers/%s":                   "getServer",
+	"Get /servers/%s/install":           "getInstall",
+	"Post /servers/%s/install":          "installResult",
+	"Post /servers/%s/archive":          "not served: dead Panel route (contract doc 3)",
+	"Post /servers/%s/transfer/%s":      "not served: transfers unsupported",
+	"Post /sftp/auth":                   "sftpAuth",
+	"Get /backups/%s":                   "backup",
+	"Post /backups/%s":                  "backup",
+	"Post /backups/%s/restore":          "backup",
+	"Post /activity":                    "activity",
+	"Post /servers/%s/container/status": "containerStatus",
 }
 
 func TestGatewayServesWingsRemoteCalls(t *testing.T) {
