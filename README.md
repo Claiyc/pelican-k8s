@@ -139,5 +139,5 @@ Security issues: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Not decided yet. Wings is MIT licensed and used unmodified; the Panel (AGPL-3.0)
-is used unmodified as a separate service.
+[Apache License 2.0](LICENSE). Wings (MIT) is used unmodified as a dependency
+(see [NOTICE](NOTICE)); the Panel (AGPL-3.0) is used unmodified as a separate service.
