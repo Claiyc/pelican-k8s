@@ -59,7 +59,8 @@ See [docs/panel.md](docs/panel.md) for databases, TLS and OpenShift notes.
 daemon connect port `443`, SFTP port `30022` (or your LoadBalancer port). Open
 the node's *Configuration* tab and copy `token_id` and `token`.
 
-**3. Install pelican-k8s:**
+**3. Install pelican-k8s** (until the first tagged release, add
+`--set image.tag=master` to use the images CI publishes from the default branch):
 
 ```bash
 helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace \
