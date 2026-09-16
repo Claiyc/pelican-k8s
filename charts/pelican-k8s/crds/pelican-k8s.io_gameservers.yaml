@@ -189,9 +189,21 @@ spec:
                   podUID:
                     description: PodUID is the pod whose agent the operator last drove.
                     type: string
+                  relayedExit:
+                    description: RelayedExit identifies the last game container termination
+                      forwarded to the agent.
+                    type: string
                   sftpHostKey:
                     description: SftpHostKey is the agent's SSH host key fingerprint
                       pinned by the gateway.
+                    type: string
+                  syncedEnvVersion:
+                    description: SyncedEnvVersion is the resourceVersion of the env
+                      Secret last synced into the agent.
+                    type: string
+                  syncedRevision:
+                    description: SyncedRevision is the spec.panel.panelRevision last
+                      synced into the agent.
                     type: string
                 type: object
               backups:
@@ -306,6 +318,19 @@ spec:
                   preparedGeneration:
                     format: int64
                     type: integer
+                  reportedGeneration:
+                    description: ReportedGeneration is the generation whose result
+                      the gateway reported to the Panel.
+                    format: int64
+                    type: integer
+                  requestedAt:
+                    format: date-time
+                    type: string
+                  requestedGeneration:
+                    description: RequestedGeneration is the generation the operator
+                      asked the agent to install.
+                    format: int64
+                    type: integer
                   result:
                     type: string
                 type: object
@@ -340,6 +365,11 @@ spec:
                   observedGeneration:
                     format: int64
                     type: integer
+                  observedRestartRequest:
+                    description: ObservedRestartRequest is the spec.power.restartRequest
+                      last acted on.
+                    format: int64
+                    type: integer
                 type: object
               process:
                 description: ProcessStatus is what the agent reported about the process.
@@ -365,6 +395,19 @@ spec:
                     description: State is offline, starting, running or stopping.
                     type: string
                 type: object
+              snapshot:
+                description: SnapshotStatus tracks scheduled VolumeSnapshots.
+                properties:
+                  lastAt:
+                    format: date-time
+                    type: string
+                  lastName:
+                    type: string
+                type: object
+              templateHash:
+                description: TemplateHash is the pod template hash the current StatefulSet
+                  carries.
+                type: string
               usage:
                 description: UsageStatus is a throttled resource usage summary.
                 properties:

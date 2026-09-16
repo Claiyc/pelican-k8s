@@ -389,6 +389,13 @@ spec:
                         - EmptyDir
                         type: string
                     type: object
+                  snapshotRetain:
+                    default: 7
+                    description: SnapshotRetain is how many scheduled snapshots to
+                      keep per server.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   snapshotSchedule:
                     description: SnapshotSchedule is an optional cron expression for
                       crash-consistent VolumeSnapshots.

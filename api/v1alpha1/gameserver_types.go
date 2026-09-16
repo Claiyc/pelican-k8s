@@ -154,6 +154,8 @@ type PowerActionRecord struct {
 type PowerStatus struct {
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	LastAction         *PowerActionRecord `json:"lastAction,omitempty"`
+	// ObservedRestartRequest is the spec.power.restartRequest last acted on.
+	ObservedRestartRequest int64 `json:"observedRestartRequest,omitempty"`
 }
 
 // AgentStatus tracks the agent the operator is driving.
@@ -162,6 +164,12 @@ type AgentStatus struct {
 	PodUID string `json:"podUID,omitempty"`
 	// SftpHostKey is the agent's SSH host key fingerprint pinned by the gateway.
 	SftpHostKey string `json:"sftpHostKey,omitempty"`
+	// RelayedExit identifies the last game container termination forwarded to the agent.
+	RelayedExit string `json:"relayedExit,omitempty"`
+	// SyncedRevision is the spec.panel.panelRevision last synced into the agent.
+	SyncedRevision string `json:"syncedRevision,omitempty"`
+	// SyncedEnvVersion is the resourceVersion of the env Secret last synced into the agent.
+	SyncedEnvVersion string `json:"syncedEnvVersion,omitempty"`
 }
 
 // UsageStatus is a throttled resource usage summary.
@@ -180,6 +188,17 @@ type InstallStatus struct {
 	FinishedAt         *metav1.Time `json:"finishedAt,omitempty"`
 	// JobName is the install Job of the current generation, if any.
 	JobName string `json:"jobName,omitempty"`
+	// RequestedGeneration is the generation the operator asked the agent to install.
+	RequestedGeneration int64        `json:"requestedGeneration,omitempty"`
+	RequestedAt         *metav1.Time `json:"requestedAt,omitempty"`
+	// ReportedGeneration is the generation whose result the gateway reported to the Panel.
+	ReportedGeneration int64 `json:"reportedGeneration,omitempty"`
+}
+
+// SnapshotStatus tracks scheduled VolumeSnapshots.
+type SnapshotStatus struct {
+	LastAt   *metav1.Time `json:"lastAt,omitempty"`
+	LastName string       `json:"lastName,omitempty"`
 }
 
 // PendingBackup is a backup the agent is allowed to report on.
@@ -213,6 +232,9 @@ type GameServerStatus struct {
 	Endpoints          []Endpoint    `json:"endpoints,omitempty"`
 	// PodImage is the digest-pinned image of the current pod.
 	PodImage string `json:"podImage,omitempty"`
+	// TemplateHash is the pod template hash the current StatefulSet carries.
+	TemplateHash string          `json:"templateHash,omitempty"`
+	Snapshot     *SnapshotStatus `json:"snapshot,omitempty"`
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

@@ -64,6 +64,10 @@ type StorageSpec struct {
 	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 	// SnapshotSchedule is an optional cron expression for crash-consistent VolumeSnapshots.
 	SnapshotSchedule string `json:"snapshotSchedule,omitempty"`
+	// SnapshotRetain is how many scheduled snapshots to keep per server.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=1
+	SnapshotRetain int32 `json:"snapshotRetain,omitempty"`
 }
 
 // LoadBalancerSpec carries implementation specific annotation keys.

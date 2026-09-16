@@ -336,8 +336,12 @@ func wsCheck(t *testing.T, port int, origin string) {
 	seen := map[string]int{}
 	var console []string
 	c.SetReadDeadline(time.Now().Add(20 * time.Second))
-	send("send logs")
+	logsRequested := false
 	for len(console) < 5 || seen["auth success"] == 0 || seen["status"] == 0 {
+		if seen["auth success"] > 0 && !logsRequested {
+			send("send logs")
+			logsRequested = true
+		}
 		var m struct {
 			Event string   `json:"event"`
 			Args  []string `json:"args"`
