@@ -7,7 +7,7 @@ IMAGES := shim agent gateway operator
 CRD_DIR := charts/pelican-k8s/crds
 LDFLAGS := -s -w -X github.com/Claiyc/pelican-k8s/internal/version.Version=$(VERSION)
 
-.PHONY: help generate build test lint vet fmt tidy images push crds
+.PHONY: help generate build test lint vet fmt tidy images push
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -24,6 +24,10 @@ test: ## Run unit tests
 
 vet: ## Run go vet
 	$(GO) vet ./...
+
+lint: ## Run golangci-lint (installs it with the repo toolchain if missing)
+	@command -v golangci-lint >/dev/null || $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	golangci-lint run ./...
 
 fmt: ## gofmt all sources
 	gofmt -s -w $$(git ls-files '*.go')
