@@ -39,10 +39,6 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 	labels := in.Labels("install")
 	labels["pelican-k8s.io/install-generation"] = itoa(gen64)
 
-	restricted := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: boolPtr(false),
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-	}
 	// The prepare step runs as the game UID (which owns the PVC layout) even
 	// when the script itself runs as root.
 	prepare := corev1.Container{
