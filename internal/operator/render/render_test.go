@@ -307,6 +307,9 @@ func TestInstallJob(t *testing.T) {
 	if !server || !install || !script {
 		t.Fatalf("mounts %+v", c.VolumeMounts)
 	}
+	if pi := spec.InitContainers[0]; *pi.SecurityContext.RunAsUser != 1000 || pi.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("prepare must run as the game uid: %+v", pi.SecurityContext)
+	}
 	if spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0].TopologyKey != "kubernetes.io/hostname" {
 		t.Fatal("affinity to the server pod is required")
 	}

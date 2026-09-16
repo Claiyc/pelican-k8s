@@ -43,12 +43,20 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 		AllowPrivilegeEscalation: boolPtr(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
+	// The prepare step runs as the game UID (which owns the PVC layout) even
+	// when the script itself runs as root.
 	prepare := corev1.Container{
 		Name:            "prepare",
 		Image:           cls.Images.Shim,
 		ImagePullPolicy: pullPolicy,
 		Command:         []string{"/shim", "prepare", "--bin", "/pelican/bin/shim", "--shared", "/pelican", "--data", "/data", "--uuid", uuid},
-		SecurityContext: restricted,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: boolPtr(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			RunAsUser:                int64Ptr(in.UID),
+			RunAsGroup:               int64Ptr(in.UID),
+			RunAsNonRoot:             boolPtr(true),
+		},
 		VolumeMounts:    []corev1.VolumeMount{{Name: "pelican", MountPath: "/pelican"}, {Name: "data", MountPath: "/data"}},
 		Resources:       smallResources(),
 	}
