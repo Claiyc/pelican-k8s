@@ -16,6 +16,9 @@ Go 1.26+ is required (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/ar
 | Suite | Command | Needs |
 |---|---|---|
 | Unit | `go test ./...` | nothing. Covers the shim (supervisor, protocol, cgroup parsing, prepare/probe/install-run), the shim environment against a live supervisor, the Job installer, object rendering and resource mapping, the reconciler (fake client, fake agent) and the gateway (fake Panel, fake agent, fake cluster) |
+| Fuzz | `go test -run '^$' -fuzz FuzzDecode ./internal/shim/protocol` (likewise `FuzzWrite` in `internal/shim/ringbuf`, `FuzzVerify` in `internal/gateway/jwtx`) | nothing. The seed corpora also run as ordinary tests under `go test ./...`; CI fuzzes each target for 40s. A crasher lands in the package's `testdata/fuzz/` — commit it as a regression case with the fix |
+| Docs | `go test ./test/docs/` | nothing. Fails when a documented `helm install --version` or an example's `targetRevision` names a version the tree does not release, so bumping a chart has to bump the docs in the same change |
+| Supply chain | `go test ./test/supplychain/` | nothing. Asserts every action is SHA-pinned with a version comment, every base image digest-pinned, and that no workflow grants a write token above the job that needs it |
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
 | Spike (M0) | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart |
 | e2e | `go test -tags e2e ./test/e2e -v` | a deployed gateway and one server. Set `PELICAN_E2E_GATEWAY`, `PELICAN_E2E_TOKEN`, `PELICAN_E2E_PANEL_URL`, `PELICAN_E2E_SERVER` (and `PELICAN_E2E_SFTP`, `_SFTP_USER`, `_SFTP_PASSWORD`, `_INSECURE=true`) |
@@ -81,9 +84,42 @@ nothing is pushed upstream from this repository automatically.
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go) on pushes, PRs and weekly; golangci-lint in CI | Security → Code scanning, CI job *golangci-lint* |
+| Untrusted-input parsers | Native Go fuzzing of the shim protocol, the output ring buffer and the gateway's JWT verification | CI job *Fuzz* |
+| Build inputs | Every GitHub Action is pinned to a commit SHA and every base image to a digest (the trailing comment carries the human-readable version); Dependabot bumps both. `test/supplychain` fails the build if a pin or a least-privilege token scope regresses | `.github/workflows/`, `build/*.Dockerfile` |
 | Dependabot alerts and security updates | Enabled on the repository (GitHub advisory database) | Security → Dependabot |
 | Supply chain posture | OpenSSF Scorecard weekly with published results | Security → Code scanning, scorecard badge |
 | Vulnerability reports | Private vulnerability reporting is enabled (see SECURITY.md) | Security → Advisories |
+
+### Standing Scorecard findings
+
+Scorecard's score cannot reach 10 here, and two of the findings are worth
+explaining rather than re-investigating.
+
+**Vulnerabilities (4/10).** Six advisories are reported against modules in the
+graph. **None of the six has a fixed version**, so no dependency bump can clear
+them; what keeps them harmless is that the vulnerable code is never linked.
+`test/supplychain` asserts exactly that, so a new import cannot change it
+unnoticed.
+
+| Advisory | Module | Where the vulnerable code lives |
+|---|---|---|
+| GO-2026-4883, GO-2026-4887 | `github.com/docker/docker` | plugin privilege validation and AuthZ plugin handling, daemon-side |
+| GO-2026-5617, GO-2026-5668, GO-2026-5746 | `github.com/docker/docker` | `docker/docker/daemon` (`docker cp`, `PUT /containers/{id}/archive`) |
+| GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
+
+`github.com/docker/docker` enters through `internal/agent/installer` →
+`wings/system` → `docker/docker/api/types`. 27 of its packages are linked —
+`api/types/*`, `client`, `errdefs` and two `pkg/parsers` helpers — and
+`docker/docker/daemon` is not among them. `x/crypto/openpgp` is not in the
+build graph at all. This matches `govulncheck`, which finds no vulnerability
+reachable from this code.
+
+**Everything else** needs an action outside the tree: *Code-Review* wants
+approvals on merged PRs, *CII-Best-Practices* wants the project registered at
+bestpractices.coreinfrastructure.org, *Branch-Protection* errors out because
+the default `GITHUB_TOKEN` cannot read classic branch protection rules (it
+needs a fine-grained PAT in `scorecard.yaml`), *Signed-Releases* waits on a
+first release, and *Maintained* clears once the repository is 90 days old.
 
 ## Releases
 
