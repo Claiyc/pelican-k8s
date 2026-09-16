@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.4: architecture proposal, nothing implemented |
+| **Status** | v1.0 of the design, implemented (see `docs/compatibility.md` for deviations and limitations) |
 | **Date** | 2026-09-15 |
 | **Target** | Any conformant Kubernetes ≥ 1.35 (in-place pod resize stable, native sidecars, ValidatingAdmissionPolicy), single- or multi-node |
 | **Upstream basis** | Pelican Wings `65422ff`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
