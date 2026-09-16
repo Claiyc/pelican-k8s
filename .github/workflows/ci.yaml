@@ -30,6 +30,10 @@ jobs:
         run: go test -race -count=1 -coverprofile=coverage.out ./...
       - name: Upstream compatibility (pinned Wings)
         run: go test -count=1 ./test/upstream/
+      - name: Known vulnerabilities in dependencies (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: coverage
@@ -66,6 +70,39 @@ jobs:
         run: |
           helm lint charts/pelican-panel
           for f in charts/pelican-panel/ci/*.yaml; do helm lint charts/pelican-panel -f "$f"; helm template t charts/pelican-panel -f "$f" > /dev/null; done
+
+  scan:
+    name: Image vulnerability scan
+    runs-on: ubuntu-latest
+    needs: [go]
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        component: [shim, agent, gateway, operator]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/${{ matrix.component }}.Dockerfile
+          load: true
+          tags: scan/${{ matrix.component }}:ci
+          cache-from: type=gha
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: scan/${{ matrix.component }}:ci
+          format: sarif
+          output: trivy-${{ matrix.component }}.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.component }}.sarif
+          category: trivy-${{ matrix.component }}
 
   images:
     name: Container images

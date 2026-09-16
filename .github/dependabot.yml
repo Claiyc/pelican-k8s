@@ -1,0 +1,24 @@
+# Dependency updates. Dependabot works without installing anything. If you
+# install the Renovate GitHub App instead (renovate.json), delete this file so
+# the two bots do not open duplicate pull requests.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly, day: monday}
+    open-pull-requests-limit: 10
+    groups:
+      kubernetes:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+      golang-x:
+        patterns: ["golang.org/x/*"]
+    ignore:
+      # Wings is pinned to the hooks fork branch; bumped by hand (docs/development.md).
+      - dependency-name: github.com/pelican/wings
+      - dependency-name: github.com/Claiyc/wings
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly, day: monday}
+  - package-ecosystem: docker
+    directories: ["/build"]
+    schedule: {interval: weekly, day: monday}

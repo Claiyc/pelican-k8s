@@ -71,6 +71,20 @@ nothing is pushed upstream from this repository automatically.
 | `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync |
 | `internal/gateway/wsproxy`, `sftprelay`, `jwtx` | websocket relay, SFTP relay, JWT re-signing |
 
+## Dependencies, security and quality
+
+| What | How | Where to look |
+|---|---|---|
+| Go modules, GitHub Actions, base images | Dependabot weekly PRs (`.github/dependabot.yml`, Kubernetes libraries grouped). `renovate.json` is an equivalent configuration for teams that prefer the Renovate app; use one of the two | Pull requests |
+| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against Wings `main` and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
+| Pelican Panel | The same workflow compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
+| Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR | CI job *Build and test* |
+| CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
+| Static analysis | CodeQL (Go) on pushes, PRs and weekly; golangci-lint in CI | Security → Code scanning, CI job *golangci-lint* |
+| Dependabot alerts and security updates | Enabled on the repository (GitHub advisory database) | Security → Dependabot |
+| Supply chain posture | OpenSSF Scorecard weekly with published results | Security → Code scanning, scorecard badge |
+| Vulnerability reports | Private vulnerability reporting is enabled (see SECURITY.md) | Security → Advisories |
+
 ## Releases
 
 Tag `vX.Y.Z`. The release workflow builds and pushes the images with semver
