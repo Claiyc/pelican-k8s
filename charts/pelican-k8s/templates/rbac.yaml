@@ -1,0 +1,179 @@
+{{- $ns := include "pelican-k8s.serversNamespace" . -}}
+# --- gateway: servers namespace ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameservers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameservers/status]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "pelican-k8s.gatewayName" . }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.gatewayName" . }}, namespace: {{ .Release.Namespace }}}
+---
+# --- gateway: own namespace (SFTP host key Secret) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}-hostkey
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}-hostkey
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "pelican-k8s.gatewayName" . }}-hostkey}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.gatewayName" . }}, namespace: {{ .Release.Namespace }}}
+---
+# --- gateway: cluster scope (classes, nodes) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}-{{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameserverclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}-{{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "pelican-k8s.gatewayName" . }}-{{ .Release.Namespace }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.gatewayName" . }}, namespace: {{ .Release.Namespace }}}
+---
+# --- operator: servers namespace ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameservers, gameservers/status, gameservers/finalizers]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [pods/resize]
+    verbs: [update, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims, services, events]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "pelican-k8s.operatorName" . }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.operatorName" . }}, namespace: {{ .Release.Namespace }}}
+---
+# --- operator: cluster scope ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}-{{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameserverclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes, namespaces]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}-{{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "pelican-k8s.operatorName" . }}-{{ .Release.Namespace }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.operatorName" . }}, namespace: {{ .Release.Namespace }}}
+---
+# --- operator: leader election in its own namespace ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pelican-k8s.operatorName" . }}-leader
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "pelican-k8s.operatorName" . }}-leader}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "pelican-k8s.operatorName" . }}, namespace: {{ .Release.Namespace }}}

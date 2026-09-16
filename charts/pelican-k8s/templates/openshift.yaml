@@ -1,0 +1,23 @@
+{{- if .Values.openshift.enabled }}
+{{- $ns := include "pelican-k8s.serversNamespace" . }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pelican-game-scc
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:openshift:scc:{{ .Values.openshift.gameSCC }}}
+subjects:
+  - {kind: ServiceAccount, name: pelican-game, namespace: {{ $ns }}}
+  - {kind: ServiceAccount, name: pelican-game-hostport, namespace: {{ $ns }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pelican-installer-scc
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:openshift:scc:{{ .Values.openshift.installerSCC }}}
+subjects:
+  - {kind: ServiceAccount, name: pelican-installer, namespace: {{ $ns }}}
+{{- end }}

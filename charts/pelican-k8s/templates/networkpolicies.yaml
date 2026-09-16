@@ -1,0 +1,64 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $ns := include "pelican-k8s.serversNamespace" . }}
+# Default deny for everything in the servers namespace; the operator adds a
+# per-server policy for each game pod (ARCHITECTURE.md 12.4).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Install Jobs: DNS and internet egress only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: install-jobs
+  namespace: {{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      pelican-k8s.io/component: install
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+              {{- range .Values.defaultClass.spec.network.blockedEgressCIDRs }}
+              - {{ . }}
+              {{- end }}
+---
+# Gateway: accepts the Panel/ingress on 8080, agents on 8081, SFTP from anywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pelican-k8s.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pelican-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 2022}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns }}
+      ports:
+        - {protocol: TCP, port: 8081}
+{{- end }}

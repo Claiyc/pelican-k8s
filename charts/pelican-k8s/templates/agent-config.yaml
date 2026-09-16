@@ -1,0 +1,36 @@
+{{- $extra := .Values.agent.extra | default dict -}}
+{{- $base := dict
+  "debug" false
+  "app_name" "pelican"
+  "api" (dict "host" "0.0.0.0" "port" 8080 "upload_limit" .Values.agent.uploadLimitMiB "trusted_proxies" (list))
+  "system" (dict
+    "root_directory" "/var/lib/pelican"
+    "data" "/var/lib/pelican/volumes"
+    "log_directory" "/var/lib/pelican/logs"
+    "archive_directory" "/scratch/archives"
+    "backup_directory" "/scratch/backups"
+    "tmp_directory" "/scratch/tmp"
+    "username" "pelican"
+    "timezone" .Values.agent.timezone
+    "user" (dict "rootless" (dict "enabled" true) "passwd" (dict "enable" false "directory" "/var/lib/pelican/.pelican/passwd"))
+    "machine_id" (dict "enable" false "directory" "/var/lib/pelican/.pelican/machine-id")
+    "check_permissions_on_boot" false
+    "enable_log_rotate" false
+    "websocket_log_count" .Values.agent.websocketLogCount
+    "sftp" (dict "bind_address" "0.0.0.0" "bind_port" 2022 "read_only" .Values.agent.sftpReadOnly)
+    "crash_detection" (dict "enabled" .Values.agent.crashDetection.enabled "detect_clean_exit_as_crash" .Values.agent.crashDetection.detectCleanExitAsCrash "timeout" .Values.agent.crashDetection.timeout)
+    "backups" (dict "remove_backups_on_server_delete" true))
+  "docker" (dict "network" (dict "interface" "0.0.0.0"))
+  "remote" (include "pelican-k8s.remoteURL" .)
+  "allowed_origins" (list "*")
+  "ignore_panel_config_updates" true
+-}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pelican-agent-config
+  namespace: {{ include "pelican-k8s.serversNamespace" . }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+data:
+  config.yml: |
+{{ mergeOverwrite $base $extra | toYaml | indent 4 }}

@@ -64,10 +64,9 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 		Env: []corev1.EnvVar{
 			{Name: "HOME", Value: "/mnt/server"},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: boolPtr(false),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}, Add: []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"}},
-		},
+		// Root keeps the runtime's default capability set (what Wings' Docker
+		// installer gets); non-root installs drop everything.
+		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: boolPtr(false)},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: "/mnt/server", SubPath: "volumes/" + uuid},
 			{Name: "data", MountPath: "/pelican/install", SubPath: "install/" + itoa(gen64)},
@@ -89,7 +88,7 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 		podSC.RunAsUser = int64Ptr(in.UID)
 		podSC.RunAsGroup = int64Ptr(in.UID)
 		podSC.RunAsNonRoot = boolPtr(true)
-		install.SecurityContext.Capabilities.Add = nil
+		install.SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
 	}
 
 	tmpMiB := cls.Resources.TmpSizeMiB

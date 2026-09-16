@@ -51,6 +51,14 @@ func Run(ctx context.Context, o Options) error {
 	if err := config.FromFile(configPath); err != nil {
 		return fmt.Errorf("load config %s: %w", configPath, err)
 	}
+	// The agent runs as the pod's pinned UID; Wings' chown logic must use it.
+	config.Update(func(c *config.Configuration) {
+		c.System.User.Uid = os.Getuid()
+		c.System.User.Gid = os.Getgid()
+		c.System.User.Rootless.Enabled = true
+		c.System.User.Rootless.ContainerUID = os.Getuid()
+		c.System.User.Rootless.ContainerGID = os.Getgid()
+	})
 	cfg := config.Get()
 	if cfg.Token.ID == "" || cfg.Token.Token == "" {
 		return errors.New("WINGS_TOKEN_ID and WINGS_TOKEN must be set")

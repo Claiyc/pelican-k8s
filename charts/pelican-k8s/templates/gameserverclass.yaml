@@ -1,0 +1,19 @@
+{{- if .Values.defaultClass.create }}
+{{- $spec := deepCopy .Values.defaultClass.spec }}
+{{- $_ := set $spec "images" (dict "shim" (include "pelican-k8s.image" (dict "root" . "name" "shim")) "agent" (include "pelican-k8s.image" (dict "root" . "name" "agent")) "pullPolicy" .Values.image.pullPolicy) }}
+{{- $_ = set $spec "agentConfigMap" "pelican-agent-config" }}
+{{- $_ = set $spec "serviceAccountName" "pelican-game" }}
+{{- if .Values.openshift.enabled }}
+{{- $_ = set $spec.security "useNamespaceUIDRange" true }}
+{{- end }}
+{{- if not $spec.failover.forceDeleteAfter }}
+{{- $_ = unset $spec.failover "forceDeleteAfter" }}
+{{- end }}
+apiVersion: pelican-k8s.io/v1alpha1
+kind: GameServerClass
+metadata:
+  name: {{ .Values.defaultClass.name }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+{{ toYaml $spec | indent 2 }}
+{{- end }}

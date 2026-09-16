@@ -1,0 +1,188 @@
+{{- $name := include "pelican-k8s.gatewayName" . -}}
+{{- if not .Values.gateway.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "pelican-k8s.nodeSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token_id: {{ required "gateway.nodeTokenID (or gateway.existingSecret) is required" .Values.gateway.nodeTokenID | quote }}
+  token: {{ required "gateway.nodeToken (or gateway.existingSecret) is required" .Values.gateway.nodeToken | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-k8s.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pelican-gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pelican-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "pelican-k8s.labels" . | nindent 8 }}
+        app.kubernetes.io/name: pelican-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "pelican-k8s.image" (dict "root" . "name" "gateway") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if eq .Values.gateway.logLevel "debug" }}
+          args: ["--debug"]
+          {{- end }}
+          env:
+            - name: PELICAN_GW_PANEL_URL
+              value: {{ required "gateway.panelURL is required" .Values.gateway.panelURL | quote }}
+            - name: PELICAN_GW_TOKEN_ID
+              valueFrom: {secretKeyRef: {name: {{ include "pelican-k8s.nodeSecretName" . }}, key: token_id}}
+            - name: PELICAN_GW_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "pelican-k8s.nodeSecretName" . }}, key: token}}
+            - name: PELICAN_GW_REMOTE_URL
+              value: {{ include "pelican-k8s.remoteURL" . | quote }}
+            - name: PELICAN_SERVERS_NAMESPACE
+              value: {{ include "pelican-k8s.serversNamespace" . | quote }}
+            - name: PELICAN_SYSTEM_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: PELICAN_DEFAULT_CLASS
+              value: {{ .Values.defaultClass.name | quote }}
+            - name: PELICAN_GW_ADVERTISED_VERSION
+              value: {{ .Values.gateway.advertisedVersion | quote }}
+            - name: PELICAN_GW_ALLOWED_ORIGINS
+              value: {{ join "," .Values.gateway.allowedOrigins | quote }}
+            - name: PELICAN_GW_EXTERNAL_IPS
+              value: {{ join "," .Values.gateway.externalIPs | quote }}
+            - name: PELICAN_GW_RESYNC_INTERVAL
+              value: {{ .Values.gateway.resyncInterval | quote }}
+            - name: PELICAN_GW_UPLOAD_LIMIT_MIB
+              value: {{ .Values.gateway.uploadLimitMiB | quote }}
+            - name: PELICAN_GW_SFTP_HOSTKEY_SECRET
+              value: {{ .Values.gateway.sftp.hostKeySecret | quote }}
+            - name: PELICAN_GW_SFTP_KEY_ONLY
+              value: {{ .Values.gateway.sftp.keyOnly | quote }}
+            - name: TZ
+              value: {{ .Values.agent.timezone | quote }}
+          ports:
+            - {name: panel, containerPort: 8080}
+            - {name: remote, containerPort: 8081}
+            - {name: sftp, containerPort: 2022}
+          readinessProbe:
+            httpGet: {path: /api/system, port: panel}
+            # 401 without the token still proves the listener is up.
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-k8s.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pelican-gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  selector:
+    app.kubernetes.io/name: pelican-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - {name: panel, port: {{ .Values.gateway.service.port }}, targetPort: panel}
+    - {name: remote, port: 8081, targetPort: remote}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-sftp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-k8s.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pelican-gateway
+  {{- with .Values.gateway.sftp.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.gateway.sftp.service.type }}
+  {{- if ne .Values.gateway.sftp.service.type "ClusterIP" }}
+  externalTrafficPolicy: Local
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: pelican-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: sftp
+      port: {{ .Values.gateway.sftp.service.port }}
+      targetPort: sftp
+      {{- if and (eq .Values.gateway.sftp.service.type "NodePort") .Values.gateway.sftp.service.nodePort }}
+      nodePort: {{ .Values.gateway.sftp.service.nodePort }}
+      {{- end }}
+{{- if .Values.gateway.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+  {{- with .Values.gateway.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.gateway.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ required "gateway.ingress.host is required" .Values.gateway.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port: {name: panel}
+  {{- with .Values.gateway.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.gateway.route.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+  {{- with .Values.gateway.route.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  host: {{ required "gateway.route.host is required" .Values.gateway.route.host | quote }}
+  to: {kind: Service, name: {{ $name }}}
+  port: {targetPort: panel}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

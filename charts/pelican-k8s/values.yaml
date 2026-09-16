@@ -1,0 +1,180 @@
+# Default values for pelican-k8s. The chart is installed into the system
+# namespace (release namespace, e.g. pelican-system) and manages the servers
+# namespace where GameServers and their pods live.
+
+image:
+  registry: ghcr.io/claiyc/pelican-k8s
+  tag: ""            # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Namespace holding GameServers and game pods.
+serversNamespace:
+  name: pelican-servers
+  create: true
+  # Pod Security Admission level of the servers namespace. Install Jobs run as
+  # root, so "baseline" is the floor; HostPort exposure needs "privileged".
+  podSecurityLevel: baseline
+
+gateway:
+  replicas: 1
+  # The Panel base URL as seen from the gateway (and used as websocket Origin).
+  panelURL: ""
+  # Node credentials from the Panel's node configuration (token_id / token).
+  # Either set them here (stored in a chart-managed Secret) or point to an
+  # existing Secret with keys token_id and token.
+  nodeTokenID: ""
+  nodeToken: ""
+  existingSecret: ""
+  # Wings version advertised to the Panel.
+  advertisedVersion: "1.0.0"
+  # Extra websocket origins besides panelURL.
+  allowedOrigins: []
+  # Addresses returned to the Panel for allocations (defaults to the class
+  # exposure.externalIPs, then node addresses).
+  externalIPs: []
+  # How agents reach the gateway's remote API (in-cluster).
+  remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
+  resyncInterval: 15m
+  uploadLimitMiB: 100
+  sftp:
+    keyOnly: false
+    hostKeySecret: pelican-gateway-sftp-hostkey
+    service:
+      type: NodePort         # NodePort | LoadBalancer | ClusterIP
+      port: 2022
+      nodePort: 30022
+      annotations: {}
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
+  # OpenShift Route (edge TLS) as an alternative to Ingress.
+  route:
+    enabled: false
+    host: ""
+    annotations:
+      haproxy.router.openshift.io/timeout: 16m
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  logLevel: info
+
+operator:
+  replicas: 1
+  concurrency: 4
+  leaderElect: true
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  logLevel: info
+
+# The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config
+# in the servers namespace. Keys under `extra` are merged verbatim.
+agent:
+  crashDetection:
+    enabled: true
+    detectCleanExitAsCrash: true
+    timeout: 60
+  sftpReadOnly: false
+  websocketLogCount: 150
+  uploadLimitMiB: 100
+  timezone: UTC
+  extra: {}
+
+# The default GameServerClass (cluster policy). See docs/classes.md.
+defaultClass:
+  create: true
+  name: default
+  spec:
+    storage:
+      storageClassName: ""
+      defaultSizeGiB: 20
+      overheadPercent: 10
+      scratch:
+        type: Ephemeral
+        storageClassName: ""
+        sizeGiB: 0
+      deletionPolicy: Delete
+      volumeSnapshotClassName: ""
+      snapshotSchedule: ""
+      snapshotRetain: 7
+    exposure:
+      mode: LoadBalancer
+      externalTrafficPolicy: Local
+      loadBalancer:
+        ipAnnotation: ""
+        sharingAnnotation: ""
+        annotations: {}
+      externalIPs: []
+    network:
+      enabled: true
+      inClusterEgress:
+        gameServers: true
+        additional: []
+      # Cluster pod/service CIDRs and LAN ranges game pods must not reach.
+      blockedEgressCIDRs: []
+      # Node CIDRs allowed to reach the agent port (kubelet probes on CNIs
+      # that do not implicitly allow host traffic).
+      nodeCIDRs: []
+    resources:
+      memoryOverheadPercent: 5
+      cpuRequestPercentOfLimit: 25
+      unlimitedMemoryMiB: 4096
+      unlimitedCpuPercent: 0
+      minCpu: 100m
+      tmpSizeMiB: 100
+      agent: {cpu: 50m, memory: 128Mi, memoryLimit: 512Mi}
+    security:
+      runAsUser: 1000
+      generatePasswdEntry: true
+      useNamespaceUIDRange: false
+    install:
+      serviceAccountName: pelican-installer
+      resources: {cpu: "1", memory: 1Gi}
+      strictExitCode: false
+      activeDeadlineSeconds: 3600
+      prepareTimeoutSeconds: 600
+      runAsRoot: true
+    failover:
+      forceDeleteAfter: ""
+    imageResolution:
+      registryLookup: false
+      pullSecrets: []
+      pinDigest: true
+      entrypointOverrides:
+        "ghcr.io/pelican-eggs/yolks:*": ["/bin/bash", "/entrypoint.sh"]
+        "ghcr.io/pelican-eggs/steamcmd:*": ["/bin/bash", "/entrypoint.sh"]
+        "ghcr.io/pelican-eggs/games:*": ["/bin/bash", "/entrypoint.sh"]
+    terminationGracePeriodSeconds: 660
+    suspendScalesToZero: false
+    nodeSelector: {}
+    tolerations: []
+    priorityClassName: ""
+
+# Admission policies enforcing the restricted shape of game pods and the
+# volume allow-list of install Jobs (ValidatingAdmissionPolicy, Kubernetes >= 1.30).
+admissionPolicies:
+  enabled: true
+
+# NetworkPolicies: default deny in the servers namespace plus gateway/operator policies.
+networkPolicies:
+  enabled: true
+  # Namespace label selector of the ingress controller allowed to reach the gateway.
+  ingressNamespaceSelector: {}
+
+# OpenShift specifics: SCC role bindings for the pinned-UID game pods and the
+# root install Jobs, and namespace UID range handling.
+openshift:
+  enabled: false
+  # SCC for game pods (restricted-v2 works when useNamespaceUIDRange is true).
+  gameSCC: restricted-v2
+  installerSCC: anyuid
+
+# CRDs are shipped in crds/ and installed by Helm on first install; upgrades
+# of CRDs are a manual `kubectl apply -f charts/pelican-k8s/crds` step.

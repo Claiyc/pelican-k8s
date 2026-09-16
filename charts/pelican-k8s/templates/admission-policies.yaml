@@ -1,0 +1,106 @@
+{{- if .Values.admissionPolicies.enabled }}
+{{- $ns := include "pelican-k8s.serversNamespace" . }}
+# Game pods must keep the restricted shape (ARCHITECTURE.md 12.2).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pelican-game-restricted
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: game-service-accounts
+      expression: "object.spec.serviceAccountName in ['pelican-game', 'pelican-game-hostport']"
+  variables:
+    - name: allContainers
+      expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
+    - name: hostPortAllowed
+      expression: "object.spec.serviceAccountName == 'pelican-game-hostport'"
+  validations:
+    - expression: "has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot == true"
+      message: "game pods must set runAsNonRoot"
+    - expression: "has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser > 0"
+      message: "game pods must pin a non-root runAsUser"
+    - expression: "has(object.spec.securityContext.seccompProfile) && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'"
+      message: "game pods must use the RuntimeDefault seccomp profile"
+    - expression: "!(has(object.spec.hostNetwork) && object.spec.hostNetwork) && !(has(object.spec.hostPID) && object.spec.hostPID) && !(has(object.spec.hostIPC) && object.spec.hostIPC)"
+      message: "game pods must not use host namespaces"
+    - expression: "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
+      message: "game pods must not mount a service account token"
+    - expression: "variables.allContainers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false)"
+      message: "all containers must set allowPrivilegeEscalation=false"
+    - expression: "variables.allContainers.all(c, !(has(c.securityContext.privileged) && c.securityContext.privileged))"
+      message: "privileged containers are not allowed"
+    - expression: "variables.allContainers.all(c, has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && c.securityContext.capabilities.drop.exists(d, d == 'ALL') && !(has(c.securityContext.capabilities.add) && size(c.securityContext.capabilities.add) > 0))"
+      message: "all containers must drop ALL capabilities and add none"
+    - expression: "variables.hostPortAllowed || variables.allContainers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))"
+      message: "hostPort is only allowed for the pelican-game-hostport service account"
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, has(v.persistentVolumeClaim) || has(v.emptyDir) || has(v.ephemeral) || has(v.configMap) || has(v.projected) || has(v.secret))"
+      message: "only PVC, emptyDir, ephemeral, configMap, projected and secret volumes are allowed"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pelican-game-restricted-{{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  policyName: pelican-game-restricted
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $ns }}
+---
+# Install Jobs may run as root but only see the server volume, the script and scratch space.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pelican-installer-baseline
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: installer-service-account
+      expression: "object.spec.serviceAccountName == 'pelican-installer'"
+  variables:
+    - name: allContainers
+      expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
+  validations:
+    - expression: "!(has(object.spec.hostNetwork) && object.spec.hostNetwork) && !(has(object.spec.hostPID) && object.spec.hostPID) && !(has(object.spec.hostIPC) && object.spec.hostIPC)"
+      message: "install pods must not use host namespaces"
+    - expression: "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
+      message: "install pods must not mount a service account token"
+    - expression: "variables.allContainers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && !(has(c.securityContext.privileged) && c.securityContext.privileged))"
+      message: "install containers must not escalate privileges"
+    - expression: "variables.allContainers.all(c, !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
+      message: "install containers must not add capabilities"
+    - expression: "variables.allContainers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))"
+      message: "install pods must not use hostPort"
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, has(v.persistentVolumeClaim) || has(v.emptyDir) || has(v.configMap))"
+      message: "install pods may only mount the server PVC, ConfigMaps and emptyDirs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pelican-installer-baseline-{{ $ns }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  policyName: pelican-installer-baseline
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $ns }}
+{{- end }}

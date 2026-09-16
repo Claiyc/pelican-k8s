@@ -1,0 +1,62 @@
+{{- $name := include "pelican-k8s.operatorName" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-k8s.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pelican-operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pelican-operator
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "pelican-k8s.labels" . | nindent 8 }}
+        app.kubernetes.io/name: pelican-operator
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator
+          image: {{ include "pelican-k8s.image" (dict "root" . "name" "operator") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.operator.leaderElect }}
+            - --concurrency={{ .Values.operator.concurrency }}
+            - --metrics-bind-address=:8443
+            - --health-probe-bind-address=:8081
+            {{- if eq .Values.operator.logLevel "debug" }}
+            - --zap-log-level=debug
+            {{- end }}
+          env:
+            - name: PELICAN_SERVERS_NAMESPACE
+              value: {{ include "pelican-k8s.serversNamespace" . | quote }}
+            - name: PELICAN_SYSTEM_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: PELICAN_DEFAULT_CLASS
+              value: {{ .Values.defaultClass.name | quote }}
+          ports:
+            - {name: metrics, containerPort: 8443}
+            - {name: health, containerPort: 8081}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.operator.resources | nindent 12 }}

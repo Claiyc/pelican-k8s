@@ -1,0 +1,13 @@
+{{- if .Values.serversNamespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "pelican-k8s.serversNamespace" . }}
+  labels:
+    {{- include "pelican-k8s.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: {{ .Values.serversNamespace.podSecurityLevel }}
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: {{ .Values.serversNamespace.podSecurityLevel }}
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}

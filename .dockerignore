@@ -1,0 +1,8 @@
+.git
+.claude
+bin/
+dist/
+charts/
+docs/
+*.md
+test/spike/testdata

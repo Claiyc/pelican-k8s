@@ -1,0 +1,15 @@
+pelican-k8s {{ .Chart.Version }} installed in {{ .Release.Namespace }}.
+
+GameServers live in namespace {{ include "pelican-k8s.serversNamespace" . }}
+(default class: {{ .Values.defaultClass.name }}).
+
+Panel node settings (Admin > Nodes):
+  FQDN / scheme:  the address of the gateway
+                  {{- if .Values.gateway.route.enabled }} -> https://{{ .Values.gateway.route.host }}{{ end }}
+                  {{- if .Values.gateway.ingress.enabled }} -> https://{{ .Values.gateway.ingress.host }}{{ end }}
+  Behind proxy:   yes
+  daemon_listen:  8080     daemon_connect: 443
+  daemon_sftp:    {{ if eq .Values.gateway.sftp.service.type "NodePort" }}{{ .Values.gateway.sftp.service.nodePort }}{{ else }}{{ .Values.gateway.sftp.service.port }}{{ end }}
+
+Check the gateway:  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "pelican-k8s.gatewayName" . }}
+List servers:       kubectl -n {{ include "pelican-k8s.serversNamespace" . }} get gameservers

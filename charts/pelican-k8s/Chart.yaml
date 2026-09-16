@@ -1,0 +1,15 @@
+apiVersion: v2
+name: pelican-k8s
+description: |
+  Kubernetes-native backend for Pelican Panel: a gateway that presents itself
+  to the Panel as a Wings node, an operator that reconciles GameServer
+  resources into pods, volumes and services, and the per-pod agent (Wings as
+  a library) with its process shim.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.33.0-0"
+keywords: [pelican, wings, game-server, operator]
+home: https://github.com/Claiyc/pelican-k8s
+sources:
+  - https://github.com/Claiyc/pelican-k8s
