@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Native Go fuzzing of the three parsers on a trust boundary: the shim's JSON-lines protocol, the output ring buffer and the gateway's JWT verification. The seed corpora run with the unit tests; a CI job fuzzes each target for 40s.
 - README badges for CodeQL and the OpenSSF Scorecard.
+- `test/supplychain`: guards the pinning and least-privilege invariants above, so a future change cannot quietly reopen the Scorecard findings.
 
 ### Changed
 - Build with Go 1.27. `govulncheck` in CI fails only for reachable vulnerabilities that have a fix.
