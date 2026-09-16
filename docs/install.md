@@ -159,3 +159,42 @@ servers namespace, the CRDs and every `GameServer` (and therefore the volumes).
 Delete the servers in the Panel first if you want the data gone; the class
 `storage.deletionPolicy` decides whether volumes are deleted, retained or
 snapshotted.
+
+## 7. GitOps (Argo CD)
+
+Both charts render with `helm template`, so they work with Argo CD. Keep
+secrets out of the values file: the node token goes into a pre-created Secret
+referenced by `gateway.existingSecret`, and the Panel's `APP_KEY` into
+`panel.existingSecret`. A multi-source Application pulling the chart from this
+repository and the values from your config repository:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pelican-k8s
+  namespace: argocd
+spec:
+  project: default
+  destination: {namespace: pelican-system, server: https://kubernetes.default.svc}
+  sources:
+    - repoURL: https://github.com/Claiyc/pelican-k8s.git
+      path: charts/pelican-k8s
+      targetRevision: v0.1.0          # a tag, or the OCI chart oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s
+      helm:
+        releaseName: pelican-k8s
+        valueFiles: [$values/pelican-k8s/values.yaml]
+    - repoURL: https://git.example.com/ops/gitops.git
+      targetRevision: HEAD
+      ref: values
+  syncPolicy:
+    automated: {prune: false, selfHeal: true}
+    syncOptions: [CreateNamespace=false, ServerSideApply=true]
+```
+
+The Argo CD controller needs, besides namespace admin in the servers and system
+namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
+`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the operator's
+Role grants them, `pods/resize`, `volumesnapshots`, `leases` and `nodes`.
+Never enable `prune` on the servers namespace: `GameServer` objects are owned
+by the Panel through the gateway, not by Git.
