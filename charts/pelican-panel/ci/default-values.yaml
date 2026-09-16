@@ -1,0 +1,3 @@
+# Smallest possible install: sqlite in the PVC, no ingress, no extras.
+panel:
+  url: http://localhost:8080

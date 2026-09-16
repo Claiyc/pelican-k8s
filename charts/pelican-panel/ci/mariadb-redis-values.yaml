@@ -1,0 +1,30 @@
+# Bundled MariaDB + Redis, exposed through a plain Ingress.
+panel:
+  url: https://panel.example.com
+  behindProxy: true
+  trustedProxies: "0.0.0.0/0,::/0"
+  cacheStore: redis
+  sessionDriver: redis
+  queueConnection: redis
+
+mariadb:
+  enabled: true
+  persistence:
+    size: 2Gi
+
+redis:
+  enabled: true
+  password: ci-redis-password
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: panel.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: panel-example-com-tls
+      hosts:
+        - panel.example.com

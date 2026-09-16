@@ -1,0 +1,65 @@
+Pelican Panel {{ include "pelican-panel.imageTag" . }} has been deployed as release {{ .Release.Name }}
+in namespace {{ .Release.Namespace }}.
+
+URL (APP_URL): {{ .Values.panel.url }}
+
+1. Watch the Panel come up (the entrypoint waits for the database, runs
+   `php artisan migrate --force` and warms the Filament/Blade caches before
+   Caddy starts - this can take a minute):
+
+   kubectl rollout status deploy/{{ include "pelican-panel.fullname" . }} -n {{ .Release.Namespace }}
+   kubectl logs -f deploy/{{ include "pelican-panel.fullname" . }} -n {{ .Release.Namespace }}
+
+2. Reach it:
+{{- if .Values.route.enabled }}
+   OpenShift Route: {{ if .Values.route.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.route.host | default (printf "<router-generated>.%s" "apps.<cluster-domain>") }}
+{{- else if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   Ingress: http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+   kubectl port-forward svc/{{ include "pelican-panel.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+   then open http://localhost:8080
+{{- end }}
+
+3. Create the first administrator (there is no default account):
+
+   kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "pelican-panel.fullname" . }} -- \
+     php artisan p:user:make --admin=1 --email=you@example.com --username=admin --password='<password>'
+
+{{- if .Values.panel.installed }}
+{{- else }}
+
+   NOTE: panel.installed=false - open {{ .Values.panel.url }}/installer and finish
+   the web installer first. It writes its answers to /pelican-data/.env.
+{{- end }}
+
+{{- if not .Values.panel.existingSecret }}
+
+WARNING: APP_KEY is stored in the chart-managed Secret
+  {{ include "pelican-panel.secretName" . }} (key APP_KEY).
+  It is reused across `helm upgrade` via a `lookup`, which does NOT work under
+  `helm template` / Argo CD. For GitOps, pre-create a Secret and set
+  panel.existingSecret - otherwise every sync rotates APP_KEY and invalidates
+  all encrypted values (2FA secrets, node tokens) and sessions.
+{{- end }}
+
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence.enabled=false - /pelican-data is an emptyDir. The runtime
+  .env (and, with database.connection=sqlite, the whole database) is lost on
+  every pod restart.
+{{- end }}
+
+{{- if and (hasPrefix "https://" .Values.panel.url) (not .Values.panel.behindProxy) }}
+
+NOTE: the bundled Caddy will try to obtain a Let's Encrypt certificate itself.
+  Behind an Ingress controller or the OpenShift Router set panel.behindProxy=true.
+{{- end }}
+
+{{- if and (not .Values.panel.trustedProxies) (or .Values.ingress.enabled .Values.route.enabled) }}
+
+WARNING: panel.trustedProxies is empty while an Ingress/Route is enabled.
+  Laravel will not see X-Forwarded-Proto/For, so HTTPS detection and client IPs
+  break. Set panel.trustedProxies="*" (or the ingress pod CIDR).
+{{- end }}

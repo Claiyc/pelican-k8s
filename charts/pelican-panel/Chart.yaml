@@ -1,0 +1,27 @@
+apiVersion: v2
+name: pelican-panel
+description: |
+  Pelican Panel - the Laravel/Filament game server management panel.
+  Deploys the unmodified upstream image (ghcr.io/pelican/panel), which runs
+  Caddy, PHP-FPM, the Laravel queue worker and the scheduler in a single
+  supervisord-managed container.
+type: application
+
+# Chart version. Bump on every chart change.
+version: 0.1.0
+
+# Upstream Pelican Panel release deployed by default.
+appVersion: "v1.0.0-beta38"
+
+keywords:
+  - pelican
+  - game-server
+  - panel
+  - laravel
+home: https://pelican.dev
+icon: https://raw.githubusercontent.com/pelican/panel/main/public/pelican.svg
+sources:
+  - https://github.com/pelican/panel
+  - https://github.com/Claiyc/pelican-k8s
+annotations:
+  artifacthub.io/license: AGPL-3.0

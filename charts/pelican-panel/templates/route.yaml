@@ -1,0 +1,42 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "pelican-panel.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-panel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+  {{- if or .Values.route.annotations .Values.commonAnnotations }}
+  annotations:
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.route.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- with .Values.route.host }}
+  host: {{ tpl . $ | quote }}
+  {{- end }}
+  {{- with .Values.route.path }}
+  path: {{ . | quote }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "pelican-panel.fullname" . }}
+    weight: 100
+  port:
+    # Use the Service's *named* port - a numeric targetPort makes the
+    # OpenShift router return 503.
+    targetPort: {{ ternary "fastcgi" "http" .Values.panel.skipCaddy }}
+  {{- if .Values.route.tls.enabled }}
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+    {{- with .Values.route.tls.insecureEdgeTerminationPolicy }}
+    insecureEdgeTerminationPolicy: {{ . }}
+    {{- end }}
+  {{- end }}
+  wildcardPolicy: {{ .Values.route.wildcardPolicy }}
+{{- end }}

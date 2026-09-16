@@ -1,0 +1,461 @@
+# Default values for pelican-panel.
+# Every value is documented in README.md.
+
+# -- Number of Panel replicas. Keep at 1: the upstream image also runs the
+# Laravel scheduler (supercronic) and stores cache/session files on local disk,
+# so >1 replica needs an external cache/session store and `panel.skipMigrations`.
+replicaCount: 1
+
+image:
+  # -- Panel image repository.
+  repository: ghcr.io/pelican/panel
+  # -- Image tag. Defaults to `.Chart.AppVersion` when empty.
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets for the Panel (and bundled MariaDB/Redis) pods.
+imagePullSecrets: []
+
+# -- Override the chart name portion of resource names.
+nameOverride: ""
+# -- Override the full resource name prefix.
+fullnameOverride: ""
+
+# -- Extra labels added to every rendered object.
+commonLabels: {}
+# -- Extra annotations added to every rendered object.
+commonAnnotations: {}
+
+serviceAccount:
+  # -- Create a ServiceAccount for the Panel.
+  create: true
+  # -- Name of the ServiceAccount. Generated from the release name when empty.
+  name: ""
+  # -- Annotations for the ServiceAccount.
+  annotations: {}
+  # -- Mount the SA token into the pod. The Panel does not talk to the API server.
+  automountServiceAccountToken: false
+
+## ---------------------------------------------------------------------------
+## Panel configuration (maps 1:1 onto the environment variables the upstream
+## image / Laravel actually read - see README.md).
+## ---------------------------------------------------------------------------
+panel:
+  # -- `APP_NAME`. Branding shown in the UI.
+  appName: Pelican
+  # -- `APP_URL`. MUST match the externally reachable URL (scheme included),
+  # otherwise generated links, assets and the Filament login break.
+  url: http://localhost
+  # -- `APP_ENV`: production | local.
+  env: production
+  # -- `APP_DEBUG`. Never enable in production.
+  debug: false
+  # -- `APP_LOCALE`.
+  locale: en
+  # -- `APP_INSTALLED`. `true` makes the entrypoint wait for the database and
+  # run `php artisan migrate --force` on every start (the chart-managed,
+  # non-interactive install). Set to `false` to use the web installer instead.
+  installed: true
+  # -- `SKIP_MIGRATIONS`. Set true when running more than one replica against
+  # one database so only a separate job runs migrations.
+  skipMigrations: false
+  # -- `BEHIND_PROXY`. Makes the bundled Caddy listen on plain :80 with
+  # auto-HTTPS off. Required behind an Ingress controller or OpenShift Router.
+  behindProxy: true
+  # -- `TRUSTED_PROXIES`. Comma separated IPs/CIDRs. Needed so Laravel honours
+  # `X-Forwarded-Proto: https` / `X-Forwarded-For` from the ingress controller
+  # or OpenShift Router - without it the Filament login redirects to http and
+  # every request is logged with the proxy's IP.
+  #
+  # Do NOT use Laravel's `*` / `**` shorthand here unless `skipCaddy: true`:
+  # the entrypoint also injects this value into Caddy's
+  # `trusted_proxies static ...`, which only accepts IPs/CIDRs and makes Caddy
+  # refuse to start. `0.0.0.0/0,::/0` is the working equivalent and is safe
+  # because the Panel is only reachable through the cluster ingress.
+  trustedProxies: "0.0.0.0/0,::/0"
+  # -- `LE_EMAIL`. Only used when `behindProxy` is false and `url` is https,
+  # i.e. when the bundled Caddy terminates TLS itself. Required in that case.
+  leEmail: ""
+  # -- `SKIP_CADDY`. Run PHP-FPM only and expose port 9000 instead of 80.
+  # Use with an external FastCGI-capable web server. Probes are disabled then.
+  skipCaddy: false
+  # -- `CACHE_STORE`: file | redis. (`database` is NOT supported - the Panel has
+  # no `cache` table migration.)
+  cacheStore: file
+  # -- `SESSION_DRIVER`: database | file | cookie | redis. `database` keeps users
+  # logged in across pod restarts.
+  sessionDriver: database
+  # -- `QUEUE_CONNECTION`: database | redis | sync.
+  queueConnection: database
+  # -- `APP_2FA_REQUIRED`: 0 = optional, 1 = all admins, 2 = all users.
+  twoFactorRequired: ""
+  # -- `TZ` for the container. The Panel itself always runs on UTC
+  # (`config/app.php` hardcodes it); users pick a timezone in their profile.
+  timezone: UTC
+
+  mail:
+    # -- `MAIL_MAILER`: log | smtp | mailgun | postmark | ses | sendmail | array.
+    mailer: log
+    # -- `MAIL_HOST`.
+    host: ""
+    # -- `MAIL_PORT`.
+    port: ""
+    # -- `MAIL_USERNAME`.
+    username: ""
+    # -- `MAIL_PASSWORD`. Prefer `panel.existingSecret` + `mailPasswordKey`.
+    password: ""
+    # -- `MAIL_SCHEME`: smtp | smtps.
+    scheme: ""
+    # -- `MAIL_FROM_ADDRESS`.
+    fromAddress: ""
+    # -- `MAIL_FROM_NAME`.
+    fromName: ""
+
+  # -- Extra plain (non-secret) environment variables, rendered into the
+  # ConfigMap. Use for any upstream variable this chart does not model, e.g.
+  # `FILAMENT_AVATAR_PROVIDER: gravatar`.
+  extraEnv: {}
+
+  # -- Extra `env:` entries appended verbatim to the container (supports
+  # valueFrom). Rendered through `tpl`.
+  extraEnvVars: []
+  # -- Extra `envFrom:` sources appended to the container.
+  extraEnvFrom: []
+
+  ## APP_KEY handling.
+  ##
+  ## Precedence: existingSecret > appKey > generated.
+  ##
+  ## GitOps (Argo CD renders with `helm template`) MUST use `existingSecret`:
+  ## `helm template` cannot read cluster state, so a generated key would be
+  ## regenerated on every render and invalidate every encrypted value and
+  ## session. See README.md ("GitOps").
+  # -- Name of a pre-created Secret holding APP_KEY (and optionally the mail
+  # password). Required for GitOps.
+  existingSecret: ""
+  # -- Key inside `existingSecret` holding `APP_KEY`.
+  existingSecretAppKeyKey: APP_KEY
+  # -- Key inside `existingSecret` holding `MAIL_PASSWORD` (optional).
+  existingSecretMailPasswordKey: ""
+  # -- Explicit `APP_KEY` (`base64:<32 random bytes, base64>`), stored in a
+  # chart-managed Secret. Leave empty to have the chart generate one.
+  appKey: ""
+
+## ---------------------------------------------------------------------------
+## Database
+## ---------------------------------------------------------------------------
+database:
+  # -- `DB_CONNECTION`: pgsql | mysql | mariadb | sqlite.
+  # `sqlite` stores the database inside the `/pelican-data` PVC and ignores all
+  # other settings in this block.
+  connection: sqlite
+  # -- `DB_HOST`.
+  host: ""
+  # -- `DB_PORT`. Defaults to 5432 (pgsql) / 3306 (mysql, mariadb) when empty.
+  port: ""
+  # -- `DB_DATABASE`. For sqlite this is a path or a name under `database/`.
+  name: panel
+  # -- `DB_USERNAME`.
+  username: pelican
+  # -- `DB_PASSWORD` in cleartext. Prefer `database.existingSecret`.
+  password: ""
+  # -- Name of a pre-created Secret holding the database credentials, e.g. the
+  # `<cluster>-app` Secret generated by CloudNativePG.
+  existingSecret: ""
+  # -- Key in `existingSecret` holding the password.
+  existingSecretPasswordKey: password
+  # -- Key in `existingSecret` holding the username. Empty = use `.username`.
+  existingSecretUsernameKey: ""
+  # -- Key in `existingSecret` holding the database name. Empty = use `.name`.
+  existingSecretDatabaseKey: ""
+  # -- Key in `existingSecret` holding the host. Empty = use `.host`.
+  existingSecretHostKey: ""
+  # -- Key in `existingSecret` holding the port. Empty = use `.port`.
+  existingSecretPortKey: ""
+
+## Bundled MariaDB for quick starts. Not intended for production - use an
+## external database (or CloudNativePG) instead.
+mariadb:
+  # -- Deploy a single-replica MariaDB StatefulSet and point the Panel at it.
+  # Overrides `database.connection/host/port` when enabled.
+  enabled: false
+  image:
+    # -- MariaDB image repository.
+    repository: mariadb
+    # -- MariaDB image tag.
+    tag: "11.4"
+    # -- MariaDB image pull policy.
+    pullPolicy: IfNotPresent
+  auth:
+    # -- Database created on first start (also used as `DB_DATABASE`).
+    database: panel
+    # -- Application user (also used as `DB_USERNAME`).
+    username: pelican
+    # -- Application user password. Generated when empty and no
+    # `existingSecret` is set (see the GitOps caveat for `panel.appKey`).
+    password: ""
+    # -- Root password. Generated when empty.
+    rootPassword: ""
+    # -- Pre-created Secret with the MariaDB credentials.
+    existingSecret: ""
+    # -- Key in `auth.existingSecret` holding the user password.
+    existingSecretPasswordKey: mariadb-password
+    # -- Key in `auth.existingSecret` holding the root password.
+    existingSecretRootPasswordKey: mariadb-root-password
+  persistence:
+    # -- Persist `/var/lib/mysql`.
+    enabled: true
+    # -- PVC size.
+    size: 8Gi
+    # -- StorageClass. Empty = cluster default.
+    storageClass: ""
+    # -- Access mode.
+    accessMode: ReadWriteOnce
+  # -- Resource requests/limits for MariaDB.
+  resources: {}
+  # -- Pod-level securityContext for MariaDB. Empty on OpenShift (the SCC
+  # assigns IDs); set `fsGroup`/`runAsUser` on vanilla Kubernetes if needed.
+  podSecurityContext: {}
+  # -- Container-level securityContext for MariaDB.
+  securityContext: {}
+  # -- Node selector for MariaDB.
+  nodeSelector: {}
+  # -- Tolerations for MariaDB.
+  tolerations: []
+  # -- Affinity for MariaDB.
+  affinity: {}
+
+## Bundled Redis (cache / session / queue backend).
+redis:
+  # -- Deploy a small single-replica Redis Deployment and point the Panel at it.
+  # Remember to also set `panel.cacheStore`/`sessionDriver`/`queueConnection`
+  # to `redis`.
+  enabled: false
+  image:
+    # -- Redis image repository.
+    repository: redis
+    # -- Redis image tag.
+    tag: "7-alpine"
+    # -- Redis image pull policy.
+    pullPolicy: IfNotPresent
+  # -- `REDIS_PASSWORD`. Empty = no auth (cluster-internal Service only).
+  password: ""
+  # -- Pre-created Secret holding the Redis password.
+  existingSecret: ""
+  # -- Key in `existingSecret` holding the Redis password.
+  existingSecretPasswordKey: redis-password
+  # -- Resource requests/limits for Redis.
+  resources: {}
+  # -- Pod-level securityContext for Redis.
+  podSecurityContext: {}
+  # -- Container-level securityContext for Redis.
+  securityContext: {}
+  # -- Node selector for Redis.
+  nodeSelector: {}
+  # -- Tolerations for Redis.
+  tolerations: []
+  # -- Affinity for Redis.
+  affinity: {}
+
+## External Redis (used when `redis.enabled` is false but a redis driver is
+## selected).
+externalRedis:
+  # -- `REDIS_HOST`.
+  host: ""
+  # -- `REDIS_PORT`.
+  port: 6379
+  # -- `REDIS_USERNAME`.
+  username: ""
+  # -- `REDIS_PASSWORD`.
+  password: ""
+  # -- Pre-created Secret holding the Redis password.
+  existingSecret: ""
+  # -- Key in `existingSecret` holding the Redis password.
+  existingSecretPasswordKey: redis-password
+
+## ---------------------------------------------------------------------------
+## Persistence for /pelican-data (.env, sqlite db, avatars/icons/fonts, plugins)
+## ---------------------------------------------------------------------------
+persistence:
+  # -- Persist `/pelican-data`. Disabling it makes the Panel lose its `.env`
+  # (and therefore its APP_KEY when generated by the image) on every restart.
+  enabled: true
+  # -- Use an existing PVC instead of creating one.
+  existingClaim: ""
+  # -- PVC size.
+  size: 5Gi
+  # -- StorageClass. Empty = cluster default, `"-"` = no StorageClass.
+  storageClass: ""
+  # -- Access mode. Must be ReadWriteOnce for a single replica.
+  accessMode: ReadWriteOnce
+  # -- Extra annotations for the PVC.
+  annotations: {}
+  # -- Keep the PVC when the release is uninstalled.
+  retain: false
+
+service:
+  # -- Service type.
+  type: ClusterIP
+  # -- Service port.
+  port: 80
+  # -- NodePort when `type: NodePort`.
+  nodePort: ""
+  # -- Extra annotations for the Service.
+  annotations: {}
+
+ingress:
+  # -- Create an Ingress for the Panel.
+  enabled: false
+  # -- `ingressClassName`.
+  className: ""
+  # -- Ingress annotations.
+  annotations: {}
+  # -- Hostnames and paths.
+  hosts:
+    - host: panel.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- `tls:` block, passed through verbatim.
+  tls: []
+  #  - secretName: pelican-panel-tls
+  #    hosts:
+  #      - panel.example.com
+
+## OpenShift Route (ignored on vanilla Kubernetes).
+route:
+  # -- Create an OpenShift Route.
+  enabled: false
+  # -- Route host. Empty lets the router generate `<name>-<ns>.<appsdomain>`.
+  host: ""
+  # -- Route path.
+  path: ""
+  # -- Route annotations.
+  annotations: {}
+  # -- Wildcard policy: None | Subdomain.
+  wildcardPolicy: None
+  tls:
+    # -- Enable TLS on the Route.
+    enabled: true
+    # -- Termination: edge | passthrough | reencrypt.
+    termination: edge
+    # -- Insecure traffic policy: Redirect | Allow | None.
+    insecureEdgeTerminationPolicy: Redirect
+
+openshift:
+  scc:
+    # -- Create a RoleBinding granting the Panel ServiceAccount use of an SCC.
+    # The upstream image runs as the fixed non-root user `www-data` (uid 82),
+    # which the default `restricted-v2` SCC rejects.
+    enabled: false
+    # -- SCC to bind. `nonroot-v2` is the least privilege that allows a fixed
+    # non-root UID; `anyuid` also works.
+    name: nonroot-v2
+    # -- Bind to `system:serviceaccounts:<namespace>` instead of the single
+    # ServiceAccount (covers every SA in the namespace).
+    bindToNamespaceGroup: false
+
+# -- Pod-level securityContext.
+#
+# * `runAsUser`/`runAsGroup`/`fsGroup` 82 = `www-data` in the image. fsGroup
+#   makes the `/pelican-data` volume writable for it.
+# * The `net.ipv4.ip_unprivileged_port_start=0` sysctl lets the bundled Caddy
+#   bind port 80 as a non-root user. Docker sets this automatically, container
+#   runtimes under Kubernetes do not, so without it Caddy dies with
+#   `listen tcp :80: bind: permission denied`. It is a *safe* (namespaced)
+#   sysctl, so no SCC/PSP exception is needed - but adding `NET_BIND_SERVICE`
+#   would NOT work: Kubernetes cannot grant ambient capabilities, and
+#   `allowPrivilegeEscalation: false` also disables file capabilities.
+#
+# Set to `{}` on clusters that assign UIDs themselves - but then also set
+# `panel.skipCaddy: true` or keep the sysctl.
+podSecurityContext:
+  runAsUser: 82
+  runAsGroup: 82
+  fsGroup: 82
+  seccompProfile:
+    type: RuntimeDefault
+  sysctls:
+    - name: net.ipv4.ip_unprivileged_port_start
+      value: "0"
+
+# -- Container-level securityContext.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+  # The image writes caches under /var/www/html/storage at runtime.
+  readOnlyRootFilesystem: false
+
+# -- Resource requests/limits for the Panel container.
+resources: {}
+#  requests:
+#    cpu: 200m
+#    memory: 512Mi
+#  limits:
+#    memory: 2Gi
+
+probes:
+  startup:
+    # -- Enable the startup probe. It covers the entrypoint's migrate/optimize
+    # phase, which runs before Caddy starts.
+    enabled: true
+    # -- Initial delay.
+    initialDelaySeconds: 10
+    # -- Period.
+    periodSeconds: 10
+    # -- Timeout.
+    timeoutSeconds: 5
+    # -- Failure threshold (default allows ~10 minutes of startup).
+    failureThreshold: 60
+  readiness:
+    # -- Enable the readiness probe (HTTP GET /up).
+    enabled: true
+    # -- Period.
+    periodSeconds: 30
+    # -- Timeout.
+    timeoutSeconds: 5
+    # -- Failure threshold.
+    failureThreshold: 3
+  liveness:
+    # -- Enable the liveness probe (HTTP GET /up).
+    enabled: true
+    # -- Period.
+    periodSeconds: 30
+    # -- Timeout.
+    timeoutSeconds: 5
+    # -- Failure threshold.
+    failureThreshold: 6
+
+# -- Deployment strategy. `Recreate` is required with a ReadWriteOnce PVC.
+strategy:
+  type: Recreate
+
+# -- Grace period. The queue worker gets up to 3600s to finish jobs upstream;
+# 120s is a sane middle ground.
+terminationGracePeriodSeconds: 120
+
+# -- Extra pod annotations.
+podAnnotations: {}
+# -- Extra pod labels.
+podLabels: {}
+# -- Node selector for the Panel pod.
+nodeSelector: {}
+# -- Tolerations for the Panel pod.
+tolerations: []
+# -- Affinity for the Panel pod.
+affinity: {}
+# -- Topology spread constraints.
+topologySpreadConstraints: []
+# -- Priority class name.
+priorityClassName: ""
+
+# -- Extra volumes for the Panel pod.
+extraVolumes: []
+# -- Extra volume mounts for the Panel container.
+extraVolumeMounts: []
+# -- Extra init containers.
+initContainers: []

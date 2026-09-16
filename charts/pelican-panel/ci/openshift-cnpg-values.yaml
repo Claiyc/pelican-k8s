@@ -1,0 +1,38 @@
+# OpenShift + external PostgreSQL (CloudNativePG) + Route with edge TLS.
+# This mirrors the copjo deployment documented in docs/panel.md.
+panel:
+  url: https://pelican.apps.example.com
+  behindProxy: true
+  trustedProxies: "0.0.0.0/0,::/0"
+  sessionDriver: database
+  queueConnection: database
+  cacheStore: file
+  existingSecret: pelican-panel-secrets
+  existingSecretAppKeyKey: APP_KEY
+
+database:
+  connection: pgsql
+  existingSecret: pelican-db-app
+  existingSecretPasswordKey: password
+  existingSecretUsernameKey: username
+  existingSecretDatabaseKey: dbname
+  existingSecretHostKey: host
+  existingSecretPortKey: port
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: main
+
+route:
+  enabled: true
+  host: pelican.apps.example.com
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+openshift:
+  scc:
+    enabled: true
+    name: nonroot-v2
