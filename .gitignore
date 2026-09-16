@@ -10,3 +10,4 @@ coverage.*
 /charts/*/charts/
 /charts/*/Chart.lock
 /test/e2e/.state/
+.claude/
