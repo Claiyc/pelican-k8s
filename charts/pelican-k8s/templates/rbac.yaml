@@ -13,6 +13,10 @@ rules:
   - apiGroups: [pelican-k8s.io]
     resources: [gameservers/status]
     verbs: [get, update, patch]
+  # Owner references with blockOwnerDeletion need finalizer permission on the owner.
+  - apiGroups: [pelican-k8s.io]
+    resources: [gameservers/finalizers]
+    verbs: [update]
   - apiGroups: [""]
     resources: [configmaps, secrets]
     verbs: [get, list, watch, create, update, patch]
