@@ -203,7 +203,8 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 	sock := filepath.Join(dir, "shim.sock")
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	sup1 := supervisor.New(supervisor.Options{Socket: sock, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
-	go func() { _ = sup1.Run(ctx1) }()
+	sup1Done := make(chan struct{})
+	go func() { _ = sup1.Run(ctx1); close(sup1Done) }()
 	cfg := environment.NewConfiguration(environment.Settings{}, nil)
 	e := New("s", cfg, Options{SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
 	defer e.Close()
@@ -214,7 +215,7 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 	states := collectStates(t, e)
 	// Container "restarts": the old shim dies, a new one comes up idle.
 	cancel1()
-	time.Sleep(300 * time.Millisecond)
+	<-sup1Done
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	sup2 := supervisor.New(supervisor.Options{Socket: sock, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})

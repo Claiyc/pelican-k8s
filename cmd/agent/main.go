@@ -16,6 +16,19 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/agent/app"
 )
 
+// errorStringHandler renders error fields as their message: the JSON handler
+// would marshal wrapped errors (emperror) as empty objects.
+type errorStringHandler struct{ next log.Handler }
+
+func (h errorStringHandler) HandleLog(e *log.Entry) error {
+	for k, v := range e.Fields {
+		if err, ok := v.(error); ok {
+			e.Fields[k] = err.Error()
+		}
+	}
+	return h.next.HandleLog(e)
+}
+
 func main() {
 	configPath := flag.String("config", "/etc/pelican/config.yml", "Wings configuration file")
 	socket := flag.String("shim-socket", "/pelican/run/shim.sock", "shim unix socket")
@@ -29,7 +42,7 @@ func main() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
 	slog.SetDefault(logger)
-	log.SetHandler(json.New(os.Stdout))
+	log.SetHandler(errorStringHandler{json.New(os.Stdout)})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()

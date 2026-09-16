@@ -649,6 +649,12 @@ func (e *Environment) onConnected(c *protocol.Client) {
 		c.Close()
 		return
 	}
+	if st.Stopping {
+		// A shim that is shutting down (container restart in progress) is not a
+		// usable connection; wait for its successor.
+		c.Close()
+		return
+	}
 	e.log.Info("connected to shim", "running", st.Running, "pid", st.PID)
 
 	e.mu.Lock()
@@ -695,9 +701,7 @@ func (e *Environment) onDisconnected(c *protocol.Client) {
 		e.client = nil
 		e.connected = make(chan struct{})
 	}
-	if e.State() != environment.ProcessOfflineState {
-		e.disconnectedAt = time.Now()
-	}
+	e.disconnectedAt = time.Now()
 	e.mu.Unlock()
 	e.log.Warn("shim connection lost", "error", c.Err())
 }

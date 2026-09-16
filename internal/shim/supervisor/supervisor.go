@@ -156,7 +156,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	case sig := <-sigs:
 		s.log.Info("shim received signal, shutting down", "signal", sig.String())
 	}
+	// Stop accepting connections first so a reconnecting agent does not latch
+	// onto a shim that is about to exit.
+	ln.Close()
+	_ = os.Remove(s.o.Socket)
 	s.shutdown()
+	// Drop the remaining agent connections so they reconnect to the successor.
+	s.mu.Lock()
+	for c := range s.conns {
+		c.c.Close()
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -464,9 +474,10 @@ func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan
 	s.ptmx = nil
 	s.lastExit = ex
 	s.mu.Unlock()
-	close(exited)
 	s.log.Info("process exited", "pid", pid, "code", ex.Code, "signal", ex.Signal, "oom", ex.OOMKilled)
+	// Tell the agents before unblocking shutdown, which may close their connections.
 	s.broadcast(&protocol.Message{Type: protocol.TypeExited, Exit: ex})
+	close(exited)
 }
 
 func (s *Supervisor) statsLoop(exited chan struct{}) {

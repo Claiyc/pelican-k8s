@@ -301,7 +301,10 @@ func TestCreateSyncInstallPowerDelete(t *testing.T) {
 	}
 
 	// Power actions become spec changes.
-	for _, tc := range []struct{ action, desired string; kill bool }{{"start", "Running", false}, {"restart", "Running", false}, {"stop", "Stopped", false}, {"kill", "Stopped", true}} {
+	for _, tc := range []struct {
+		action, desired string
+		kill            bool
+	}{{"start", "Running", false}, {"restart", "Running", false}, {"stop", "Stopped", false}, {"kill", "Stopped", true}} {
 		before := h.gs().Spec.Power.Generation
 		if code, body, _ := h.call("POST", "/api/servers/"+uuid+"/power", `{"action":"`+tc.action+`"}`, nodeToken); code != 202 {
 			t.Fatalf("power %s: %d %s", tc.action, code, body)
