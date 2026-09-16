@@ -102,14 +102,14 @@ jobs:
           load: true
           tags: scan/${{ matrix.component }}:ci
           cache-from: type=gha
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: scan/${{ matrix.component }}:ci
           format: sarif
           output: trivy-${{ matrix.component }}.sarif
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-${{ matrix.component }}.sarif
