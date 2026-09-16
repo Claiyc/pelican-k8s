@@ -89,6 +89,37 @@ nothing is pushed upstream from this repository automatically.
 | Supply chain posture | OpenSSF Scorecard weekly with published results | Security → Code scanning, scorecard badge |
 | Vulnerability reports | Private vulnerability reporting is enabled (see SECURITY.md) | Security → Advisories |
 
+### Standing Scorecard findings
+
+Scorecard's score cannot reach 10 here, and two of the findings are worth
+explaining rather than re-investigating.
+
+**Vulnerabilities (4/10).** Six advisories are reported against modules in the
+graph. **None of the six has a fixed version**, so no dependency bump can clear
+them; what keeps them harmless is that the vulnerable code is never linked.
+`test/supplychain` asserts exactly that, so a new import cannot change it
+unnoticed.
+
+| Advisory | Module | Where the vulnerable code lives |
+|---|---|---|
+| GO-2026-4883, GO-2026-4887 | `github.com/docker/docker` | plugin privilege validation and AuthZ plugin handling, daemon-side |
+| GO-2026-5617, GO-2026-5668, GO-2026-5746 | `github.com/docker/docker` | `docker/docker/daemon` (`docker cp`, `PUT /containers/{id}/archive`) |
+| GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
+
+`github.com/docker/docker` enters through `internal/agent/installer` →
+`wings/system` → `docker/docker/api/types`. 27 of its packages are linked —
+`api/types/*`, `client`, `errdefs` and two `pkg/parsers` helpers — and
+`docker/docker/daemon` is not among them. `x/crypto/openpgp` is not in the
+build graph at all. This matches `govulncheck`, which finds no vulnerability
+reachable from this code.
+
+**Everything else** needs an action outside the tree: *Code-Review* wants
+approvals on merged PRs, *CII-Best-Practices* wants the project registered at
+bestpractices.coreinfrastructure.org, *Branch-Protection* errors out because
+the default `GITHUB_TOKEN` cannot read classic branch protection rules (it
+needs a fine-grained PAT in `scorecard.yaml`), *Signed-Releases* waits on a
+first release, and *Maintained* clears once the repository is 90 days old.
+
 ## Releases
 
 Tag `vX.Y.Z`. The release workflow builds and pushes the images with semver

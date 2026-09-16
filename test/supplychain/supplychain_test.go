@@ -8,6 +8,7 @@ package supplychain
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -207,6 +208,53 @@ func TestWorkflowTokensAreLeastPrivilege(t *testing.T) {
 			}
 			if job.Permissions.Kind == yaml.MappingNode && len(job.Permissions.Content) == 0 {
 				t.Errorf("%s: job %q declares an empty permissions block", f, name)
+			}
+		}
+	}
+}
+
+// unlinkedVulnerablePackages are packages that carry a known advisory with no
+// fixed version, and that nothing in this repository links today. Scorecard
+// reports the advisories against the whole module, so the only thing that can
+// regress here is a new import pulling the vulnerable code into the build.
+//
+//	GO-2026-4883, GO-2026-4887, GO-2026-5617, GO-2026-5668, GO-2026-5746
+//	   docker/docker, daemon-side; reachable only by something running the
+//	   Docker daemon. The agent links api/types (through Wings) for struct
+//	   definitions and never the daemon.
+//	GO-2026-5932
+//	   x/crypto/openpgp, unmaintained by upstream and unsafe by design.
+var unlinkedVulnerablePackages = []string{
+	"github.com/docker/docker/daemon",
+	"golang.org/x/crypto/openpgp",
+}
+
+// TestVulnerablePackagesAreNotLinked pins the reason the outstanding advisories
+// are not actionable. None of them has a fixed version, so they cannot be
+// resolved by bumping a dependency; what keeps them harmless is that the
+// vulnerable code is not compiled in.
+func TestVulnerablePackagesAreNotLinked(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("go toolchain unavailable: %v", err)
+	}
+	// Anything past this point is a broken query, not a missing tool: failing
+	// it loudly beats a green run that checked nothing.
+	out, err := exec.Command("go", "list", "-deps", "../../...").Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	linked := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\n") {
+		linked[strings.TrimSpace(p)] = true
+	}
+	// Guard against the query silently returning nothing.
+	if !linked["github.com/docker/docker/api/types"] {
+		t.Fatal("go list -deps returned an unexpected graph; the check is not meaningful")
+	}
+	for _, pkg := range unlinkedVulnerablePackages {
+		for p := range linked {
+			if p == pkg || strings.HasPrefix(p, pkg+"/") {
+				t.Errorf("%s is now in the build graph (via %s); it carries an advisory with no fix, so re-check whether the vulnerable code is reachable", pkg, p)
 			}
 		}
 	}
