@@ -53,11 +53,12 @@ func NetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 		np.Spec.Ingress = append(np.Spec.Ingress, rule)
 	}
 
-	// Egress: DNS anywhere in the cluster.
-	dns := intstr.FromInt(53)
+	// Egress: DNS anywhere in the cluster. Policies match the pod port after
+	// service DNAT, so both 53 and the 5353 OpenShift/CoreDNS listens on are needed.
+	dns, dnsAlt := intstr.FromInt(53), intstr.FromInt(5353)
 	np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
 		To:    []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}}},
-		Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns}},
+		Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns}, {Protocol: &udp, Port: &dnsAlt}, {Protocol: &tcp, Port: &dnsAlt}},
 	})
 	// Egress: the internet minus cluster and LAN ranges.
 	except := append([]string{"169.254.0.0/16"}, net.BlockedEgressCIDRs...)
