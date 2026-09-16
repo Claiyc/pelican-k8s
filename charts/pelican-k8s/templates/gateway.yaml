@@ -85,10 +85,12 @@ spec:
             - {name: remote, containerPort: 8081}
             - {name: sftp, containerPort: 2022}
           readinessProbe:
-            httpGet: {path: /api/system, port: panel}
-            # 401 without the token still proves the listener is up.
+            httpGet: {path: /healthz, port: panel}
             initialDelaySeconds: 3
             periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: panel}
+            periodSeconds: 20
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

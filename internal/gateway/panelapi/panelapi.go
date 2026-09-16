@@ -49,6 +49,9 @@ type Handler struct {
 // Routes returns the HTTP handler.
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version})
+	})
 	mux.HandleFunc("GET /download/backup", h.signedProxy("backup-download"))
 	mux.HandleFunc("GET /download/file", h.signedProxy("file-download"))
 	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload"))
