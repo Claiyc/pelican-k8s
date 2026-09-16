@@ -1,37 +1,47 @@
-// Package routes adds the agent-only HTTP routes to Wings' router.
+// Package routes adds the agent-only HTTP routes next to Wings' router. They
+// are served by a plain mux in front of gin because Wings registers its
+// authorization middleware engine-wide, which would also guard these paths.
 package routes
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
-	"github.com/pelican/wings/router/middleware"
 	"github.com/pelican/wings/server"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
-// Register adds /internal/v1/* to the engine.
-func Register(r *gin.Engine, m *server.Manager, reg *shimenv.Registry) {
-	g := r.Group("/internal/v1")
-	g.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true, "version": version.Version, "servers": m.Len()})
+// Handler returns the combined handler: /internal/v1/* here, everything else
+// to wings (the gin engine).
+func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version, "servers": m.Len()})
 	})
-	// Called by kubelet's preStop hook; returns once the process is offline.
-	g.POST("/prestop", func(c *gin.Context) { prestop(c, m) })
-	g.GET("/prestop", func(c *gin.Context) { prestop(c, m) })
+	// Called by kubelet's preStop hooks; returns once the process is offline.
+	mux.HandleFunc("/internal/v1/prestop", func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m) })
 	// Called by the operator when the game container terminated underneath the agent.
-	g.POST("/exit-state", middleware.RequireAuthorization(), func(c *gin.Context) {
+	mux.HandleFunc("POST /internal/v1/exit-state", func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(config.Get().Token.Token)) != 1 {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "You are not authorized to access this endpoint."})
+			return
+		}
 		var body struct {
 			Code      int  `json:"code"`
 			OOMKilled bool `json:"oomKilled"`
 		}
-		if err := c.BindJSON(&body); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 			return
 		}
 		for _, s := range m.All() {
@@ -39,12 +49,20 @@ func Register(r *gin.Engine, m *server.Manager, reg *shimenv.Registry) {
 				e.InjectExit(body.Code, body.OOMKilled)
 			}
 		}
-		c.Status(http.StatusNoContent)
+		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.Handle("/", wings)
+	return mux
 }
 
-func prestop(c *gin.Context, m *server.Manager) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Minute)
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	for _, s := range m.All() {
 		if s.Environment.State() == environment.ProcessOfflineState {
@@ -61,5 +79,5 @@ func prestop(c *gin.Context, m *server.Manager) {
 			_ = s.Environment.WaitForStop(ctx, time.Minute, true)
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

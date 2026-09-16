@@ -140,10 +140,9 @@ func Run(ctx context.Context, o Options) error {
 	}()
 
 	engine := router.Configure(manager, client)
-	routes.Register(engine, manager, registry)
 	srv := &http.Server{
 		Addr:              cfg.Api.Host + ":" + strconv.Itoa(cfg.Api.Port),
-		Handler:           engine,
+		Handler:           routes.Handler(engine, manager, registry),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	go func() {

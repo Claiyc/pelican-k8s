@@ -619,6 +619,18 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	if !ready {
 		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Starting", "agent container is not ready")
 		s.requeue = requeueFast
+		// An outdated pod whose game container never started (the agent sidecar
+		// gates it) can be recreated without losing a running process.
+		if (outdated || restartRequested) && !gameContainerStarted(pod) {
+			r.event(s, corev1.EventTypeNormal, "Recreate", "deleting outdated pod before the game container started")
+			if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+			if restartRequested {
+				s.gs.Status.Power.ObservedRestartRequest = s.gs.Spec.Power.RestartRequest
+			}
+			s.pod = nil
+		}
 		return nil
 	}
 	token, err := r.agentToken(s)
@@ -700,6 +712,16 @@ func lastTermination(pod *corev1.Pod) (key string, code int32, oom bool) {
 		return key, t.ExitCode, t.Reason == "OOMKilled"
 	}
 	return "", 0, false
+}
+
+// gameContainerStarted reports whether the game container ever ran in this pod.
+func gameContainerStarted(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == render.GameContainer {
+			return cs.State.Running != nil || cs.State.Terminated != nil || cs.RestartCount > 0 || cs.LastTerminationState.Terminated != nil
+		}
+	}
+	return false
 }
 
 func nodeReady(n *corev1.Node) bool {
