@@ -62,7 +62,7 @@ func Scheme() *runtime.Scheme {
 func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.Logger) (*Gateway, error) {
 	scheme := Scheme()
 	c, err := cache.New(rc, cache.Options{
-		Scheme: scheme,
+		Scheme:            scheme,
 		DefaultNamespaces: map[string]cache.Config{cfg.ServersNamespace: {}},
 		ByObject: map[client.Object]cache.ByObject{
 			&v1alpha1.GameServerClass{}: {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}},

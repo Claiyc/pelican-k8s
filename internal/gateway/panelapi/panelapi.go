@@ -264,9 +264,9 @@ func (h *Handler) fallbackState(ctx context.Context, gs *v1alpha1.GameServer) ma
 	var cfg any = json.RawMessage(gs.Spec.Panel.Settings.Raw)
 	suspended := st != nil && st.Suspended
 	return map[string]any{
-		"state":        state,
-		"is_suspended": suspended,
-		"utilization":  map[string]any{"memory_bytes": 0, "memory_limit_bytes": 0, "cpu_absolute": 0, "network": map[string]any{"rx_bytes": 0, "tx_bytes": 0}, "disk_io": map[string]any{"read_bytes": 0, "write_bytes": 0}, "uptime": 0, "state": state, "disk_bytes": 0},
+		"state":         state,
+		"is_suspended":  suspended,
+		"utilization":   map[string]any{"memory_bytes": 0, "memory_limit_bytes": 0, "cpu_absolute": 0, "network": map[string]any{"rx_bytes": 0, "tx_bytes": 0}, "disk_io": map[string]any{"read_bytes": 0, "write_bytes": 0}, "uptime": 0, "state": state, "disk_bytes": 0},
 		"configuration": cfg,
 	}
 }
