@@ -268,7 +268,7 @@ func PaperSettings(uuid string, port int, memoryMiB int) map[string]any {
 		"invocation":      "java -Xms128M -XX:MaxRAMPercentage=95.0 -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
 		"skip_egg_scripts": false,
 		"build":           map[string]any{"memory_limit": memoryMiB, "swap": 0, "io_weight": 500, "cpu_limit": 0, "threads": nil, "disk_space": 5120, "oom_killer": true},
-		"container":       map[string]any{"image": "ghcr.io/pelican-eggs/yolks:java_21", "requires_rebuild": false},
+		"container":       map[string]any{"image": "ghcr.io/pelican-eggs/yolks:java_25", "requires_rebuild": false},
 		"allocations":     map[string]any{"force_outgoing_ip": false, "default": map[string]any{"ip": "0.0.0.0", "port": port}, "mappings": map[string][]int{"0.0.0.0": {port}}},
 		"egg":             map[string]any{"id": "5c7f5e0b-0000-4000-8000-000000000000", "file_denylist": []string{}, "features": map[string][]string{"eula": {"You need to agree to the EULA"}}},
 		"labels":          map[string]any{},
