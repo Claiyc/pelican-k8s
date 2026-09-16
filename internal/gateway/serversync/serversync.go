@@ -103,7 +103,7 @@ func (s *Syncer) Create(ctx context.Context, uuid string, startOnCompletion bool
 
 // Adopt creates a GameServer for a server the Panel knows but the cluster
 // does not, without installing it (drift resync).
-func (s *Syncer) Adopt(ctx context.Context, uuid string, cfg *remote.ServerConfigurationResponse) error {
+func (s *Syncer) Adopt(ctx context.Context, uuid string, cfg *panel.ServerConfiguration) error {
 	gs, envData, err := s.build(uuid, cfg)
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func (s *Syncer) Adopt(ctx context.Context, uuid string, cfg *remote.ServerConfi
 	return s.writeEnvSecret(ctx, gs, envData)
 }
 
-func (s *Syncer) build(uuid string, cfg *remote.ServerConfigurationResponse) (*v1alpha1.GameServer, map[string]string, error) {
+func (s *Syncer) build(uuid string, cfg *panel.ServerConfiguration) (*v1alpha1.GameServer, map[string]string, error) {
 	raw, env, err := splitSettings(cfg.Settings)
 	if err != nil {
 		return nil, nil, err
@@ -126,10 +126,7 @@ func (s *Syncer) build(uuid string, cfg *remote.ServerConfigurationResponse) (*v
 	if st.UUID != uuid {
 		return nil, nil, fmt.Errorf("panel returned settings for %q, expected %q", st.UUID, uuid)
 	}
-	proc, err := json.Marshal(cfg.ProcessConfiguration)
-	if err != nil {
-		return nil, nil, err
-	}
+	proc := compactJSON(cfg.ProcessConfiguration)
 	gs := &v1alpha1.GameServer{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        names.ForUUID(uuid),
@@ -242,7 +239,7 @@ func (s *Syncer) Sync(ctx context.Context, uuid string) error {
 }
 
 // Apply writes a fetched configuration into the CR and Secret.
-func (s *Syncer) Apply(ctx context.Context, uuid string, cfg *remote.ServerConfigurationResponse) error {
+func (s *Syncer) Apply(ctx context.Context, uuid string, cfg *panel.ServerConfiguration) error {
 	gs, err := s.Store.Get(ctx, uuid)
 	if err != nil {
 		return err
@@ -255,10 +252,7 @@ func (s *Syncer) Apply(ctx context.Context, uuid string, cfg *remote.ServerConfi
 	if err != nil {
 		return err
 	}
-	proc, err := json.Marshal(cfg.ProcessConfiguration)
-	if err != nil {
-		return err
-	}
+	proc := compactJSON(cfg.ProcessConfiguration)
 	if err := s.writeEnvSecret(ctx, gs, s.envData(st, env)); err != nil {
 		return err
 	}
@@ -391,15 +385,12 @@ func (s *Syncer) Resync(ctx context.Context) error {
 			_ = s.Store.SetCondition(ctx, uuid, metav1.Condition{Type: v1alpha1.ConditionOrphaned, Status: metav1.ConditionTrue, Reason: "NotOnPanel", Message: "the Panel no longer lists this server on this node; it is never deleted automatically"})
 			continue
 		}
-		var proc remote.ProcessConfiguration
-		_ = json.Unmarshal(srv.ProcessConfiguration, &proc)
-		cfg := &remote.ServerConfigurationResponse{Settings: srv.Settings, ProcessConfiguration: &proc}
+		cfg := &panel.ServerConfiguration{Settings: srv.Settings, ProcessConfiguration: srv.ProcessConfiguration}
 		raw, _, err := splitSettings(cfg.Settings)
 		if err != nil {
 			continue
 		}
-		procJSON, _ := json.Marshal(cfg.ProcessConfiguration)
-		if Revision(raw, procJSON) != gs.Spec.Panel.PanelRevision {
+		if Revision(raw, compactJSON(cfg.ProcessConfiguration)) != gs.Spec.Panel.PanelRevision {
 			s.Log.Info("resync: panel configuration changed", "uuid", uuid)
 			if err := s.Apply(ctx, uuid, cfg); err != nil {
 				s.Log.Warn("resync: apply failed", "uuid", uuid, "error", err)
@@ -414,13 +405,28 @@ func (s *Syncer) Resync(ctx context.Context) error {
 			continue
 		}
 		s.Log.Info("resync: adopting server known to the Panel but missing in the cluster", "uuid", uuid)
-		var proc remote.ProcessConfiguration
-		_ = json.Unmarshal(srv.ProcessConfiguration, &proc)
-		if err := s.Adopt(ctx, uuid, &remote.ServerConfigurationResponse{Settings: srv.Settings, ProcessConfiguration: &proc}); err != nil {
+		if err := s.Adopt(ctx, uuid, &panel.ServerConfiguration{Settings: srv.Settings, ProcessConfiguration: srv.ProcessConfiguration}); err != nil {
 			s.Log.Warn("resync: adopt failed", "uuid", uuid, "error", err)
 		}
 	}
 	return nil
+}
+
+// compactJSON normalises raw JSON so revisions are stable; invalid input is
+// returned unchanged.
+func compactJSON(raw json.RawMessage) []byte {
+	if len(raw) == 0 {
+		return []byte("null")
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return b
 }
 
 func findCondition(gs *v1alpha1.GameServer, t string) *metav1.Condition {

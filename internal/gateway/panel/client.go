@@ -110,9 +110,17 @@ func (c *Client) post(ctx context.Context, path string, v any) error {
 	return nil
 }
 
+// ServerConfiguration is the raw Panel configuration payload. Both parts are
+// kept as raw JSON so that nothing is lost when they are stored in the CR and
+// served back to agents (Wings' typed structs do not round-trip).
+type ServerConfiguration struct {
+	Settings             json.RawMessage `json:"settings"`
+	ProcessConfiguration json.RawMessage `json:"process_configuration"`
+}
+
 // GetServerConfiguration fetches settings and process configuration.
-func (c *Client) GetServerConfiguration(ctx context.Context, uuid string) (*remote.ServerConfigurationResponse, error) {
-	var out remote.ServerConfigurationResponse
+func (c *Client) GetServerConfiguration(ctx context.Context, uuid string) (*ServerConfiguration, error) {
+	var out ServerConfiguration
 	if err := c.getJSON(ctx, "/servers/"+uuid, nil, &out); err != nil {
 		return nil, err
 	}
