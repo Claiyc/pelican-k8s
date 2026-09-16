@@ -1,0 +1,457 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: gameserverclasses.pelican-k8s.io
+spec:
+  group: pelican-k8s.io
+  names:
+    kind: GameServerClass
+    listKind: GameServerClassList
+    plural: gameserverclasses
+    shortNames:
+    - gsc
+    singular: gameserverclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.exposure.mode
+      name: Exposure
+      type: string
+    - jsonPath: .spec.storage.storageClassName
+      name: StorageClass
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: GameServerClass is admin-owned, cluster-scoped policy referenced
+          by GameServer.spec.className.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GameServerClassSpec is the cluster-side policy for a set
+              of GameServers.
+            properties:
+              agentConfigMap:
+                default: pelican-agent-config
+                description: AgentConfigMap names the ConfigMap holding the agent's
+                  Wings config.yml.
+                type: string
+              exposure:
+                description: ExposureSpec configures how game ports reach players.
+                properties:
+                  externalIPs:
+                    description: |-
+                      ExternalIPs are the addresses advertised to the Panel through /api/system/ips.
+                      Empty means node addresses (NodePort, HostPort) or the observed LoadBalancer ingress IPs.
+                    items:
+                      type: string
+                    type: array
+                  externalTrafficPolicy:
+                    default: Local
+                    description: |-
+                      ServiceExternalTrafficPolicy describes how nodes distribute service traffic they
+                      receive on one of the Service's "externally-facing" addresses (NodePorts, ExternalIPs,
+                      and LoadBalancer IPs.
+                    type: string
+                  loadBalancer:
+                    description: LoadBalancerSpec carries implementation specific
+                      annotation keys.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations are added verbatim to every exposure
+                          Service.
+                        type: object
+                      ipAnnotation:
+                        description: IPAnnotation pins the Service to the allocation
+                          IP (e.g. metallb.io/loadBalancerIPs).
+                        type: string
+                      sharingAnnotation:
+                        description: SharingAnnotation lets several Services share
+                          one IP (e.g. metallb.io/allow-shared-ip).
+                        type: string
+                    type: object
+                  mode:
+                    default: LoadBalancer
+                    description: ExposureMode selects how game ports are exposed.
+                    enum:
+                    - LoadBalancer
+                    - NodePort
+                    - HostPort
+                    type: string
+                type: object
+              failover:
+                description: FailoverSpec configures node-loss handling.
+                properties:
+                  forceDeleteAfter:
+                    description: ForceDeleteAfter force-deletes a pod stuck Terminating
+                      on a NotReady node (e.g. 5m). Empty = never.
+                    type: string
+                type: object
+              imageResolution:
+                description: ImageResolutionSpec configures how the operator finds
+                  the image ENTRYPOINT/CMD.
+                properties:
+                  entrypointOverrides:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: EntrypointOverrides maps an image reference glob
+                      to the argv to run.
+                    type: object
+                  pinDigest:
+                    default: true
+                    description: PinDigest resolves tags to digests on every pod creation
+                      (Wings' pull-on-start).
+                    type: boolean
+                  pullSecrets:
+                    items:
+                      type: string
+                    type: array
+                  registryLookup:
+                    description: RegistryLookup resolves the image config from the
+                      registry.
+                    type: boolean
+                type: object
+              images:
+                description: ImagesSpec names the pelican-k8s images injected into
+                  game pods.
+                properties:
+                  agent:
+                    type: string
+                  pullPolicy:
+                    default: IfNotPresent
+                    description: PullPolicy describes a policy for if/when to pull
+                      a container image
+                    type: string
+                  shim:
+                    type: string
+                type: object
+              install:
+                description: InstallJobSpec configures install Jobs.
+                properties:
+                  activeDeadlineSeconds:
+                    default: 3600
+                    format: int64
+                    type: integer
+                  prepareTimeoutSeconds:
+                    default: 600
+                    description: PrepareTimeoutSeconds bounds how long the operator
+                      waits for the agent to report prepared.
+                    format: int64
+                    type: integer
+                  resources:
+                    description: ContainerResources are simple resource amounts.
+                    properties:
+                      cpu:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memory:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memoryLimit:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
+                  runAsRoot:
+                    default: true
+                    description: RunAsRoot runs the install container as UID 0 (egg
+                      scripts expect it).
+                    type: boolean
+                  serviceAccountName:
+                    default: pelican-installer
+                    type: string
+                  strictExitCode:
+                    description: StrictExitCode makes a non-zero script exit code
+                      fail the install (Wings ignores it).
+                    type: boolean
+                type: object
+              network:
+                description: NetworkSpec configures NetworkPolicies.
+                properties:
+                  blockedEgressCIDRs:
+                    description: |-
+                      BlockedEgressCIDRs are excluded from the default 0.0.0.0/0 egress of game pods
+                      (pod CIDR, service CIDR, node and LAN ranges). Link-local is always blocked.
+                    items:
+                      type: string
+                    type: array
+                  enabled:
+                    default: true
+                    description: Enabled controls whether per-server NetworkPolicies
+                      are created.
+                    type: boolean
+                  inClusterEgress:
+                    description: InClusterEgressSpec lists in-cluster destinations
+                      game pods may reach.
+                    properties:
+                      additional:
+                        items:
+                          description: EgressRule allows game pods to reach an in-cluster
+                            destination.
+                          properties:
+                            cidr:
+                              type: string
+                            ports:
+                              items:
+                                format: int32
+                                type: integer
+                              type: array
+                          required:
+                          - cidr
+                          type: object
+                        type: array
+                      gameServers:
+                        default: true
+                        description: GameServers allows traffic to other GameServer
+                          pods on their allocation ports.
+                        type: boolean
+                    type: object
+                  nodeCIDRs:
+                    description: NodeCIDRs are admitted on the agent HTTP port for
+                      kubelet probes and hooks.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector, Tolerations and PriorityClassName are applied
+                  to game pods.
+                type: object
+              priorityClassName:
+                type: string
+              resources:
+                description: ResourcesSpec maps Panel build limits to pod resources.
+                properties:
+                  agent:
+                    description: ContainerResources are simple resource amounts.
+                    properties:
+                      cpu:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memory:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memoryLimit:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
+                  cpuRequestPercentOfLimit:
+                    default: 25
+                    description: CPURequestPercentOfLimit is the overcommit knob.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  memoryOverheadPercent:
+                    default: 5
+                    description: MemoryOverheadPercent grows the memory limit beyond
+                      memory_limit (Wings docker.overhead).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  minCpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 100m
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  tmpSizeMiB:
+                    default: 100
+                    format: int32
+                    type: integer
+                  unlimitedCpuPercent:
+                    description: UnlimitedCPUPercent is used when cpu_limit is 0;
+                      0 means no limit.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  unlimitedMemoryMiB:
+                    default: 4096
+                    description: UnlimitedMemoryMiB is used when memory_limit is 0.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
+              security:
+                description: SecuritySpec pins the UID game pods run as.
+                properties:
+                  generatePasswdEntry:
+                    default: true
+                    description: GeneratePasswdEntry generates an /etc/passwd entry
+                      for the UID inside the game container.
+                    type: boolean
+                  runAsUser:
+                    default: 1000
+                    description: RunAsUser is the pinned non-root UID and GID.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  useNamespaceUIDRange:
+                    description: |-
+                      UseNamespaceUIDRange reads the OpenShift UID range annotation of the namespace and
+                      uses its start instead of RunAsUser.
+                    type: boolean
+                type: object
+              serviceAccountName:
+                default: pelican-game
+                description: ServiceAccountName is the ServiceAccount of game pods.
+                type: string
+              storage:
+                description: StorageSpec configures per-server storage.
+                properties:
+                  defaultSizeGiB:
+                    default: 20
+                    description: DefaultSizeGiB is used when the Panel disk_space
+                      is 0 (unlimited).
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  deletionPolicy:
+                    default: Delete
+                    description: DeletionPolicy selects what happens to the server
+                      PVC when the CR is deleted.
+                    enum:
+                    - Delete
+                    - Retain
+                    - SnapshotThenDelete
+                    type: string
+                  overheadPercent:
+                    default: 10
+                    description: OverheadPercent grows the PVC beyond disk_space for
+                      logs, the activity database and install output.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  scratch:
+                    description: ScratchSpec configures the scratch volume holding
+                      backup archives and agent temp files.
+                    properties:
+                      sizeGiB:
+                        description: SizeGiB is the scratch volume size; 0 means the
+                          size of the server PVC.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      storageClassName:
+                        type: string
+                      type:
+                        default: Ephemeral
+                        description: ScratchVolumeType selects how the agent's scratch
+                          volume is provisioned.
+                        enum:
+                        - Ephemeral
+                        - EmptyDir
+                        type: string
+                    type: object
+                  snapshotSchedule:
+                    description: SnapshotSchedule is an optional cron expression for
+                      crash-consistent VolumeSnapshots.
+                    type: string
+                  storageClassName:
+                    description: StorageClassName must allow volume expansion. Empty
+                      selects the cluster default.
+                    type: string
+                  volumeSnapshotClassName:
+                    description: VolumeSnapshotClassName is required for SnapshotThenDelete
+                      and snapshotSchedule.
+                    type: string
+                type: object
+              suspendScalesToZero:
+                description: SuspendScalesToZero deletes the pod of a suspended server.
+                type: boolean
+              terminationGracePeriodSeconds:
+                default: 660
+                description: TerminationGracePeriodSeconds must exceed Wings' 10 minute
+                  stop wait.
+                format: int64
+                type: integer
+              tolerations:
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

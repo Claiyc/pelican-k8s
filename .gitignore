@@ -1,0 +1,12 @@
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+.envrc
+.direnv/
+.idea/
+.vscode/
+/charts/*/charts/
+/charts/*/Chart.lock
+/test/e2e/.state/
