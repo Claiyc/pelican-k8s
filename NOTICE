@@ -1,0 +1,15 @@
+pelican-k8s
+Copyright 2026 pelican-k8s contributors
+
+This product is licensed under the Apache License, Version 2.0.
+
+It embeds Pelican Wings (https://github.com/pelican/wings), which is
+licensed under the MIT License (Copyright (c) 2018-2026 Pelican and its
+contributors, originally Pterodactyl). The Wings source is used unmodified as
+a Go module dependency; the opt-in hooks it needs are carried on the
+https://github.com/Claiyc/wings pelican-k8s-hooks branch under the same MIT
+License. See go.mod for the pinned version.
+
+Pelican Panel (https://github.com/pelican/panel, AGPL-3.0) is not part of
+this product; the charts/pelican-panel Helm chart deploys the unmodified
+upstream image as a separate service.

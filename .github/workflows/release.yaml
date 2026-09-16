@@ -56,8 +56,25 @@ jobs:
           helm package charts/pelican-k8s --version "$v" --app-version "$v" -d dist
           helm package charts/pelican-panel -d dist
           for f in dist/*.tgz; do helm push "$f" "oci://ghcr.io/${{ github.repository_owner }}/pelican-k8s/charts"; done
-      - name: GitHub release
+      - name: Release notes from CHANGELOG
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          v="${VERSION#v}"
+          awk -v v="$v" '$0 ~ "^## \\["v"\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          {
+            echo
+            echo "## Artifacts"
+            echo
+            echo "Images (linux/amd64, linux/arm64): \`ghcr.io/${{ github.repository_owner }}/pelican-k8s/{shim,agent,gateway,operator}:$v\`"
+            echo
+            echo "Charts: \`helm install pelican-k8s oci://ghcr.io/${{ github.repository_owner }}/pelican-k8s/charts/pelican-k8s --version $v\`"
+          } >> notes.md
+      - name: GitHub release (draft)
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          body_path: notes.md
           generate_release_notes: true
           files: dist/*.tgz

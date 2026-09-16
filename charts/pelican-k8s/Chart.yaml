@@ -13,3 +13,5 @@ keywords: [pelican, wings, game-server, operator]
 home: https://github.com/Claiyc/pelican-k8s
 sources:
   - https://github.com/Claiyc/pelican-k8s
+annotations:
+  artifacthub.io/license: Apache-2.0
