@@ -461,6 +461,9 @@ func TestInstallJobFailureAndTimeout(t *testing.T) {
 	if st.Result != v1alpha1.InstallFailed || st.ObservedGeneration != 1 {
 		t.Fatalf("expected failed+observed, got %+v", st)
 	}
+	if !h.get(&job, names.InstallJob(uuid, 1)) {
+		t.Fatal("failed jobs are kept for inspection")
+	}
 
 	// Generation 2 never gets prepared: the prepare timeout fails it.
 	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Install.Generation = 2 })
@@ -473,6 +476,39 @@ func TestInstallJobFailureAndTimeout(t *testing.T) {
 	st = h.gs().Status.Install
 	if st.Result != v1alpha1.InstallFailed || st.ObservedGeneration != 2 {
 		t.Fatalf("expected timeout failure, got %+v", st)
+	}
+}
+
+func TestInstallRestartsOnFreshPod(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Install = v1alpha1.InstallSpec{Generation: 1, ScriptConfigMap: names.InstallConfigMap(uuid, 1)}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: names.InstallConfigMap(uuid, 1), Namespace: ns}, Data: map[string]string{"install.sh": "x"}}
+	h := newHarness(t, gs, newClass(), cm)
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	h.patchStatus(func(gs *v1alpha1.GameServer) { gs.Status.Install.PreparedGeneration = 1 })
+	h.reconcile(1)
+	var job batchv1.Job
+	if !h.get(&job, names.InstallJob(uuid, 1)) {
+		t.Fatal("job expected")
+	}
+	// The pod is replaced mid-install.
+	if err := h.c.Delete(context.Background(), h.pod()); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(time.Minute)
+	h.createPod(true)
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "install:false,install:false" {
+		t.Fatalf("install must be requested again on the new pod: %v", got)
+	}
+	st := h.gs().Status.Install
+	if st.RequestedGeneration != 1 || st.PreparedGeneration != 0 || st.Result != v1alpha1.InstallRunning {
+		t.Fatalf("install status after restart %+v", st)
+	}
+	if h.get(&job, names.InstallJob(uuid, 1)) && job.DeletionTimestamp.IsZero() {
+		t.Fatal("stale job should be deleted")
 	}
 }
 

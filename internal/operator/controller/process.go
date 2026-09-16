@@ -38,6 +38,16 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 		gs.Status.Agent.SyncedRevision = gs.Spec.Panel.PanelRevision
 		gs.Status.Agent.SyncedEnvVersion = r.envSecretVersion(s)
 		gs.Status.Agent.RelayedExit = ""
+		// An install that was in flight in the previous pod lost its agent-side
+		// lock and tail; ask the new agent again and start a clean Job.
+		if st := &gs.Status.Install; gs.Spec.Install.Generation > st.ObservedGeneration && st.RequestedGeneration != 0 {
+			r.event(s, corev1.EventTypeWarning, "InstallRestarted", "pod was recreated during install generation %d; requesting it again", gs.Spec.Install.Generation)
+			if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
+				return err
+			}
+			st.RequestedGeneration, st.RequestedAt, st.PreparedGeneration, st.JobName = 0, nil, 0, ""
+			st.Result = ""
+		}
 		if gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended && !recreatePending {
 			if err := r.power(s, "start"); err != nil {
 				return err
@@ -250,7 +260,9 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 	if st.Result == v1alpha1.InstallSucceeded || st.Result == v1alpha1.InstallFailed {
 		if job == nil || jobDone {
 			st.ObservedGeneration = gen
-			if job != nil {
+			// Successful Jobs are removed right away; failed ones stay until their
+			// TTL so their pod logs can be inspected.
+			if job != nil && st.Result == v1alpha1.InstallSucceeded {
 				if err := r.deleteInstallJob(s, gen); err != nil {
 					return err
 				}
