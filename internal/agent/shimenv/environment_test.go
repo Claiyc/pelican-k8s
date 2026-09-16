@@ -114,7 +114,13 @@ func TestStartCommandStopAndReadlog(t *testing.T) {
 	if code != 0 || oom {
 		t.Fatalf("exit %d %v", code, oom)
 	}
-	got := states()
+	// State change events are published asynchronously; wait for the last one.
+	var got []string
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if got = states(); len(got) > 0 && got[len(got)-1] == "offline" {
+			break
+		}
+	}
 	want := []string{"starting", "running", "stopping", "offline"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("states %v", got)
@@ -238,7 +244,12 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 	if running, _ := e.IsRunning(context.Background()); !running {
 		t.Fatal("process should still be running")
 	}
-	got := states()
+	var got []string
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if got = states(); len(got) >= 2 {
+			break
+		}
+	}
 	if strings.Join(got, ",") != "offline,starting" {
 		t.Fatalf("states %v", got)
 	}
