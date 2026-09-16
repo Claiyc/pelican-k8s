@@ -75,10 +75,10 @@ nothing is pushed upstream from this repository automatically.
 
 | What | How | Where to look |
 |---|---|---|
-| Go modules, GitHub Actions, base images | Dependabot weekly PRs (`.github/dependabot.yml`, Kubernetes libraries grouped). `renovate.json` is an equivalent configuration for teams that prefer the Renovate app; use one of the two | Pull requests |
+| Go modules, GitHub Actions, base images | Dependabot weekly PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
 | Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against Wings `main` and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
 | Pelican Panel | The same workflow compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
-| Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR | CI job *Build and test* |
+| Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go) on pushes, PRs and weekly; golangci-lint in CI | Security → Code scanning, CI job *golangci-lint* |
 | Dependabot alerts and security updates | Enabled on the repository (GitHub advisory database) | Security → Dependabot |

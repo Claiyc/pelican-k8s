@@ -56,5 +56,6 @@ The implementation follows the design; these details differ or were added:
 - The `Upstream drift` workflow runs the same checks nightly against Wings
   `main` and greps the latest Panel image for the contract points the gateway
   depends on.
-- Renovate keeps Go modules, actions and the Panel chart `appVersion` current;
-  Wings itself is bumped by hand (fork branch rebase + upstream tests).
+- Dependabot keeps Go modules, actions and base images current; the nightly
+  workflow opens an issue when a new Panel release appears. Wings itself is
+  bumped by hand (fork branch rebase + upstream tests).

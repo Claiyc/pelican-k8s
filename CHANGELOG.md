@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Build with Go 1.27. `govulncheck` in CI fails only for reachable vulnerabilities that have a fix.
+- Dependency updates come from Dependabot; the Renovate configuration was removed.
+
 ## [0.1.0] - 2026-09-16
 
 First release. Implements ARCHITECTURE.md end to end and was verified on an
