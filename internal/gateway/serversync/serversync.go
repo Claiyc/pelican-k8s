@@ -212,8 +212,11 @@ func (s *Syncer) writeEnvSecret(ctx context.Context, gs *v1alpha1.GameServer, da
 	_, err := controllerutil.CreateOrUpdate(ctx, s.Store.Client, sec, func() error {
 		sec.Labels = map[string]string{v1alpha1.LabelServerUUID: gs.Spec.Panel.UUID, v1alpha1.LabelComponent: "env", render.LabelPartOf: render.PartOfValue}
 		sec.Type = corev1.SecretTypeOpaque
-		sec.Data = nil
-		sec.StringData = data
+		sec.StringData = nil
+		sec.Data = make(map[string][]byte, len(data))
+		for k, v := range data {
+			sec.Data[k] = []byte(v)
+		}
 		return controllerutil.SetControllerReference(gs, sec, s.Store.Client.Scheme())
 	})
 	return err

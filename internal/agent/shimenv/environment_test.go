@@ -194,6 +194,55 @@ func TestInjectExit(t *testing.T) {
 	}
 }
 
+// TestContainerRestartHandledOnce: the shim goes away while the process is
+// running, comes back with nothing running (kubelet restarted the container),
+// the agent restarts the process, and a late exit-state relay from the
+// operator must not kill the fresh start.
+func TestContainerRestartHandledOnce(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "shim.sock")
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	sup1 := supervisor.New(supervisor.Options{Socket: sock, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	go func() { _ = sup1.Run(ctx1) }()
+	cfg := environment.NewConfiguration(environment.Settings{}, nil)
+	e := New("s", cfg, Options{SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
+	defer e.Close()
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.SetState(environment.ProcessRunningState)
+	states := collectStates(t, e)
+	// Container "restarts": the old shim dies, a new one comes up idle.
+	cancel1()
+	time.Sleep(300 * time.Millisecond)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	sup2 := supervisor.New(supervisor.Options{Socket: sock, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	go func() { _ = sup2.Run(ctx2) }()
+	waitState(t, e, environment.ProcessOfflineState, 5*time.Second)
+	// Either the old shim reported the SIGTERM exit (143) before dying or the
+	// reconnect recorded the placeholder (137).
+	if code, _, _ := e.ExitState(); code != 137 && code != 143 {
+		t.Fatalf("exit code %d", code)
+	}
+	// Wings' crash handler would now restart; emulate it.
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The operator's relay arrives late with the real exit state.
+	e.InjectExit(137, true)
+	if e.State() != environment.ProcessStartingState {
+		t.Fatalf("late relay must not change state, got %s", e.State())
+	}
+	if running, _ := e.IsRunning(context.Background()); !running {
+		t.Fatal("process should still be running")
+	}
+	got := states()
+	if strings.Join(got, ",") != "offline,starting" {
+		t.Fatalf("states %v", got)
+	}
+}
+
 func TestReattachAfterAgentRestart(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "shim.sock")

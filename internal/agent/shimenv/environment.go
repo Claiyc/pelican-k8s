@@ -73,6 +73,9 @@ type Environment struct {
 	startedAt time.Time
 	running   bool
 	exitedCh  chan struct{} // closed when an exit is observed for the current run
+	// disconnectedAt is when the shim connection was last lost while a process
+	// was supposed to be alive (the game container restarted underneath us).
+	disconnectedAt time.Time
 
 	runLogMu sync.Mutex
 	runLog   *os.File
@@ -240,12 +243,33 @@ func (e *Environment) ExitState() (uint32, bool, error) {
 
 // InjectExit records an exit observed by the operator (e.g. an OOM kill of the
 // whole game container) and moves the process to offline so that Wings' crash
-// handling runs.
+// handling runs. It is ignored when the process has already been restarted
+// since the container came back (the reconnect path may have handled the
+// exit first), so a late relay never kills a fresh start.
 func (e *Environment) InjectExit(code int, oomKilled bool) {
 	e.mu.Lock()
+	restartedSince := !e.disconnectedAt.IsZero() && e.startedAt.After(e.disconnectedAt)
+	alreadyOffline := e.State() == environment.ProcessOfflineState
+	if restartedSince {
+		e.mu.Unlock()
+		e.log.Info("ignoring injected exit state: process restarted since the container came back", "code", code, "oom", oomKilled)
+		return
+	}
+	if alreadyOffline {
+		// The reconnect path recorded a placeholder; keep the authoritative details.
+		if e.lastExit != nil {
+			e.lastExit.Code = code
+			e.lastExit.OOMKilled = oomKilled
+		} else {
+			e.lastExit = &protocol.ExitState{Code: code, OOMKilled: oomKilled, At: time.Now()}
+		}
+		e.mu.Unlock()
+		return
+	}
 	e.lastExit = &protocol.ExitState{Code: code, OOMKilled: oomKilled, At: time.Now()}
 	e.running = false
 	e.markExitedLocked()
+	e.disconnectedAt = time.Time{}
 	e.mu.Unlock()
 	e.log.Info("exit state injected", "code", code, "oom", oomKilled)
 	e.SetState(environment.ProcessOfflineState)
@@ -320,6 +344,10 @@ func (e *Environment) Start(ctx context.Context) error {
 		}
 		return fmt.Errorf("environment/shim: start: %w", err)
 	}
+	e.mu.Lock()
+	e.startedAt = time.Now()
+	e.running = true
+	e.mu.Unlock()
 	sawError = false
 	return nil
 }
@@ -649,13 +677,12 @@ func (e *Environment) onConnected(c *protocol.Client) {
 		// injects the authoritative exit state; record a placeholder so crash
 		// handling runs even if that never arrives.
 		e.mu.Lock()
-		if e.lastExit == nil {
-			if st.LastExit != nil {
-				e.lastExit = st.LastExit
-			} else {
-				e.lastExit = &protocol.ExitState{Code: 137, At: time.Now()}
-			}
+		if st.LastExit != nil {
+			e.lastExit = st.LastExit
+		} else {
+			e.lastExit = &protocol.ExitState{Code: 137, At: time.Now()}
 		}
+		e.running = false
 		e.markExitedLocked()
 		e.mu.Unlock()
 		e.SetState(environment.ProcessOfflineState)
@@ -667,6 +694,9 @@ func (e *Environment) onDisconnected(c *protocol.Client) {
 	if e.client == c {
 		e.client = nil
 		e.connected = make(chan struct{})
+	}
+	if e.State() != environment.ProcessOfflineState {
+		e.disconnectedAt = time.Now()
 	}
 	e.mu.Unlock()
 	e.log.Warn("shim connection lost", "error", c.Err())
