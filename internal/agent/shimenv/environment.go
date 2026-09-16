@@ -27,9 +27,9 @@ import (
 
 // Compile-time checks: the environment satisfies Wings' interfaces and hooks.
 var (
-	_ environment.ProcessEnvironment = (*Environment)(nil)
+	_ environment.ProcessEnvironment  = (*Environment)(nil)
 	_ server.ImageAndStopConfigurable = (*Environment)(nil)
-	_ server.Attachable              = (*Environment)(nil)
+	_ server.Attachable               = (*Environment)(nil)
 )
 
 // ErrNotAttached mirrors the Docker environment's error.

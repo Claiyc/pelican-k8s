@@ -18,17 +18,17 @@ import (
 
 // Message types.
 const (
-	TypeStart     = "start"      // request: start the process with the given environment
-	TypeStdin     = "stdin"      // request: write bytes to the process stdin
-	TypeSignal    = "signal"     // request: send a signal to the process group
-	TypeKill      = "kill"       // request: SIGKILL the process group
-	TypeStatus    = "status"     // request: report the current status
-	TypeSubscribe = "subscribe"  // request: (re)subscribe to events, optionally replaying the ring buffer
-	TypeReply     = "reply"      // response to a request
-	TypeOutput    = "output"     // event: PTY bytes
-	TypeStarted   = "started"    // event: process spawned
-	TypeExited    = "exited"     // event: process exited
-	TypeStats     = "stats"      // event: resource usage sample
+	TypeStart     = "start"     // request: start the process with the given environment
+	TypeStdin     = "stdin"     // request: write bytes to the process stdin
+	TypeSignal    = "signal"    // request: send a signal to the process group
+	TypeKill      = "kill"      // request: SIGKILL the process group
+	TypeStatus    = "status"    // request: report the current status
+	TypeSubscribe = "subscribe" // request: (re)subscribe to events, optionally replaying the ring buffer
+	TypeReply     = "reply"     // response to a request
+	TypeOutput    = "output"    // event: PTY bytes
+	TypeStarted   = "started"   // event: process spawned
+	TypeExited    = "exited"    // event: process exited
+	TypeStats     = "stats"     // event: resource usage sample
 )
 
 // Version of the protocol; bumped on incompatible changes.
