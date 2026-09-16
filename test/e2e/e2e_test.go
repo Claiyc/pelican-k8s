@@ -99,7 +99,7 @@ func (e *env) jwt(t *testing.T, scope string, extra map[string]any) string {
 	now := time.Now()
 	claims := map[string]any{
 		"iss": e.panel, "aud": []string{e.gateway}, "jti": fmt.Sprintf("e2e-%d", now.UnixNano()), "iat": now.Unix(), "nbf": now.Add(-5 * time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
-		"server_uuid": e.server, "user_uuid": "e2e-user", "scope": scope, "unique_id": fmt.Sprintf("u%d", now.UnixNano()),
+		"server_uuid": e.server, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "scope": scope, "unique_id": fmt.Sprintf("u%d", now.UnixNano()),
 		"permissions": []string{"websocket.connect", "control.console", "control.start", "control.stop", "control.restart", "admin.websocket.errors"},
 	}
 	for k, v := range extra {

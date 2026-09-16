@@ -305,6 +305,13 @@ func (h *Handler) activity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, "BadGateway", err.Error())
 		return
 	}
+	if status == http.StatusUnprocessableEntity {
+		// Wings retries a rejected batch forever and never gets past it. Drop
+		// rows the Panel refuses (they cannot become valid) and log them.
+		h.Log.Warn("panel rejected activity rows; dropping the batch", "uuid", uuid, "response", strings.TrimSpace(string(res)))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	w.WriteHeader(status)
 	_, _ = w.Write(res)
 }
