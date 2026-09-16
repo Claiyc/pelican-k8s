@@ -1,0 +1,98 @@
+{{- include "pelican-panel.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pelican-panel.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pelican-panel.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+  {{- with (include "pelican-panel.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+data:
+  ## --- application -------------------------------------------------------
+  APP_NAME: {{ .Values.panel.appName | quote }}
+  APP_ENV: {{ .Values.panel.env | quote }}
+  APP_DEBUG: {{ .Values.panel.debug | quote }}
+  APP_URL: {{ .Values.panel.url | quote }}
+  APP_LOCALE: {{ .Values.panel.locale | quote }}
+  APP_INSTALLED: {{ .Values.panel.installed | quote }}
+  SKIP_MIGRATIONS: {{ .Values.panel.skipMigrations | quote }}
+  {{- if .Values.panel.twoFactorRequired }}
+  APP_2FA_REQUIRED: {{ .Values.panel.twoFactorRequired | quote }}
+  {{- end }}
+  TZ: {{ .Values.panel.timezone | quote }}
+  ## Caddy/composer data dir (matches the upstream compose file).
+  XDG_DATA_HOME: /pelican-data
+
+  ## --- web server / proxy ------------------------------------------------
+  BEHIND_PROXY: {{ .Values.panel.behindProxy | quote }}
+  SKIP_CADDY: {{ .Values.panel.skipCaddy | quote }}
+  {{- if .Values.panel.trustedProxies }}
+  TRUSTED_PROXIES: {{ .Values.panel.trustedProxies | quote }}
+  {{- end }}
+  {{- if .Values.panel.leEmail }}
+  LE_EMAIL: {{ .Values.panel.leEmail | quote }}
+  {{- end }}
+
+  ## --- drivers -----------------------------------------------------------
+  CACHE_STORE: {{ .Values.panel.cacheStore | quote }}
+  SESSION_DRIVER: {{ .Values.panel.sessionDriver | quote }}
+  QUEUE_CONNECTION: {{ .Values.panel.queueConnection | quote }}
+
+  ## --- database ----------------------------------------------------------
+  DB_CONNECTION: {{ include "pelican-panel.db.connection" . | quote }}
+  {{- if ne (include "pelican-panel.db.connection" .) "sqlite" }}
+  {{- if not .Values.database.existingSecretHostKey }}
+  DB_HOST: {{ include "pelican-panel.db.host" . | quote }}
+  {{- end }}
+  {{- if not .Values.database.existingSecretPortKey }}
+  DB_PORT: {{ include "pelican-panel.db.port" . | quote }}
+  {{- end }}
+  {{- if not .Values.database.existingSecretDatabaseKey }}
+  DB_DATABASE: {{ include "pelican-panel.db.name" . | quote }}
+  {{- end }}
+  {{- if not .Values.database.existingSecretUsernameKey }}
+  DB_USERNAME: {{ include "pelican-panel.db.username" . | quote }}
+  {{- end }}
+  {{- else }}
+  DB_DATABASE: {{ .Values.database.name | quote }}
+  {{- end }}
+
+  {{- if include "pelican-panel.usesRedis" . }}
+  ## --- redis -------------------------------------------------------------
+  REDIS_HOST: {{ include "pelican-panel.redis.host" . | quote }}
+  REDIS_PORT: {{ include "pelican-panel.redis.port" . | quote }}
+  {{- if and (not .Values.redis.enabled) .Values.externalRedis.username }}
+  REDIS_USERNAME: {{ .Values.externalRedis.username | quote }}
+  {{- end }}
+  {{- end }}
+
+  ## --- mail --------------------------------------------------------------
+  MAIL_MAILER: {{ .Values.panel.mail.mailer | quote }}
+  {{- with .Values.panel.mail.host }}
+  MAIL_HOST: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.panel.mail.port }}
+  MAIL_PORT: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.panel.mail.username }}
+  MAIL_USERNAME: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.panel.mail.scheme }}
+  MAIL_SCHEME: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.panel.mail.fromAddress }}
+  MAIL_FROM_ADDRESS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.panel.mail.fromName }}
+  MAIL_FROM_NAME: {{ . | quote }}
+  {{- end }}
+{{- with .Values.panel.extraEnv }}
+  ## --- extra -------------------------------------------------------------
+  {{- range $k, $v := . }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}
