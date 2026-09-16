@@ -1,0 +1,14 @@
+version: "2"
+run:
+  timeout: 10m
+  build-tags: [spike, e2e]
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+    - errorlint
+  exclusions:
+    generated: lax
+    paths:
+      - api/v1alpha1/zz_generated.deepcopy.go

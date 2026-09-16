@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommitsDisabled"],
+  "labels": ["dependencies"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "Wings is pinned through a replace to the hooks fork; bump it by hand after re-running test/upstream",
+      "matchPackageNames": ["github.com/pelican/wings", "github.com/Claiyc/wings"],
+      "enabled": false
+    },
+    {
+      "description": "Kubernetes libraries move together",
+      "groupName": "kubernetes",
+      "matchPackageNames": ["/^k8s.io//", "/^sigs.k8s.io//"]
+    },
+    {
+      "description": "Pelican Panel image used by the pelican-panel chart appVersion",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/pelican/panel"],
+      "groupName": "pelican-panel"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Panel appVersion in the chart",
+      "managerFilePatterns": ["/^charts/pelican-panel/Chart.yaml$/"],
+      "matchStrings": ["appVersion: \"(?<currentValue>v[0-9.]+(-[a-z0-9.]+)?)\""],
+      "depNameTemplate": "ghcr.io/pelican/panel",
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

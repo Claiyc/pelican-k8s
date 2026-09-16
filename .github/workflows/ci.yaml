@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify generated code is current
+        run: |
+          make generate
+          git diff --exit-code -- api charts/pelican-k8s/crds || (echo "run 'make generate' and commit"; exit 1)
+      - name: Build
+        run: make build
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: Upstream compatibility (pinned Wings)
+        run: go test -count=1 ./test/upstream/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout 10m
+
+  helm:
+    name: Helm charts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint pelican-k8s
+        run: |
+          helm lint charts/pelican-k8s --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token
+          helm template t charts/pelican-k8s --kube-version 1.35.0 --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token > /dev/null
+          helm template t charts/pelican-k8s --kube-version 1.35.0 --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token --set openshift.enabled=true --set gateway.route.enabled=true --set gateway.route.host=wings.example.com > /dev/null
+      - name: Lint pelican-panel
+        run: |
+          helm lint charts/pelican-panel
+          for f in charts/pelican-panel/ci/*.yaml; do helm lint charts/pelican-panel -f "$f"; helm template t charts/pelican-panel -f "$f" > /dev/null; done
+
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    needs: [go]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [shim, agent, gateway, operator]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/pelican-k8s/${{ matrix.component }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/${{ matrix.component }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

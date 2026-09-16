@@ -1,0 +1,45 @@
+# Early warning for Pelican upstream drift: builds and tests against the
+# latest Wings main branch (not the pinned version) once a day.
+name: Upstream drift
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wings-main:
+    name: Against Wings main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Point the replace at upstream main plus the hook branch check
+        run: |
+          # The hooks (ARCHITECTURE.md 6.3) live on the fork branch; upstream
+          # main is used to detect route/remote/interface changes early.
+          go mod edit -replace github.com/pelican/wings=github.com/pelican/wings@main
+          go mod tidy || true
+      - name: Route table, remote client and ProcessEnvironment diffs
+        run: go test -count=1 -run 'TestGatewayCoversWingsRoutes|TestGatewayServesWingsRemoteCalls|TestProcessEnvironmentInterface' ./test/upstream/
+      - name: Build (fails when the hooks are missing upstream, which is expected until they merge)
+        continue-on-error: true
+        run: go build ./...
+
+  panel-image:
+    name: Against the latest Panel image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff the Panel's daemon repositories against the contract doc
+        run: |
+          docker pull ghcr.io/pelican/panel:latest
+          docker run --rm ghcr.io/pelican/panel:latest sh -c 'cat app/Repositories/Daemon/DaemonRepository.php app/Providers/AppServiceProvider.php routes/api-remote.php' > panel-contract.txt
+          grep -q 'Pelican Wings' panel-contract.txt
+          grep -q "servers/{uuid}/container/status" panel-contract.txt
+          grep -q "sftp/auth" panel-contract.txt

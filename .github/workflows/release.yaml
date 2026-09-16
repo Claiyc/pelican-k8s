@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  images:
+    name: Release images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [shim, agent, gateway, operator]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/pelican-k8s/${{ matrix.component }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/${{ matrix.component }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+
+  charts:
+    name: Release Helm charts
+    runs-on: ubuntu-latest
+    needs: [images]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Package and push charts to ghcr.io (OCI)
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          v="${VERSION#v}"
+          helm package charts/pelican-k8s --version "$v" --app-version "$v" -d dist
+          helm package charts/pelican-panel -d dist
+          for f in dist/*.tgz; do helm push "$f" "oci://ghcr.io/${{ github.repository_owner }}/pelican-k8s/charts"; done
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.tgz
