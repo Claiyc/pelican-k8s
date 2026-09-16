@@ -6,9 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Native Go fuzzing of the three parsers on a trust boundary: the shim's JSON-lines protocol, the output ring buffer and the gateway's JWT verification. The seed corpora run with the unit tests; a CI job fuzzes each target for 40s.
+- README badges for CodeQL and the OpenSSF Scorecard.
+
 ### Changed
 - Build with Go 1.27. `govulncheck` in CI fails only for reachable vulnerabilities that have a fix.
 - Dependency updates come from Dependabot; the Renovate configuration was removed.
+
+### Security
+- Every GitHub Action is pinned to a commit SHA and every container base image to a digest, closing the Scorecard *Pinned-Dependencies* finding. Dependabot keeps both current.
+- Workflow tokens are scoped to the jobs that need them: `security-events: write` (CodeQL), `contents: write` and `packages: write` (release) and `issues: write` (upstream drift) are no longer granted workflow-wide, closing the Scorecard *Token-Permissions* finding.
+
+### Fixed
+- The image vulnerability scan could not resolve `aquasecurity/trivy-action@0.36.0` (the tags carry a `v` prefix from 0.29 on), so no Trivy results reached code scanning.
 
 ## [0.1.0] - 2026-09-16
 

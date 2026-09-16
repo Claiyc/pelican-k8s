@@ -9,15 +9,14 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   wings-main:
     name: Against Wings main
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
       - name: Point the replace at upstream main plus the hook branch check
@@ -35,8 +34,11 @@ jobs:
   panel-image:
     name: Against the latest Panel image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Diff the Panel's daemon repositories against the contract doc
         run: |
           docker pull ghcr.io/pelican/panel:latest
@@ -54,7 +56,7 @@ jobs:
           [ "$latest" = "$current" ] || { echo "::warning::pelican-panel chart appVersion $current is behind Panel $latest"; echo "PANEL_BEHIND=$latest" >> "$GITHUB_ENV"; }
       - name: Open or update the tracking issue
         if: env.PANEL_BEHIND != ''
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const title = `Pelican Panel ${process.env.PANEL_BEHIND} released: bump charts/pelican-panel appVersion and re-verify the contract`;
@@ -68,8 +70,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [wings-main, panel-image]
     if: failure()
+    permissions:
+      contents: read
+      issues: write
     steps:
-      - uses: actions/github-script@v9
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const title = 'Upstream drift: Wings main or the Panel image no longer match the gateway/agent';

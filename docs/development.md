@@ -16,6 +16,7 @@ Go 1.26+ is required (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/ar
 | Suite | Command | Needs |
 |---|---|---|
 | Unit | `go test ./...` | nothing. Covers the shim (supervisor, protocol, cgroup parsing, prepare/probe/install-run), the shim environment against a live supervisor, the Job installer, object rendering and resource mapping, the reconciler (fake client, fake agent) and the gateway (fake Panel, fake agent, fake cluster) |
+| Fuzz | `go test -run '^$' -fuzz FuzzDecode ./internal/shim/protocol` (likewise `FuzzWrite` in `internal/shim/ringbuf`, `FuzzVerify` in `internal/gateway/jwtx`) | nothing. The seed corpora also run as ordinary tests under `go test ./...`; CI fuzzes each target for 40s. A crasher lands in the package's `testdata/fuzz/` — commit it as a regression case with the fix |
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
 | Spike (M0) | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart |
 | e2e | `go test -tags e2e ./test/e2e -v` | a deployed gateway and one server. Set `PELICAN_E2E_GATEWAY`, `PELICAN_E2E_TOKEN`, `PELICAN_E2E_PANEL_URL`, `PELICAN_E2E_SERVER` (and `PELICAN_E2E_SFTP`, `_SFTP_USER`, `_SFTP_PASSWORD`, `_INSECURE=true`) |
@@ -81,6 +82,8 @@ nothing is pushed upstream from this repository automatically.
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go) on pushes, PRs and weekly; golangci-lint in CI | Security → Code scanning, CI job *golangci-lint* |
+| Untrusted-input parsers | Native Go fuzzing of the shim protocol, the output ring buffer and the gateway's JWT verification | CI job *Fuzz* |
+| Build inputs | Every GitHub Action is pinned to a commit SHA and every base image to a digest (the trailing comment carries the human-readable version); Dependabot bumps both | `.github/workflows/`, `build/*.Dockerfile` |
 | Dependabot alerts and security updates | Enabled on the repository (GitHub advisory database) | Security → Dependabot |
 | Supply chain posture | OpenSSF Scorecard weekly with published results | Security → Code scanning, scorecard badge |
 | Vulnerability reports | Private vulnerability reporting is enabled (see SECURITY.md) | Security → Advisories |
