@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
 - Native Go fuzzing of the three parsers on a trust boundary: the shim's JSON-lines protocol, the output ring buffer and the gateway's JWT verification. The seed corpora run with the unit tests; a CI job fuzzes each target for 40s.
 - README badges for CodeQL and the OpenSSF Scorecard. The Go Reference badge was dropped: every `pkg.go.dev` page for the module 404s while the badge image is served unconditionally, and 29 of the 37 packages are `internal/`, so there is no reference worth linking.
 - `test/supplychain`: guards the pinning and least-privilege invariants above, so a future change cannot quietly reopen the Scorecard findings.
+- `test/docs`: the versions in the documented `helm install` commands and the Argo CD example must match the chart versions the tree releases, so a chart bump cannot leave a quick start that fails on its first command.
 - `test/supplychain` also asserts that `docker/docker/daemon` and `x/crypto/openpgp` stay out of the build graph; the six outstanding advisories have no fixed version, so not linking them is what keeps them harmless.
 
 ### Changed
