@@ -116,7 +116,7 @@ func (h *Handler) payload(ctx context.Context, uuid string) (map[string]any, err
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"uuid": uuid, "settings": json.RawMessage(settings), "process_configuration": proc}, nil
+	return map[string]any{"uuid": uuid, "settings": settings, "process_configuration": proc}, nil
 }
 
 func (h *Handler) listServers(w http.ResponseWriter, r *http.Request) {

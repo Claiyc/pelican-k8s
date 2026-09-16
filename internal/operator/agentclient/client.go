@@ -115,7 +115,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusConflict {

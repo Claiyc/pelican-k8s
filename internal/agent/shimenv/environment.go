@@ -673,13 +673,13 @@ func (e *Environment) onConnected(c *protocol.Client) {
 	st, err := c.Subscribe(ctx, false)
 	if err != nil {
 		e.log.Warn("subscribe to shim failed", "error", err)
-		c.Close()
+		_ = c.Close()
 		return
 	}
 	if st.Stopping {
 		// A shim that is shutting down (container restart in progress) is not a
 		// usable connection; wait for its successor.
-		c.Close()
+		_ = c.Close()
 		return
 	}
 	e.log.Info("connected to shim", "running", st.Running, "pid", st.PID)

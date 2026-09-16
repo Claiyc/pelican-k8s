@@ -93,14 +93,13 @@ func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, t *Target, rewrite func(*http.Request)) {
 	target, _ := url.Parse(t.HTTPBase())
 	p := &httputil.ReverseProxy{
-		Director: func(out *http.Request) {
-			out.URL.Scheme = target.Scheme
-			out.URL.Host = target.Host
-			out.Host = target.Host
-			out.Header.Set("Authorization", "Bearer "+t.Token)
-			out.Header.Del("X-Forwarded-For")
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
+			pr.Out.Header.Set("Authorization", "Bearer "+t.Token)
+			pr.Out.Header.Del("X-Forwarded-For")
 			if rewrite != nil {
-				rewrite(out)
+				rewrite(pr.Out)
 			}
 		},
 		Transport:     r.Transport,

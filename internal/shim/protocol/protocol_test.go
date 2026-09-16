@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	if out.Type != TypeOutput || string(out.Data) != "hello\nworld" {
 		t.Fatalf("unexpected %+v", out)
 	}
-	if err := dec.Decode(&out); err != ErrClosed {
+	if err := dec.Decode(&out); !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed, got %v", err)
 	}
 }

@@ -212,7 +212,7 @@ func WaitReady(ctx context.Context, path string, interval time.Duration) (*Clien
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("shim socket %s not ready: %w (last error: %v)", path, ctx.Err(), err)
+			return nil, fmt.Errorf("shim socket %s not ready: %w (last error: %w)", path, ctx.Err(), err)
 		case <-t.C:
 		}
 	}

@@ -515,9 +515,9 @@ func TestInstallRestartsOnFreshPod(t *testing.T) {
 func TestExitStateRelayedOnce(t *testing.T) {
 	h := newHarness(t, newGS(), newClass())
 	h.reconcile(2)
-	p := h.createPod(true)
+	h.createPod(true)
 	h.reconcile(2)
-	p = h.pod()
+	p := h.pod()
 	p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "game", RestartCount: 1, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled", ContainerID: "cri://abc", FinishedAt: metav1.Time{Time: h.now}}}}}
 	if err := h.c.Status().Update(context.Background(), p); err != nil {
 		t.Fatal(err)
@@ -650,9 +650,8 @@ func TestSuspendedAndMissingClass(t *testing.T) {
 	}
 
 	h2 := newHarness(t, newGS())
+	_, _ = h2.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: names.ForUUID(uuid)}}) // adds the finalizer
 	_, err := h2.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: names.ForUUID(uuid)}})
-	h2.reconcile(0)
-	_, err = h2.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: names.ForUUID(uuid)}})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected class error, got %v", err)
 	}

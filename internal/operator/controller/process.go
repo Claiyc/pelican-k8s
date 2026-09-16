@@ -189,7 +189,7 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 		if timeout <= 0 {
 			timeout = 10 * time.Minute
 		}
-		if st.RequestedAt != nil && s.now.Time.Sub(st.RequestedAt.Time) > timeout && st.Result == v1alpha1.InstallRunning {
+		if st.RequestedAt != nil && s.now.Sub(st.RequestedAt.Time) > timeout && st.Result == v1alpha1.InstallRunning {
 			st.Result = v1alpha1.InstallFailed
 			st.FinishedAt = &s.now
 			r.event(s, corev1.EventTypeWarning, "InstallTimeout", "agent did not prepare install generation %d within %s", gen, timeout)

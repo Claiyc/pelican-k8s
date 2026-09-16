@@ -110,7 +110,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Update(ctx, gs); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	err := r.reconcile(s)
@@ -122,7 +122,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	s.gs.Status.Phase = computePhase(s)
 	if uerr := r.updateStatus(s); uerr != nil {
 		if apierrors.IsConflict(uerr) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, uerr
 	}
@@ -580,7 +580,7 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 			node := &corev1.Node{}
 			if err := r.Get(s.ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node); err == nil && !nodeReady(node) {
 				r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionTrue, "NodeNotReady", "pod is terminating on a NotReady node")
-				if s.now.Time.Sub(pod.DeletionTimestamp.Time) > fd.Duration {
+				if s.now.Sub(pod.DeletionTimestamp.Time) > fd.Duration {
 					r.event(s, corev1.EventTypeWarning, "ForceDelete", "force-deleting pod stuck on NotReady node %s", pod.Spec.NodeName)
 					grace := int64(0)
 					if err := r.Delete(s.ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {

@@ -8,7 +8,31 @@ linters:
     - misspell
     - unconvert
     - errorlint
+  settings:
+    errcheck:
+      # Closing readers/sockets and best-effort writes to logs and ring buffers.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*net/http.Response).Body.Close
+        - (*github.com/gorilla/websocket.Conn).Close
+        - (golang.org/x/crypto/ssh.Channel).Close
+        - (*golang.org/x/crypto/ssh.Client).Close
+        - (*golang.org/x/crypto/ssh.ServerConn).Close
+        - (golang.org/x/crypto/ssh.NewChannel).Reject
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*github.com/Claiyc/pelican-k8s/internal/shim/ringbuf.Buffer).Write
+    staticcheck:
+      checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
   exclusions:
     generated: lax
     paths:
       - api/v1alpha1/zz_generated.deepcopy.go
+    rules:
+      - path: _test\.go
+        linters: [errcheck]
+      - linters: [staticcheck]
+        text: "SA1019: .*(scheme.Builder|GetEventRecorderFor)"

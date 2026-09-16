@@ -60,7 +60,7 @@ func newServer(t *testing.T, root string) *server.Server {
 	return s
 }
 
-func runInstall(t *testing.T, gw *fakeGateway, exitCode string, failAfter time.Duration) (error, []string, string) {
+func runInstall(t *testing.T, gw *fakeGateway, exitCode string, failAfter time.Duration) ([]string, string, error) {
 	t.Helper()
 	root := t.TempDir()
 	s := newServer(t, root)
@@ -107,12 +107,12 @@ func runInstall(t *testing.T, gw *fakeGateway, exitCode string, failAfter time.D
 	mu.Lock()
 	defer mu.Unlock()
 	logb, _ := os.ReadFile(filepath.Join(root, "logs", "install", s.ID()+".log"))
-	return err, append([]string(nil), lines...), string(logb)
+	return append([]string(nil), lines...), string(logb), err
 }
 
 func TestInstallSucceeds(t *testing.T) {
 	gw := &fakeGateway{}
-	err, lines, logfile := runInstall(t, gw, "0", 0)
+	lines, logfile, err := runInstall(t, gw, "0", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,20 +129,20 @@ func TestInstallSucceeds(t *testing.T) {
 }
 
 func TestInstallLenientExitCode(t *testing.T) {
-	if err, _, _ := runInstall(t, &fakeGateway{}, "1", 0); err != nil {
+	if _, _, err := runInstall(t, &fakeGateway{}, "1", 0); err != nil {
 		t.Fatalf("non-zero exit must not fail without strictExitCode: %v", err)
 	}
 }
 
 func TestInstallStrictExitCode(t *testing.T) {
-	err, _, _ := runInstall(t, &fakeGateway{strict: true}, "1", 0)
+	_, _, err := runInstall(t, &fakeGateway{strict: true}, "1", 0)
 	if err == nil || !strings.Contains(err.Error(), "exit code 1") {
 		t.Fatalf("expected strict failure, got %v", err)
 	}
 }
 
 func TestInstallFailedByOperator(t *testing.T) {
-	err, _, logfile := runInstall(t, &fakeGateway{}, "0", 150*time.Millisecond)
+	_, logfile, err := runInstall(t, &fakeGateway{}, "0", 150*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "job failed") {
 		t.Fatalf("expected operator failure, got %v", err)
 	}

@@ -85,15 +85,6 @@ func (e *env) waitState(t *testing.T, want string, d time.Duration) {
 	t.Fatalf("server did not reach %s (now %s)", want, e.state(t))
 }
 
-type wsClaims struct {
-	jwt.Payload
-	UserUUID    string   `json:"user_uuid"`
-	ServerUUID  string   `json:"server_uuid"`
-	Permissions []string `json:"permissions"`
-	Scope       string   `json:"scope"`
-	UniqueID    string   `json:"unique_id"`
-}
-
 func (e *env) jwt(t *testing.T, scope string, extra map[string]any) string {
 	t.Helper()
 	now := time.Now()

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,8 +47,8 @@ func (e *Error) Error() string { return fmt.Sprintf("panel: HTTP %d: %s", e.Stat
 
 // IsNotFound reports whether err is a 404 from the Panel.
 func IsNotFound(err error) bool {
-	e, ok := err.(*Error)
-	return ok && e.Status == http.StatusNotFound
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusNotFound
 }
 
 // Do performs a request and returns the status code and body. Bodies are

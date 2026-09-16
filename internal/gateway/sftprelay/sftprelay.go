@@ -161,7 +161,7 @@ func (r *Relay) handle(ctx context.Context, nconn net.Conn, conf *ssh.ServerConf
 	if err != nil {
 		return
 	}
-	defer sconn.Close()
+	defer func() { _ = sconn.Close() }()
 	go ssh.DiscardRequests(reqs)
 	uuid := sconn.Permissions.Extensions["uuid"]
 	cred := sconn.Permissions.Extensions["session"]
@@ -176,7 +176,7 @@ func (r *Relay) handle(ctx context.Context, nconn net.Conn, conf *ssh.ServerConf
 		r.Log.Warn("sftp: agent dial failed", "uuid", uuid, "error", err)
 		return
 	}
-	defer agentConn.Close()
+	defer func() { _ = agentConn.Close() }()
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
