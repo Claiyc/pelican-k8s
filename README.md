@@ -1,15 +1,9 @@
 # pelican-k8s
 
 [![CI](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml)
-[![Upstream drift](https://github.com/Claiyc/pelican-k8s/actions/workflows/upstream.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/actions/workflows/upstream.yaml)
-[![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Claiyc/pelican-k8s.svg)](https://pkg.go.dev/github.com/Claiyc/pelican-k8s)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Claiyc/pelican-k8s)](https://goreportcard.com/report/github.com/Claiyc/pelican-k8s)
-[![Go version](https://img.shields.io/github/go-mod/go-version/Claiyc/pelican-k8s)](go.mod)
-[![Kubernetes](https://img.shields.io/badge/kubernetes-%E2%89%A5%201.33-326ce5?logo=kubernetes&logoColor=white)](docs/install.md)
-[![Pelican Panel](https://img.shields.io/badge/pelican%20panel-unmodified-2d8f6f)](https://pelican.dev)
-[![Renovate](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovate)](renovate.json)
-[![Commits](https://img.shields.io/github/commit-activity/m/Claiyc/pelican-k8s)](https://github.com/Claiyc/pelican-k8s/commits/master)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Claiyc/pelican-k8s.svg)](https://pkg.go.dev/github.com/Claiyc/pelican-k8s)
+[![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
 It replaces the Docker-based Wings daemon with a gateway, an operator and a
