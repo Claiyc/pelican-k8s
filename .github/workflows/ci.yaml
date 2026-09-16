@@ -43,9 +43,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+          # Build the linter with the repository's Go toolchain (prebuilt
+          # binaries lag behind new Go releases).
+          install-mode: goinstall
           args: --timeout 10m
 
   helm:

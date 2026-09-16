@@ -310,6 +310,13 @@ func (e *Environment) Start(ctx context.Context) error {
 		return err
 	}
 	st, err := c.Status(ctx)
+	if isConnError(err) {
+		// The container restarted under us: wait for the new shim and retry once.
+		if c, err = e.waitClient(ctx); err != nil {
+			return err
+		}
+		st, err = c.Status(ctx)
+	}
 	if err != nil {
 		return fmt.Errorf("environment/shim: status: %w", err)
 	}
@@ -605,7 +612,18 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 		c, ch := e.client, e.connected
 		e.mu.Unlock()
 		if c != nil {
-			return c, nil
+			select {
+			case <-c.Done():
+				// Dead connection not yet noticed by the loop: wait for its successor.
+				select {
+				case <-time.After(50 * time.Millisecond):
+				case <-deadline.Done():
+					return nil, fmt.Errorf("environment/shim: shim socket %s is not reachable: %w", e.o.SocketPath, deadline.Err())
+				}
+				continue
+			default:
+				return c, nil
+			}
 		}
 		select {
 		case <-ch:
@@ -613,6 +631,15 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 			return nil, fmt.Errorf("environment/shim: shim socket %s is not reachable: %w", e.o.SocketPath, deadline.Err())
 		}
 	}
+}
+
+// isConnError reports whether err means the shim connection died mid-call.
+func isConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection closed") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "use of closed")
 }
 
 func (e *Environment) connectLoop() {
