@@ -60,6 +60,7 @@ func main() {
 	}
 	r := &controller.GameServerReconciler{
 		Client:          mgr.GetClient(),
+		Reader:          mgr.GetAPIReader(),
 		Recorder:        mgr.GetEventRecorderFor("pelican-operator"),
 		SystemNamespace: *systemNamespace,
 		Resolver:        imageresolve.NewResolver(authn.DefaultKeychain),

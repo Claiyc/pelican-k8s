@@ -54,6 +54,10 @@ type Resolver interface {
 // GameServerReconciler reconciles GameServer objects.
 type GameServerReconciler struct {
 	client.Client
+	// Reader bypasses the informer cache for the GameServer itself so that a
+	// reconcile never acts on a status older than the one it just wrote (a
+	// stale cache would re-issue power and install requests to the agent).
+	Reader          client.Reader
 	Recorder        record.EventRecorder
 	SystemNamespace string
 	Resolver        Resolver
@@ -89,7 +93,11 @@ type scope struct {
 func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	gs := &v1alpha1.GameServer{}
-	if err := r.Get(ctx, req.NamespacedName, gs); err != nil {
+	reader := r.Reader
+	if reader == nil {
+		reader = r.Client
+	}
+	if err := reader.Get(ctx, req.NamespacedName, gs); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	s := &scope{ctx: ctx, gs: gs, orig: gs.DeepCopy(), now: metav1.NewTime(r.now()), requeue: requeueSlow}
