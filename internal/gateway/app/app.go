@@ -61,13 +61,11 @@ func Scheme() *runtime.Scheme {
 // New builds a gateway from the configuration and a rest config.
 func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.Logger) (*Gateway, error) {
 	scheme := Scheme()
+	// Namespaced kinds are cached for the servers namespace only; cluster
+	// scoped kinds (classes, nodes) are unaffected by DefaultNamespaces.
 	c, err := cache.New(rc, cache.Options{
 		Scheme:            scheme,
 		DefaultNamespaces: map[string]cache.Config{cfg.ServersNamespace: {}},
-		ByObject: map[client.Object]cache.ByObject{
-			&v1alpha1.GameServerClass{}: {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}},
-			&corev1.Node{}:              {Namespaces: map[string]cache.Config{cache.AllNamespaces: {}}},
-		},
 	})
 	if err != nil {
 		return nil, err
