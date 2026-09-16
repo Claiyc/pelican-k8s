@@ -1,7 +1,6 @@
 # pelican-k8s
 
 [![CI](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Claiyc/pelican-k8s)](https://goreportcard.com/report/github.com/Claiyc/pelican-k8s)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Claiyc/pelican-k8s.svg)](https://pkg.go.dev/github.com/Claiyc/pelican-k8s)
 [![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
 [![License](https://img.shields.io/github/license/Claiyc/pelican-k8s)](LICENSE)
