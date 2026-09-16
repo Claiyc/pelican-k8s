@@ -80,6 +80,10 @@ spec:
               value: {{ .Values.gateway.sftp.keyOnly | quote }}
             - name: TZ
               value: {{ .Values.agent.timezone | quote }}
+            {{- if .Values.gateway.extraCA.configMap }}
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/pelican/ca
+            {{- end }}
           ports:
             - {name: panel, containerPort: 8080}
             - {name: remote, containerPort: 8081}
@@ -96,6 +100,19 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+          {{- if .Values.gateway.extraCA.configMap }}
+          volumeMounts:
+            - name: extra-ca
+              mountPath: /etc/pelican/ca
+              readOnly: true
+      volumes:
+        - name: extra-ca
+          configMap:
+            name: {{ .Values.gateway.extraCA.configMap }}
+            items:
+              - key: {{ .Values.gateway.extraCA.key }}
+                path: ca.crt
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -37,6 +37,11 @@ gateway:
   remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
   uploadLimitMiB: 100
+  # Extra CA certificate for the Panel's TLS (private CAs, OpenShift router CA):
+  # a ConfigMap in the release namespace whose key holds a PEM bundle.
+  extraCA:
+    configMap: ""
+    key: ca.crt
   sftp:
     keyOnly: false
     hostKeySecret: pelican-gateway-sftp-hostkey
