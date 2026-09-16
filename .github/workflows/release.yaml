@@ -50,26 +50,30 @@ jobs:
       - name: Package and push charts to ghcr.io (OCI)
         env:
           VERSION: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           v="${VERSION#v}"
+          owner="${OWNER,,}"   # OCI repository names must be lowercase
           helm package charts/pelican-k8s --version "$v" --app-version "$v" -d dist
           helm package charts/pelican-panel -d dist
-          for f in dist/*.tgz; do helm push "$f" "oci://ghcr.io/${{ github.repository_owner }}/pelican-k8s/charts"; done
+          for f in dist/*.tgz; do helm push "$f" "oci://ghcr.io/$owner/pelican-k8s/charts"; done
       - name: Release notes from CHANGELOG
         env:
           VERSION: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           v="${VERSION#v}"
+          owner="${OWNER,,}"
           awk -v v="$v" '$0 ~ "^## \\["v"\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
           {
             echo
             echo "## Artifacts"
             echo
-            echo "Images (linux/amd64, linux/arm64): \`ghcr.io/${{ github.repository_owner }}/pelican-k8s/{shim,agent,gateway,operator}:$v\`"
+            echo "Images (linux/amd64, linux/arm64): \`ghcr.io/$owner/pelican-k8s/{shim,agent,gateway,operator}:$v\`"
             echo
-            echo "Charts: \`helm install pelican-k8s oci://ghcr.io/${{ github.repository_owner }}/pelican-k8s/charts/pelican-k8s --version $v\`"
+            echo "Charts: \`helm install pelican-k8s oci://ghcr.io/$owner/pelican-k8s/charts/pelican-k8s --version $v\`"
           } >> notes.md
       - name: GitHub release (draft)
         uses: softprops/action-gh-release@v2
