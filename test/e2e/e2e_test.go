@@ -25,6 +25,8 @@ import (
 
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/gorilla/websocket"
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 type env struct {
@@ -241,4 +243,61 @@ func TestPowerAndWebsocket(t *testing.T) {
 		}
 	}
 	e.waitState(t, "offline", 3*time.Minute)
+}
+
+// TestSFTP logs in through the gateway relay with Panel credentials and lists
+// the server directory. Needs PELICAN_E2E_SFTP (host:port), PELICAN_E2E_SFTP_USER
+// (panel username, without the .uuid suffix) and PELICAN_E2E_SFTP_PASSWORD.
+func TestSFTP(t *testing.T) {
+	e := load(t)
+	addr, user, pass := os.Getenv("PELICAN_E2E_SFTP"), os.Getenv("PELICAN_E2E_SFTP_USER"), os.Getenv("PELICAN_E2E_SFTP_PASSWORD")
+	if addr == "" || user == "" || pass == "" {
+		t.Skip("PELICAN_E2E_SFTP* not set")
+	}
+	cfg := &ssh.ClientConfig{User: user + "." + e.server[:8], Auth: []ssh.AuthMethod{ssh.Password(pass)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 15 * time.Second}
+	conn, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		t.Fatalf("ssh dial: %v", err)
+	}
+	defer conn.Close()
+	c, err := sftp.NewClient(conn)
+	if err != nil {
+		t.Fatalf("sftp subsystem: %v", err)
+	}
+	defer c.Close()
+	if err := c.MkdirAll("/e2e-sftp"); err != nil {
+		t.Fatal(err)
+	}
+	f, err := c.Create("/e2e-sftp/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("via sftp relay")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	entries, err := c.ReadDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, en := range entries {
+		names = append(names, en.Name())
+	}
+	if !strings.Contains(strings.Join(names, ","), "e2e-sftp") {
+		t.Fatalf("directory listing %v", names)
+	}
+	// The file is visible through the HTTP file API as well.
+	if _, body := e.call(t, "GET", "/api/servers/"+e.server+"/files/contents?file=%2Fe2e-sftp%2Fhello.txt", ""); body != "via sftp relay" {
+		t.Fatalf("contents %q", body)
+	}
+	if err := c.RemoveAll("/e2e-sftp"); err != nil {
+		t.Fatal(err)
+	}
+	// Wrong password is rejected.
+	bad := &ssh.ClientConfig{User: user + "." + e.server[:8], Auth: []ssh.AuthMethod{ssh.Password("wrong-" + pass)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 15 * time.Second}
+	if c2, err := ssh.Dial("tcp", addr, bad); err == nil {
+		c2.Close()
+		t.Fatal("wrong password accepted")
+	}
 }
