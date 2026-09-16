@@ -5,9 +5,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REGISTRY=${REGISTRY:?set REGISTRY (e.g. harbor.example.com/pelican)}
-TAG=${TAG:-dev-$(git rev-parse --short HEAD)$( [ -n "$(git status --porcelain)" ] && echo -dirty )}
+DIRTY=$([ -n "$(git status --porcelain)" ] && echo -dirty || true)
+TAG=${TAG:-dev-$(git rev-parse --short HEAD)$DIRTY}
 COMPONENTS=("$@")
-[ ${#COMPONENTS[@]} -eq 0 ] && COMPONENTS=(shim agent gateway operator)
+# A Helm roll sets one tag for every component, so build all of them then.
+if [ ${#COMPONENTS[@]} -eq 0 ] || [ -n "${VALUES:-}" ]; then COMPONENTS=(shim agent gateway operator); fi
 CRANE=${CRANE:-crane}
 INSECURE=${INSECURE:-true}
 CRANE_FLAGS=()
