@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Build all images, push them to a registry with crane (works without Docker
-# registry TLS trust) and roll the Helm release. Usage:
+# Developer loop for unpushed changes: build all images, push them to a private
+# registry with crane (works without Docker registry TLS trust) and roll the
+# Helm release. Released and per-commit images come from CI on ghcr.io; use
+# those on real clusters. Usage:
 #   REGISTRY=harbor.example.com/pelican VALUES=values.yaml hack/dev-push.sh [component...]
 set -euo pipefail
 cd "$(dirname "$0")/.."

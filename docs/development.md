@@ -22,7 +22,10 @@ Go 1.26+ is required (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/ar
 
 ## Dev loop on a cluster
 
-`hack/dev-push.sh` builds every image, pushes them with
+The canonical images are the ones CI publishes to
+`ghcr.io/claiyc/pelican-k8s/*` for every commit (`sha-<commit>`, `master`)
+and every release (`X.Y.Z`); clusters should run those. For iterating on
+unpushed changes against a private registry, `hack/dev-push.sh` builds every image, pushes them with
 [crane](https://github.com/google/go-containerregistry/tree/main/cmd/crane)
 (works with registries whose TLS the Docker daemon does not trust) and rolls
 the Helm release:
