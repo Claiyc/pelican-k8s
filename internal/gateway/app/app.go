@@ -179,7 +179,8 @@ func (g *Gateway) resetServersState(ctx context.Context) {
 		if err == nil {
 			busy := false
 			for _, gs := range list {
-				if gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Pending) > 0 {
+				installPending := gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration
+				if installPending || gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Pending) > 0 {
 					busy = true
 					break
 				}

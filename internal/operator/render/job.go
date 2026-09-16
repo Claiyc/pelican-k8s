@@ -80,7 +80,10 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 		install.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: names.EnvSecret(uuid)}}}}
 	}
 	runAsRoot := cls.Install.RunAsRoot == nil || *cls.Install.RunAsRoot
-	podSC := &corev1.PodSecurityContext{SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+	podSC := &corev1.PodSecurityContext{}
+	if !cls.Install.DisableSeccomp {
+		podSC.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	}
 	if runAsRoot {
 		podSC.RunAsUser = int64Ptr(0)
 		podSC.RunAsGroup = int64Ptr(0)

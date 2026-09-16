@@ -180,6 +180,9 @@ type InstallJobSpec struct {
 	// RunAsRoot runs the install container as UID 0 (egg scripts expect it).
 	// +kubebuilder:default=true
 	RunAsRoot *bool `json:"runAsRoot,omitempty"`
+	// DisableSeccomp leaves the seccomp profile unset on install pods. OpenShift's
+	// anyuid SCC (needed for root installs) rejects pods that set one.
+	DisableSeccomp bool `json:"disableSeccomp,omitempty"`
 }
 
 // FailoverSpec configures node-loss handling.

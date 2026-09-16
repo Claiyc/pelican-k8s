@@ -158,6 +158,11 @@ spec:
                     default: 3600
                     format: int64
                     type: integer
+                  disableSeccomp:
+                    description: |-
+                      DisableSeccomp leaves the seccomp profile unset on install pods. OpenShift's
+                      anyuid SCC (needed for root installs) rejects pods that set one.
+                    type: boolean
                   prepareTimeoutSeconds:
                     default: 600
                     description: PrepareTimeoutSeconds bounds how long the operator

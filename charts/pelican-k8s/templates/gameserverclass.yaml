@@ -5,6 +5,7 @@
 {{- $_ = set $spec "serviceAccountName" "pelican-game" }}
 {{- if .Values.openshift.enabled }}
 {{- $_ = set $spec.security "useNamespaceUIDRange" true }}
+{{- $_ = set $spec.install "disableSeccomp" true }}
 {{- end }}
 {{- if not $spec.failover.forceDeleteAfter }}
 {{- $_ = unset $spec.failover "forceDeleteAfter" }}

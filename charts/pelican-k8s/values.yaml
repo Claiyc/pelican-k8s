@@ -146,6 +146,7 @@ defaultClass:
       activeDeadlineSeconds: 3600
       prepareTimeoutSeconds: 600
       runAsRoot: true
+      disableSeccomp: false   # set automatically with openshift.enabled
     failover:
       forceDeleteAfter: ""
     imageResolution:
