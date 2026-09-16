@@ -1,6 +1,6 @@
 module github.com/Claiyc/pelican-k8s
 
-go 1.26.0
+go 1.27.0
 
 replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20260916092028-d12a904885b0
 
@@ -10,10 +10,10 @@ require (
 	github.com/apex/log v1.9.0
 	github.com/creack/pty v1.1.24
 	github.com/gbrlsnchs/jwt/v3 v3.0.1
-	github.com/gin-gonic/gin v1.12.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/pelican/wings v1.0.0-beta9
+	github.com/pkg/sftp v1.13.10
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
@@ -68,6 +68,7 @@ require (
 	github.com/gammazero/deque v1.2.1 // indirect
 	github.com/gammazero/workerpool v1.2.1 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
+	github.com/gin-gonic/gin v1.12.0 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/glebarez/sqlite v1.11.0 // indirect
 	github.com/go-co-op/gocron/v2 v2.21.2 // indirect
@@ -137,7 +138,6 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_golang v1.24.0 // indirect

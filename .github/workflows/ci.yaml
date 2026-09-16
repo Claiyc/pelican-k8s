@@ -31,7 +31,18 @@ jobs:
       - name: Upstream compatibility (pinned Wings)
         run: go test -count=1 ./test/upstream/
       - name: Known vulnerabilities in dependencies (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        # Fails on any reachable vulnerability that has a fixed version. Findings
+        # without a fix (e.g. in docker/docker, linked through Wings but never
+        # executed by the agent) are reported in the step summary only.
+        run: |
+          set +e
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./... > govulncheck.txt 2>&1
+          set -e
+          { echo '## govulncheck'; echo '```'; cat govulncheck.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if grep -E '^\s*Fixed in: ' govulncheck.txt | grep -v 'N/A'; then
+            echo "::error::vulnerabilities with an available fix; update the dependency"; cat govulncheck.txt; exit 1
+          fi
+          cat govulncheck.txt | tail -5
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

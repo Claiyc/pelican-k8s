@@ -1,6 +1,4 @@
-# Dependency updates. Dependabot works without installing anything. If you
-# install the Renovate GitHub App instead (renovate.json), delete this file so
-# the two bots do not open duplicate pull requests.
+# Dependency updates (Go modules, GitHub Actions, base images).
 version: 2
 updates:
   - package-ecosystem: gomod
