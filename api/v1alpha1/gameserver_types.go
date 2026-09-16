@@ -1,8 +1,8 @@
 package v1alpha1
 
 import (
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -121,7 +121,7 @@ type InstallSpec struct {
 type GameServerSpec struct {
 	Panel PanelSpec `json:"panel"`
 	// +kubebuilder:default={desired: Stopped}
-	Power PowerSpec `json:"power,omitempty"`
+	Power   PowerSpec   `json:"power,omitempty"`
 	Install InstallSpec `json:"install,omitempty"`
 	// ClassName references the GameServerClass supplying cluster-side policy.
 	// +kubebuilder:default=default
@@ -174,9 +174,9 @@ type AgentStatus struct {
 
 // UsageStatus is a throttled resource usage summary.
 type UsageStatus struct {
-	MemoryBytes int64  `json:"memoryBytes,omitempty"`
-	CPUPercent  string `json:"cpuPercent,omitempty"`
-	DiskBytes   int64  `json:"diskBytes,omitempty"`
+	MemoryBytes int64        `json:"memoryBytes,omitempty"`
+	CPUPercent  string       `json:"cpuPercent,omitempty"`
+	DiskBytes   int64        `json:"diskBytes,omitempty"`
 	UpdatedAt   *metav1.Time `json:"updatedAt,omitempty"`
 }
 

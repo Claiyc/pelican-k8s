@@ -38,8 +38,8 @@ const (
 // ScratchSpec configures the scratch volume holding backup archives and agent temp files.
 type ScratchSpec struct {
 	// +kubebuilder:default=Ephemeral
-	Type ScratchVolumeType `json:"type,omitempty"`
-	StorageClassName string `json:"storageClassName,omitempty"`
+	Type             ScratchVolumeType `json:"type,omitempty"`
+	StorageClassName string            `json:"storageClassName,omitempty"`
 	// SizeGiB is the scratch volume size; 0 means the size of the server PVC.
 	// +kubebuilder:validation:Minimum=0
 	SizeGiB int32 `json:"sizeGiB,omitempty"`
@@ -56,8 +56,8 @@ type StorageSpec struct {
 	// OverheadPercent grows the PVC beyond disk_space for logs, the activity database and install output.
 	// +kubebuilder:default=10
 	// +kubebuilder:validation:Minimum=0
-	OverheadPercent int32 `json:"overheadPercent,omitempty"`
-	Scratch ScratchSpec `json:"scratch,omitempty"`
+	OverheadPercent int32       `json:"overheadPercent,omitempty"`
+	Scratch         ScratchSpec `json:"scratch,omitempty"`
 	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 	// VolumeSnapshotClassName is required for SnapshotThenDelete and snapshotSchedule.
@@ -86,7 +86,7 @@ type ExposureSpec struct {
 	Mode ExposureMode `json:"mode,omitempty"`
 	// +kubebuilder:default=Local
 	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
-	LoadBalancer LoadBalancerSpec `json:"loadBalancer,omitempty"`
+	LoadBalancer          LoadBalancerSpec                    `json:"loadBalancer,omitempty"`
 	// ExternalIPs are the addresses advertised to the Panel through /api/system/ips.
 	// Empty means node addresses (NodePort, HostPort) or the observed LoadBalancer ingress IPs.
 	ExternalIPs []string `json:"externalIPs,omitempty"`
@@ -102,8 +102,8 @@ type EgressRule struct {
 type InClusterEgressSpec struct {
 	// GameServers allows traffic to other GameServer pods on their allocation ports.
 	// +kubebuilder:default=true
-	GameServers *bool `json:"gameServers,omitempty"`
-	Additional []EgressRule `json:"additional,omitempty"`
+	GameServers *bool        `json:"gameServers,omitempty"`
+	Additional  []EgressRule `json:"additional,omitempty"`
 }
 
 // NetworkSpec configures NetworkPolicies.
@@ -147,8 +147,8 @@ type ResourcesSpec struct {
 	// +kubebuilder:default="100m"
 	MinCPU resource.Quantity `json:"minCpu,omitempty"`
 	// +kubebuilder:default=100
-	TmpSizeMiB int32 `json:"tmpSizeMiB,omitempty"`
-	Agent ContainerResources `json:"agent,omitempty"`
+	TmpSizeMiB int32              `json:"tmpSizeMiB,omitempty"`
+	Agent      ContainerResources `json:"agent,omitempty"`
 }
 
 // SecuritySpec pins the UID game pods run as.
@@ -168,8 +168,8 @@ type SecuritySpec struct {
 // InstallJobSpec configures install Jobs.
 type InstallJobSpec struct {
 	// +kubebuilder:default=pelican-installer
-	ServiceAccountName string `json:"serviceAccountName,omitempty"`
-	Resources ContainerResources `json:"resources,omitempty"`
+	ServiceAccountName string             `json:"serviceAccountName,omitempty"`
+	Resources          ContainerResources `json:"resources,omitempty"`
 	// StrictExitCode makes a non-zero script exit code fail the install (Wings ignores it).
 	StrictExitCode bool `json:"strictExitCode,omitempty"`
 	// +kubebuilder:default=3600
@@ -191,8 +191,8 @@ type FailoverSpec struct {
 // ImageResolutionSpec configures how the operator finds the image ENTRYPOINT/CMD.
 type ImageResolutionSpec struct {
 	// RegistryLookup resolves the image config from the registry.
-	RegistryLookup bool `json:"registryLookup,omitempty"`
-	PullSecrets []string `json:"pullSecrets,omitempty"`
+	RegistryLookup bool     `json:"registryLookup,omitempty"`
+	PullSecrets    []string `json:"pullSecrets,omitempty"`
 	// EntrypointOverrides maps an image reference glob to the argv to run.
 	EntrypointOverrides map[string][]string `json:"entrypointOverrides,omitempty"`
 	// PinDigest resolves tags to digests on every pod creation (Wings' pull-on-start).
@@ -231,9 +231,9 @@ type GameServerClassSpec struct {
 	// +kubebuilder:default=660
 	TerminationGracePeriodSeconds int64 `json:"terminationGracePeriodSeconds,omitempty"`
 	// NodeSelector, Tolerations and PriorityClassName are applied to game pods.
-	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
-	PriorityClassName string `json:"priorityClassName,omitempty"`
+	NodeSelector      map[string]string   `json:"nodeSelector,omitempty"`
+	Tolerations       []corev1.Toleration `json:"tolerations,omitempty"`
+	PriorityClassName string              `json:"priorityClassName,omitempty"`
 }
 
 // GameServerClass is admin-owned, cluster-scoped policy referenced by GameServer.spec.className.

@@ -314,8 +314,8 @@ func wsCheck(t *testing.T, port int, origin string) {
 	t.Helper()
 	now := time.Now()
 	claims := wsClaims{
-		Payload:     jwt.Payload{IssuedAt: jwt.NumericDate(now), ExpirationTime: jwt.NumericDate(now.Add(10 * time.Minute)), JWTID: "abc"},
-		UserUUID:    "u-1", ServerUUID: uuid, Permissions: []string{"websocket.connect", "control.console", "control.start", "control.stop", "admin.websocket.errors"}, Scope: "websocket", UniqueID: "x1",
+		Payload:  jwt.Payload{IssuedAt: jwt.NumericDate(now), ExpirationTime: jwt.NumericDate(now.Add(10 * time.Minute)), JWTID: "abc"},
+		UserUUID: "u-1", ServerUUID: uuid, Permissions: []string{"websocket.connect", "control.console", "control.start", "control.stop", "admin.websocket.errors"}, Scope: "websocket", UniqueID: "x1",
 	}
 	tok, err := jwt.Sign(claims, jwt.NewHS256([]byte(token)))
 	if err != nil {

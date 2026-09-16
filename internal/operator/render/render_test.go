@@ -230,7 +230,9 @@ func TestServices(t *testing.T) {
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer || svc.Annotations["metallb.io/loadBalancerIPs"] != "203.0.113.10" || svc.Annotations["metallb.io/allow-shared-ip"] == "" || svc.Spec.Ports[0].NodePort != 0 {
 		t.Fatalf("lb service %+v %+v", svc.Annotations, svc.Spec)
 	}
-	none := testInput(t, func(i *Input) { i.Settings.Allocations = settings.Allocations{Default: settings.Allocation{IP: "127.0.0.1"}} })
+	none := testInput(t, func(i *Input) {
+		i.Settings.Allocations = settings.Allocations{Default: settings.Allocation{IP: "127.0.0.1"}}
+	})
 	if ExposureService(none) != nil {
 		t.Fatal("servers without allocation get no exposure service")
 	}

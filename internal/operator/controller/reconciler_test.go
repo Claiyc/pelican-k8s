@@ -319,21 +319,29 @@ func TestPowerGenerations(t *testing.T) {
 		t.Fatalf("stopped server must not be started: %v", h.agent.Calls())
 	}
 	// start
-	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1} })
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	})
 	h.reconcile(1)
 	// restart while running
 	h.agent.state = "running"
 	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power.Generation = 2 })
 	h.reconcile(1)
 	// stop
-	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 3} })
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 3}
+	})
 	h.reconcile(1)
 	// kill
-	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 4, Kill: true} })
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 4, Kill: true}
+	})
 	h.reconcile(1)
 	// stop when already offline: no call
 	h.agent.state = "offline"
-	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 5} })
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 5}
+	})
 	h.reconcile(1)
 	want := "power:start,power:restart,power:stop,power:kill"
 	if got := strings.Join(h.agent.Calls(), ","); got != want {
@@ -510,7 +518,9 @@ func TestImageChangeRecreatesWhenOffline(t *testing.T) {
 		t.Fatal("pod must not be deleted while running")
 	}
 	// A start request while recreate is pending stops the process first.
-	h.updateGS(func(gs *v1alpha1.GameServer) { gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1} })
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	})
 	h.reconcile(1)
 	if got := strings.Join(h.agent.Calls(), ","); got != "power:stop" {
 		t.Fatalf("calls %s", got)

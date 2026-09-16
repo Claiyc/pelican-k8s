@@ -64,9 +64,9 @@ func (in *Input) UUID() string { return in.Settings.UUID }
 // Labels returns the common labels of owned objects.
 func (in *Input) Labels(component string) map[string]string {
 	l := map[string]string{
-		v1alpha1.LabelServerUUID: in.UUID(),
-		LabelPartOf:              PartOfValue,
-		LabelName:                "gameserver",
+		v1alpha1.LabelServerUUID:       in.UUID(),
+		LabelPartOf:                    PartOfValue,
+		LabelName:                      "gameserver",
 		"app.kubernetes.io/managed-by": "pelican-operator",
 	}
 	if component != "" {
