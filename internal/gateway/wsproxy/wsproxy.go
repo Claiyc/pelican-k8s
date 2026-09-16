@@ -71,9 +71,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{EnableCompression: true, CheckOrigin: p.checkOrigin}
 	client, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		p.Log.Warn("websocket upgrade rejected", "uuid", uuid, "origin", r.Header.Get("Origin"), "remote", r.RemoteAddr, "error", err)
 		return
 	}
 	defer client.Close()
+	p.Log.Info("websocket session opened", "uuid", uuid, "origin", r.Header.Get("Origin"), "remote", r.RemoteAddr)
+	defer p.Log.Info("websocket session closed", "uuid", uuid, "remote", r.RemoteAddr)
 	client.SetReadLimit(4096)
 
 	if st, err := settings.Parse(gs.Spec.Panel.Settings); err == nil && st.Suspended {
