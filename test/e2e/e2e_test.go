@@ -242,4 +242,3 @@ func TestPowerAndWebsocket(t *testing.T) {
 	}
 	e.waitState(t, "offline", 3*time.Minute)
 }
-

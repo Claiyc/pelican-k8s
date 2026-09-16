@@ -53,8 +53,8 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 			RunAsGroup:               int64Ptr(in.UID),
 			RunAsNonRoot:             boolPtr(true),
 		},
-		VolumeMounts:    []corev1.VolumeMount{{Name: "pelican", MountPath: "/pelican"}, {Name: "data", MountPath: "/data"}},
-		Resources:       smallResources(),
+		VolumeMounts: []corev1.VolumeMount{{Name: "pelican", MountPath: "/pelican"}, {Name: "data", MountPath: "/data"}},
+		Resources:    smallResources(),
 	}
 
 	chown := fmtUID(in.UID) + ":" + fmtUID(in.UID)
