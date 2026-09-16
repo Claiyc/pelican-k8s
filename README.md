@@ -51,7 +51,8 @@ default; single-node clusters can use `NodePort`.
 **1. Deploy the Panel** (skip if you already run one; any Pelican Panel works):
 
 ```bash
-helm install pelican-panel charts/pelican-panel -n pelican --create-namespace \
+helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.0 \
+  -n pelican --create-namespace \
   --set panel.url=https://panel.example.com \
   --set ingress.enabled=true --set ingress.host=panel.example.com
 kubectl -n pelican exec deploy/pelican-panel -- php artisan p:user:make --admin=1 \
@@ -65,11 +66,12 @@ See [docs/panel.md](docs/panel.md) for databases, TLS and OpenShift notes.
 daemon connect port `443`, SFTP port `30022` (or your LoadBalancer port). Open
 the node's *Configuration* tab and copy `token_id` and `token`.
 
-**3. Install pelican-k8s** (until the first tagged release, add
-`--set image.tag=master` to use the images CI publishes from the default branch):
+**3. Install pelican-k8s** from the OCI chart (or from `charts/pelican-k8s`
+in a checkout):
 
 ```bash
-helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace \
+helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.0 \
+  -n pelican-system --create-namespace \
   --set gateway.panelURL=https://panel.example.com \
   --set gateway.nodeTokenID=<token_id> --set gateway.nodeToken=<token> \
   --set gateway.ingress.enabled=true --set gateway.ingress.host=wings.example.com \

@@ -14,7 +14,9 @@ servers as Kubernetes resources.
 | A Pelican Panel | Any deployment; the `pelican-panel` chart in this repo is one option ([panel.md](panel.md)) |
 | Optional: CSI snapshots | `VolumeSnapshotClass` for `SnapshotThenDelete` and scheduled snapshots |
 
-Images are published to `ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`.
+Images are published to `ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`
+and the charts to `oci://ghcr.io/claiyc/pelican-k8s/charts/{pelican-k8s,pelican-panel}`,
+both tagged with the release version.
 
 ## 2. Create the node in the Panel
 
@@ -44,7 +46,8 @@ to the gateway (see `gateway.extraCA` and the OpenShift section).
 ## 3. Install the chart
 
 ```bash
-helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace \
+helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.0 \
+  -n pelican-system --create-namespace \
   --set gateway.panelURL=https://panel.example.com \
   --set gateway.nodeTokenID=<token_id> \
   --set gateway.nodeToken=<token> \
