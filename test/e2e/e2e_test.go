@@ -161,8 +161,14 @@ func TestFilesAndConsole(t *testing.T) {
 func TestPowerAndWebsocket(t *testing.T) {
 	e := load(t)
 	if st := e.state(t); st != "offline" {
+		// A stop command typed while the game is still booting is ignored by
+		// most eggs (Paper answers with a command exception), exactly as under
+		// Wings, so wait for a settled state before stopping.
+		if st == "starting" {
+			e.waitState(t, "running", 5*time.Minute)
+		}
 		e.call(t, "POST", "/api/servers/"+e.server+"/power", `{"action":"stop"}`)
-		e.waitState(t, "offline", 3*time.Minute)
+		e.waitState(t, "offline", 5*time.Minute)
 	}
 	if code, _ := e.call(t, "POST", "/api/servers/"+e.server+"/power", `{"action":"start"}`); code != 202 {
 		t.Fatal("start")

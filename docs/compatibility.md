@@ -56,6 +56,10 @@ The implementation follows the design; these details differ or were added:
 - The `Upstream drift` workflow runs the same checks nightly against Wings
   `main` and greps the latest Panel image for the contract points the gateway
   depends on.
+- The `Contract` workflow is the real gate: a kind cluster with the actual
+  Panel and this repository's components runs the server lifecycle through
+  the Panel's own services on every PR, and nightly against the newest Panel
+  image, so a Panel change that breaks the contract fails within a day.
 - Dependabot keeps Go modules, actions and base images current; the nightly
   workflow opens an issue when a new Panel release appears. Wings itself is
   bumped by hand (fork branch rebase + upstream tests).

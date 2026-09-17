@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Contract suite against a real Pelican Panel (`hack/e2e-kind.sh`, workflow `Contract`): a kind cluster runs the Panel from `charts/pelican-panel` and pelican-k8s built from the commit, then drives node registration, server creation and install, power, console websocket, files, SFTP, backup, suspension and deletion through the Panel's own services. It runs on every pull request against the pinned Panel version and nightly against `ghcr.io/pelican/panel:latest`; a nightly failure opens an `upstream` issue.
 - Native Go fuzzing of the three parsers on a trust boundary: the shim's JSON-lines protocol, the output ring buffer and the gateway's JWT verification. The seed corpora run with the unit tests; a CI job fuzzes each target for 40s.
 - README badges for CodeQL and the OpenSSF Scorecard. The Go Reference badge was dropped: every `pkg.go.dev` page for the module 404s while the badge image is served unconditionally, and 29 of the 37 packages are `internal/`, so there is no reference worth linking.
 - `test/supplychain`: guards the pinning and least-privilege invariants above, so a future change cannot quietly reopen the Scorecard findings.

@@ -1,0 +1,58 @@
+# Panel <-> pelican-k8s contract on a real Pelican Panel: a kind cluster runs
+# the Panel (our chart, SQLite) and pelican-k8s built from this commit; the
+# server lifecycle is driven through the Panel's own services and the e2e
+# suite. The nightly run uses the latest Panel image to catch upstream drift.
+name: Contract
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    - cron: "52 4 * * *"
+  workflow_dispatch:
+    inputs:
+      panel_image:
+        description: Panel image to test against (empty = chart default)
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    name: Panel ${{ (github.event_name == 'schedule' && 'latest') || (inputs.panel_image || 'pinned') }} on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write # the nightly run opens the drift issue
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: true
+      - name: Run the suite
+        env:
+          PANEL_IMAGE: ${{ (github.event_name == 'schedule' && 'ghcr.io/pelican/panel:latest') || inputs.panel_image }}
+        run: hack/e2e-kind.sh
+      - name: Open or update the drift issue
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const title = 'Contract suite fails against the latest Pelican Panel image';
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const {data: issues} = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'upstream'});
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body: `Still failing: ${url}`});
+            } else {
+              await github.rest.issues.create({...context.repo, title, labels: ['upstream'],
+                body: `The nightly contract run against ghcr.io/pelican/panel:latest failed: ${url}\n\nCompare docs/wings-panel-contract.md with the new Panel version and fix the gateway or agent.`});
+            }
