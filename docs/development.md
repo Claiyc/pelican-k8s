@@ -57,6 +57,11 @@ Bumping Wings: rebase the branch on the new upstream tag, push, update the
 e2e suite. Each hook is meant to be submitted upstream as an independent PR;
 nothing is pushed upstream from this repository automatically.
 
+The fork is the dependency for as long as any hook is unmerged, and it is what
+the nightly *Upstream drift* workflow checks. If all four land upstream, the
+fork and the `replace` go away together: point `go.mod` and that workflow at
+`github.com/pelican/wings` and delete the branch.
+
 ## Code map
 
 | Package | Role |

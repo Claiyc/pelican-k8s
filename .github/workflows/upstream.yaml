@@ -25,9 +25,11 @@ jobs:
           # The four hooks (ARCHITECTURE.md 6.3) live on pelican-k8s-hooks in the
           # Claiyc/wings fork, which is rebased onto upstream whenever Wings is
           # bumped (docs/development.md). That branch is what the agent compiles
-          # against, so it is what this workflow checks: upstream main can never
-          # be used here, because package boot only exists on the branch and a
-          # replace pointing at main neither tidies nor builds by construction.
+          # against, so it is what this workflow checks. Upstream main is not
+          # usable while the hooks are unmerged: package boot only exists on the
+          # branch, so a replace pointing at main neither tidies nor builds.
+          # Once the hooks land upstream, drop the fork and point this (and the
+          # replace in go.mod) at github.com/pelican/wings@main.
           go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@pelican-k8s-hooks
           go mod tidy
       - name: Report a pin that is behind the branch
