@@ -57,6 +57,11 @@ Bumping Wings: rebase the branch on the new upstream tag, push, update the
 e2e suite. Each hook is meant to be submitted upstream as an independent PR;
 nothing is pushed upstream from this repository automatically.
 
+The fork is the dependency for as long as any hook is unmerged, and it is what
+the nightly *Upstream drift* workflow checks. If all four land upstream, the
+fork and the `replace` go away together: point `go.mod` and that workflow at
+`github.com/pelican/wings` and delete the branch.
+
 ## Code map
 
 | Package | Role |
@@ -80,7 +85,7 @@ nothing is pushed upstream from this repository automatically.
 | What | How | Where to look |
 |---|---|---|
 | Go modules, GitHub Actions, base images | Dependabot weekly PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
-| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against Wings `main` and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
+| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
 | Pelican Panel | The same workflow compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
