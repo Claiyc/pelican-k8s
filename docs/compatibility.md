@@ -53,9 +53,10 @@ The implementation follows the design; these details differ or were added:
 
 - `test/upstream` fails when the pinned Wings module adds routes, remote calls
   or `ProcessEnvironment` methods the gateway/agent do not handle.
-- The `Upstream drift` workflow runs the same checks nightly against Wings
-  `main` and greps the latest Panel image for the contract points the gateway
-  depends on.
+- The `Upstream drift` workflow runs the same checks nightly against the tip of
+  the fork's `pelican-k8s-hooks` branch (upstream `main` is not usable: the four
+  hooks only exist on the branch) and runs `hack/check-panel-contract.sh` against
+  the latest Panel image for the contract points the gateway depends on.
 - The `Contract` workflow is the real gate: a kind cluster with the actual
   Panel and this repository's components runs the server lifecycle through
   the Panel's own services on every PR, and nightly against the newest Panel

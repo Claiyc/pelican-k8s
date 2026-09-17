@@ -30,7 +30,7 @@ Paths below are relative to the respective repo root. Pelican is still in beta
   in constant time against `config.token`.
 - **Response header check:** `DaemonRepository::getHttpClient` → `enforceValidNodeToken`
   (`app/Repositories/Daemon/DaemonRepository.php:48-67`) **throws if the response `User-Agent` header
-  is empty, or if it matches `^Pelican Wings\/v(\d+\.\d+\.\d+|develop) \(id:(\w*)\)$` with an id that
+  is empty, or if it matches `^Pelican Wings\/v(?:\d+\.\d+\.\d+|develop) \(id:(\w*)\)$` with an id that
   is not the node's `daemon_token_id`.** Wings sets `User-Agent: Pelican Wings/v<ver> (id:<token_id>)`
   in `RequireAuthorization` (middleware.go:174).
   → **The gateway must emit this header on every response.**
@@ -134,6 +134,11 @@ no matching Wings routes (legacy or broken).
 ---
 
 ## 3. Panel remote API (`routes/api-remote.php`, prefix `/api/remote`, middleware `daemon`)
+
+Paths below are the effective ones. Upstream registers most of them through
+`Route::prefix('/servers/{server:uuid}')->group(...)` and `Route::prefix('/backups')`,
+so no single source line spells a full path out; `hack/check-panel-contract.sh`
+resolves the groups and diffs the result against this table.
 
 | Method | Path | Controller | Used for |
 |---|---|---|---|
