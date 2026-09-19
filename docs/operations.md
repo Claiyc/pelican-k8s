@@ -5,10 +5,16 @@
 ```bash
 kubectl -n pelican-servers get gameservers                 # phase, process state, desired state
 kubectl -n pelican-servers describe gameserver gs-<uuid>   # spec, status, conditions, events
-kubectl -n pelican-servers get pod gs-<uuid>-0             # 2/2 = agent sidecar + game
+kubectl -n pelican-servers get pod gs-<uuid>-0             # 2/2 = game running, 1/2 = stopped or starting
 kubectl -n pelican-servers logs gs-<uuid>-0 -c game        # the game console (shim tee)
 kubectl -n pelican-servers logs gs-<uuid>-0 -c agent       # Wings logs
 ```
+
+The pod of a stopped server stays up (files, SFTP, console and backups need it), so
+pod readiness carries the game state: the game container is ready only while the Panel
+shows the server as *running*. `1/2` is the normal look of a stopped or starting server,
+not a fault. Readiness never restarts anything (the game container has no liveness
+probe), and nothing depends on it: both Services publish not-ready addresses.
 
 Status fields worth knowing:
 

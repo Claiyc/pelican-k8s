@@ -453,6 +453,10 @@ and sets it as the game container's `command`.
 - In a pod, restarting a container restarts only that container, but a *stopped* server must keep its pod
   (files, SFTP, websocket, stats), and Kubernetes cannot stop a single container.
 - So the shim is PID 1 and stays alive; the game process is its child.
+- The pod would otherwise look healthy while the game is off, so the game container's readiness probe
+  asks the agent (`GET /internal/v1/ready`) and is ready only in Wings' `running` state. The container
+  has no liveness or startup probe, so being unready never restarts it, and nothing consumes pod
+  readiness (both Services publish not-ready addresses, the StatefulSet is `OnDelete` + `Parallel`).
 
 **Responsibilities:**
 - Listen on `/pelican/run/shim.sock` (mode 0600; both containers run as the same UID, §12.2).

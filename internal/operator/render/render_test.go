@@ -149,6 +149,17 @@ func TestStatefulSetTemplate(t *testing.T) {
 	if !home || !machineID || !passwd {
 		t.Fatalf("mounts %+v", game.VolumeMounts)
 	}
+	// Readiness tracks the game process; a stopped server must never be
+	// restarted or blocked for being unready.
+	if game.ReadinessProbe == nil || game.ReadinessProbe.HTTPGet == nil || game.ReadinessProbe.HTTPGet.Path != "/internal/v1/ready" || game.ReadinessProbe.HTTPGet.Port.IntValue() != 8080 {
+		t.Fatalf("readiness probe %+v", game.ReadinessProbe)
+	}
+	if game.LivenessProbe != nil || game.StartupProbe != nil {
+		t.Fatal("the game container must not have a liveness or startup probe: a stopped server would be restarted")
+	}
+	if sts.Spec.PodManagementPolicy != "Parallel" || sts.Spec.MinReadySeconds != 0 {
+		t.Fatalf("an unready pod must not block the StatefulSet: %+v", sts.Spec)
+	}
 	if game.Lifecycle.PreStop.HTTPGet.Path != "/internal/v1/prestop" || game.Lifecycle.PreStop.HTTPGet.Port.IntValue() != 8080 {
 		t.Fatalf("prestop %+v", game.Lifecycle)
 	}

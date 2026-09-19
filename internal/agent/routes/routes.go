@@ -27,6 +27,20 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 	mux.HandleFunc("GET /internal/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version, "servers": m.Len()})
 	})
+	// The game container's readiness probe: ready only in the state the Panel
+	// shows as "running" (the egg's done line matched), so "starting" and a
+	// stopped server both read as not ready. It only ever feeds pod readiness.
+	mux.HandleFunc("GET /internal/v1/ready", func(w http.ResponseWriter, r *http.Request) {
+		var states []string
+		for _, s := range m.All() {
+			states = append(states, s.Environment.State())
+		}
+		code := http.StatusServiceUnavailable
+		if gameReady(states) {
+			code = http.StatusOK
+		}
+		writeJSON(w, code, map[string]any{"ready": code == http.StatusOK, "states": states})
+	})
 	// Called by kubelet's preStop hooks; returns once the process is offline.
 	mux.HandleFunc("/internal/v1/prestop", func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m) })
 	// Called by the operator when the game container terminated underneath the agent.
@@ -53,6 +67,20 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 	})
 	mux.Handle("/", wings)
 	return mux
+}
+
+// gameReady reports whether every server of this agent (exactly one per pod) is
+// running. An agent that has not loaded its server yet is not ready.
+func gameReady(states []string) bool {
+	if len(states) == 0 {
+		return false
+	}
+	for _, st := range states {
+		if st != environment.ProcessRunningState {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
