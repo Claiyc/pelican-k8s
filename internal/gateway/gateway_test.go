@@ -539,6 +539,25 @@ func TestResyncAdoptsAndFlagsOrphans(t *testing.T) {
 	if gs.Spec.Install.Generation != 0 {
 		t.Fatal("adopted servers must not be installed")
 	}
+	// The Panel's list carries egg defaults for the startup variables; a resync
+	// must take the configuration from the per-server endpoint instead.
+	rev := gs.Spec.Panel.PanelRevision
+	srv := h.panel.Get(uuid)
+	srv.ListSettings = fakepanel.PaperSettings(uuid, 30565, 0)
+	srv.ListSettings["meta"] = map[string]any{"name": "FromList"}
+	if err := h.sync.Resync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if gs = h.gs(); gs.Spec.Panel.PanelRevision != rev || gs.Annotations[v1alpha1.AnnotationPanelName] == "FromList" {
+		t.Fatalf("resync applied the list payload: %s", gs.Annotations[v1alpha1.AnnotationPanelName])
+	}
+	srv.Settings["meta"] = map[string]any{"name": "FromServer"}
+	if err := h.sync.Resync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if gs = h.gs(); gs.Annotations[v1alpha1.AnnotationPanelName] != "FromServer" {
+		t.Fatalf("resync missed a change on the per-server endpoint: %s", gs.Annotations[v1alpha1.AnnotationPanelName])
+	}
 	// Panel forgets the server -> Orphaned condition, never deleted.
 	delete(h.panel.Servers, uuid)
 	if err := h.sync.Resync(ctx); err != nil {

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pelican/wings/remote"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -385,9 +384,13 @@ func (s *Syncer) Resync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	panelSet := map[string]remote.RawServerData{}
+	// The list only says which servers exist. Its configuration is not usable:
+	// the Panel eager-loads the variables there, which makes every startup
+	// variable come back with the egg default instead of the server's value.
+	// Wings never notices because it fetches each server again at boot.
+	panelSet := map[string]bool{}
 	for _, srv := range servers {
-		panelSet[srv.Uuid] = srv
+		panelSet[srv.Uuid] = true
 	}
 	existing, err := s.Store.List(ctx)
 	if err != nil {
@@ -398,12 +401,15 @@ func (s *Syncer) Resync(ctx context.Context) error {
 		gs := &existing[i]
 		uuid := gs.Spec.Panel.UUID
 		seen[uuid] = true
-		srv, ok := panelSet[uuid]
-		if !ok {
+		if !panelSet[uuid] {
 			_ = s.Store.SetCondition(ctx, uuid, metav1.Condition{Type: v1alpha1.ConditionOrphaned, Status: metav1.ConditionTrue, Reason: "NotOnPanel", Message: "the Panel no longer lists this server on this node; it is never deleted automatically"})
 			continue
 		}
-		cfg := &panel.ServerConfiguration{Settings: srv.Settings, ProcessConfiguration: srv.ProcessConfiguration}
+		cfg, err := s.Panel.GetServerConfiguration(ctx, uuid)
+		if err != nil {
+			s.Log.Warn("resync: fetch configuration failed", "uuid", uuid, "error", err)
+			continue
+		}
 		raw, _, err := splitSettings(cfg.Settings)
 		if err != nil {
 			continue
@@ -418,12 +424,17 @@ func (s *Syncer) Resync(ctx context.Context) error {
 			_ = s.Store.SetCondition(ctx, uuid, metav1.Condition{Type: v1alpha1.ConditionOrphaned, Status: metav1.ConditionFalse, Reason: "OnPanel"})
 		}
 	}
-	for uuid, srv := range panelSet {
+	for uuid := range panelSet {
 		if seen[uuid] {
 			continue
 		}
 		s.Log.Info("resync: adopting server known to the Panel but missing in the cluster", "uuid", uuid)
-		if err := s.Adopt(ctx, uuid, &panel.ServerConfiguration{Settings: srv.Settings, ProcessConfiguration: srv.ProcessConfiguration}); err != nil {
+		cfg, err := s.Panel.GetServerConfiguration(ctx, uuid)
+		if err != nil {
+			s.Log.Warn("resync: fetch configuration failed", "uuid", uuid, "error", err)
+			continue
+		}
+		if err := s.Adopt(ctx, uuid, cfg); err != nil {
 			s.Log.Warn("resync: adopt failed", "uuid", uuid, "error", err)
 		}
 	}
