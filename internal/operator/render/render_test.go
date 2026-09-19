@@ -256,8 +256,8 @@ func TestServices(t *testing.T) {
 func TestNetworkPolicy(t *testing.T) {
 	in := testInput(t, func(i *Input) {
 		i.Class.Spec.Network = v1alpha1.NetworkSpec{
-			BlockedEgressCIDRs: []string{"10.128.0.0/14", "172.30.0.0/16", "192.168.1.0/24"},
-			NodeCIDRs:          []string{"192.168.1.122/32"},
+			BlockedEgressCIDRs: []string{"10.128.0.0/14", "172.30.0.0/16", "192.0.2.0/24"},
+			NodeCIDRs:          []string{"192.0.2.10/32"},
 			InClusterEgress:    v1alpha1.InClusterEgressSpec{Additional: []v1alpha1.EgressRule{{CIDR: "172.30.5.5/32", Ports: []int32{9000}}}},
 		}
 	})

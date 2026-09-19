@@ -66,12 +66,12 @@ kubectl -n pelican exec deploy/panel-pelican-panel -- \
 
 `database.connection` = `pgsql` | `mysql` | `mariadb` | `sqlite`.
 
-**PostgreSQL works.** Verified end to end on this cluster: all migrations apply,
+**PostgreSQL works.** Verified end to end on OpenShift with CloudNativePG: all migrations apply,
 the scheduler and queue worker run, and the Filament UI logs in. No MariaDB
 fallback was needed.
 
 Every connection detail can come from an existing Secret, which makes a
-CloudNativePG `<cluster>-app` Secret a drop-in (see the copjo values below).
+CloudNativePG `<cluster>-app` Secret a drop-in (see the worked example in section 6).
 
 `mariadb.enabled=true` gives you a throwaway single-replica MariaDB
 StatefulSet. It is for quick starts; on OpenShift it additionally needs the
@@ -130,9 +130,10 @@ database:
 Pick a Secret name that the chart does **not** generate itself
 (`<release>-pelican-panel-env`), so a sync can never overwrite it.
 
-Follow the standard recipe from the `copjo-cluster` skill for the rest: a CNPG
-`Cluster` in the app namespace, the `argocd-admin` RoleBinding in `pelican`, a
-multi-source `Application` (chart + `$values` from Gitea), then the Route.
+The rest is the usual Argo CD setup: a CNPG `Cluster` in the app namespace, a
+RoleBinding that lets the Argo CD application controller manage the `pelican`
+namespace, a multi-source `Application` (chart + `$values` from your config
+repository), then the Route.
 
 ---
 
@@ -151,9 +152,11 @@ fixed non-root UID.
 
 ---
 
-## 6. The copjo deployment (api.cluster.cpj)
+## 6. Worked example: OpenShift with CloudNativePG
 
-Live at **https://pelican.apps.cluster.cpj**, namespace `pelican`.
+A complete deployment in the namespace `pelican`, exposed through a Route at
+`https://pelican.apps.example.com`. Replace the hostname and the storage class
+with your own.
 
 ### 6.1 Database (CloudNativePG)
 
@@ -167,7 +170,7 @@ spec:
   instances: 1
   storage:
     size: 5Gi
-    storageClass: main
+    storageClass: <your-storage-class>
   bootstrap:
     initdb:
       database: pelican
@@ -189,7 +192,7 @@ oc create secret generic pelican-panel-secrets -n pelican \
 
 ```yaml
 panel:
-  url: https://pelican.apps.cluster.cpj
+  url: https://pelican.apps.example.com
   env: production
   debug: false
   installed: true
@@ -215,12 +218,12 @@ database:
 persistence:
   enabled: true
   size: 5Gi
-  storageClass: main
+  storageClass: <your-storage-class>
   accessMode: ReadWriteOnce
 
 route:
   enabled: true
-  host: pelican.apps.cluster.cpj
+  host: pelican.apps.example.com
   tls:
     enabled: true
     termination: edge
@@ -242,8 +245,7 @@ resources:
 ### 6.4 Install
 
 ```bash
-export KUBECONFIG=$HOME/.kube/cluster.cpj
-oc whoami --show-server      # must print https://api.cluster.cpj:6443
+oc whoami --show-server      # confirm the target cluster first
 
 helm upgrade --install pelican-panel charts/pelican-panel -n pelican -f <values file>
 ```
@@ -255,10 +257,10 @@ PW="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-28)"
 oc create secret generic pelican-panel-admin -n pelican \
   --from-literal=username=admin \
   --from-literal=password="$PW" \
-  --from-literal=email=timo.weisskopf@outlook.de
+  --from-literal=email=admin@example.com
 
 oc exec -n pelican deploy/pelican-panel -- php artisan p:user:make \
-  --admin=1 --email=timo.weisskopf@outlook.de --username=admin --password="$PW"
+  --admin=1 --email=admin@example.com --username=admin --password="$PW"
 ```
 
 Read the password back later with:
@@ -269,7 +271,8 @@ oc get secret pelican-panel-admin -n pelican -o jsonpath='{.data.password}' | ba
 
 ### 6.6 Backups
 
-Opt the Panel PVC into the Longhorn `backup` recurring-job group (the CNPG volume
+Back up the Panel PVC and the database with whatever your storage layer offers.
+With Longhorn, opt the Panel volume into a recurring-job group (the CNPG volume
 too, or configure CNPG's own backups):
 
 ```bash
@@ -331,8 +334,8 @@ Either way the Panel side is the same:
    matters.
 3. Hand that configuration to the daemon. The daemon calls back to
    `APP_URL/api/remote/...`, so `panel.url` must be reachable **from the node**,
-   not only from your browser. On this cluster that is
-   `https://pelican.apps.cluster.cpj` via the Route.
+   not only from your browser. In the example above that is
+   `https://pelican.apps.example.com` via the Route.
 4. Allocations (IP + ports) are created per node in the Panel and must match what
    the node can actually bind.
 
@@ -343,7 +346,7 @@ add the in-cluster hostname to `panel.trustedProxies` handling as needed.
 
 ---
 
-## 9. Verified behaviour (2026-09-16, copjo)
+## 9. Verified behaviour (2026-09-16, single-node OpenShift)
 
 | Check | Result |
 |---|---|
@@ -353,10 +356,10 @@ add the in-cluster hostname to `panel.trustedProxies` handling as needed.
 | PostgreSQL 18 (CNPG) migrations | all migrations applied, `users`/`jobs`/`sessions` tables present |
 | Scheduler | `supercronic` runs `p:schedule:process`, `health:schedule-check-heartbeat`, `health:check` every minute |
 | Queue worker | `queue:work` process running in the pod |
-| `GET https://pelican.apps.cluster.cpj/up` | `200` |
-| `GET http://pelican.apps.cluster.cpj/` | `302` to https (Route `insecureEdgeTerminationPolicy: Redirect`) |
-| `GET https://pelican.apps.cluster.cpj/` | `302` -> `/login`, `200`, cookies `Secure` (HTTPS correctly detected behind the router) |
-| Rendered asset URLs | all `https://pelican.apps.cluster.cpj/...` |
-| Admin creation | `p:user:make` created `admin` / `timo.weisskopf@outlook.de`, row present in the `users` table |
-| Web login | full Filament/Livewire `authenticate` call returned `redirect: https://pelican.apps.cluster.cpj`, follow-up request rendered the authenticated **Servers** dashboard |
+| `GET https://pelican.apps.example.com/up` | `200` |
+| `GET http://pelican.apps.example.com/` | `302` to https (Route `insecureEdgeTerminationPolicy: Redirect`) |
+| `GET https://pelican.apps.example.com/` | `302` -> `/login`, `200`, cookies `Secure` (HTTPS correctly detected behind the router) |
+| Rendered asset URLs | all `https://pelican.apps.example.com/...` |
+| Admin creation | `p:user:make` created `admin` / `admin@example.com`, row present in the `users` table |
+| Web login | full Filament/Livewire `authenticate` call returned `redirect: https://pelican.apps.example.com`, follow-up request rendered the authenticated **Servers** dashboard |
 | Pod restart | `rollout restart` came back healthy; `/pelican-data` (uid 82, `drwxrwsr-x`) retained `.env`, `storage/`, `caddy/` |

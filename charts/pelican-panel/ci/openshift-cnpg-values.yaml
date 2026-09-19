@@ -1,5 +1,5 @@
 # OpenShift + external PostgreSQL (CloudNativePG) + Route with edge TLS.
-# This mirrors the copjo deployment documented in docs/panel.md.
+# This mirrors the worked example in docs/panel.md.
 panel:
   url: https://pelican.apps.example.com
   behindProxy: true

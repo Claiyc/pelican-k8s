@@ -92,7 +92,7 @@ func settingsJSON(memory, cpu, disk int64, image string, suspended bool) apiexte
 		"id": 1, "uuid": uuid, "meta": map[string]any{"name": "Test"}, "suspended": suspended,
 		"build":       map[string]any{"memory_limit": memory, "cpu_limit": cpu, "disk_space": disk, "oom_killer": true},
 		"container":   map[string]any{"image": image},
-		"allocations": map[string]any{"default": map[string]any{"ip": "192.168.1.122", "port": 30565}, "mappings": map[string][]int{"192.168.1.122": {30565}}},
+		"allocations": map[string]any{"default": map[string]any{"ip": "192.0.2.10", "port": 30565}, "mappings": map[string][]int{"192.0.2.10": {30565}}},
 		"egg":         map[string]any{"id": "egg-1"},
 	}
 	b, _ := json.Marshal(m)
