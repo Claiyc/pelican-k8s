@@ -192,8 +192,19 @@ spec:
       ref: values
   syncPolicy:
     automated: {prune: false, selfHeal: true}
-    syncOptions: [CreateNamespace=false, ServerSideApply=true]
+    syncOptions: [CreateNamespace=false]
 ```
+
+Leave `ServerSideApply=true` off. Nothing in the charts needs it (the CRDs are
+about 20 KB each), and on OpenShift it makes the Application fragile: Argo CD
+diffs server-side-applied resources against an API schema it caches when the
+application controller starts. After a node reboot the controller can come up
+before the aggregated `route.openshift.io` API is served, the cached schema
+then has no `Route`, and every Application that contains a Route stays
+`Unknown` with `ComparisonError: unable to resolve parseableType for
+GroupVersionKind: route.openshift.io/v1, Kind=Route` until the controller is
+restarted. Server-side diff (`ServerSideDiff=true`) goes through the same
+schema and does not avoid it; the default client-side diff does.
 
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
