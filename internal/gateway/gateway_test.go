@@ -314,6 +314,18 @@ func TestCreateSyncInstallPowerDelete(t *testing.T) {
 			t.Fatalf("power %s -> %+v", tc.action, p)
 		}
 	}
+	// A start picks up Panel changes that came without a sync (startup
+	// variables), a stop does not need to.
+	for _, tc := range []struct {
+		action, name string
+		synced       bool
+	}{{"stop", "BeforeStop", false}, {"start", "BeforeStart", true}, {"restart", "BeforeRestart", true}} {
+		h.panel.Get(uuid).Settings["meta"] = map[string]any{"name": tc.name}
+		h.call("POST", "/api/servers/"+uuid+"/power", `{"action":"`+tc.action+`"}`, nodeToken)
+		if got := h.gs().Annotations[v1alpha1.AnnotationPanelName]; (got == tc.name) != tc.synced {
+			t.Fatalf("power %s: panel name %q, synced should be %v", tc.action, got, tc.synced)
+		}
+	}
 	if code, _, _ := h.call("POST", "/api/servers/"+uuid+"/power", `{"action":"explode"}`, nodeToken); code != 422 {
 		t.Fatal("invalid action accepted")
 	}

@@ -300,6 +300,15 @@ func (s *Syncer) RequestInstall(ctx context.Context, uuid string, reinstall bool
 
 // Power patches spec.power for a Panel or websocket power action (section 8.3).
 func (s *Syncer) Power(ctx context.Context, uuid, action string) error {
+	// Wings fetches the live configuration on every boot, and the Panel relies
+	// on that: it sends no sync for a startup variable change. The agent's boot
+	// sync is answered from spec.panel, so refresh it first or the change only
+	// lands with the next drift resync.
+	if action == "start" || action == "restart" {
+		if err := s.Sync(ctx, uuid); err != nil {
+			return err
+		}
+	}
 	gs, err := s.Store.Get(ctx, uuid)
 	if err != nil {
 		return err
