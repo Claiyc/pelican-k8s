@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
 - `test/supplychain` also asserts that `docker/docker/daemon` and `x/crypto/openpgp` stay out of the build graph; the six outstanding advisories have no fixed version, so not linking them is what keeps them harmless.
 
 ### Changed
+- The Argo CD example in `docs/install.md` no longer sets `ServerSideApply=true`. On OpenShift an application controller that starts before the `route.openshift.io` API is available keeps a schema without `Route`, and every server-side-applied Application containing a Route then fails to compare until the controller is restarted.
 - Pod readiness now carries the game state: the game container is ready only while Wings reports `running` (what the Panel shows as running), so a stopped or starting server shows `1/2` instead of `2/2`. Readiness restarts nothing and gates nothing (no liveness probe on the game container, Services publish not-ready addresses). The pod template changes, so existing pods are marked `RecreatePending` and pick the probe up at their next stop or start.
 - Build with Go 1.27. `govulncheck` in CI fails only for reachable vulnerabilities that have a fix.
 - Dependency updates come from Dependabot; the Renovate configuration was removed.
