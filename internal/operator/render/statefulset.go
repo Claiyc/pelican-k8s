@@ -185,6 +185,20 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			{ResourceName: corev1.ResourceCPU, RestartPolicy: corev1.NotRequired},
 			{ResourceName: corev1.ResourceMemory, RestartPolicy: corev1.NotRequired},
 		},
+		// Ready means what the Panel calls "running" (the agent saw the egg's
+		// done line), so a stopped or still starting server shows 1/2 instead of
+		// looking healthy. Readiness never restarts anything: only
+		// liveness and startup probes do, and the game container must never get
+		// either (a stopped server would be killed in a loop). Nothing else may
+		// depend on it: both Services publish not-ready addresses, the operator
+		// judges the agent by its own container status, and the StatefulSet is
+		// OnDelete + Parallel so an unready pod never blocks a recreate.
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/ready", Port: intstr.FromInt(AgentPort)}},
+			PeriodSeconds:    5,
+			TimeoutSeconds:   3,
+			FailureThreshold: 1,
+		},
 		Lifecycle:       &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/prestop", Port: intstr.FromInt(AgentPort)}}},
 		SecurityContext: restricted,
 		Env: []corev1.EnvVar{
