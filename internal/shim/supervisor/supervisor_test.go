@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -220,5 +221,40 @@ func TestMergeEnv(t *testing.T) {
 	want := []string{"PATH=/bin", "HOME=/home/container", "X=1", "Y=2"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// TestReaperKeepsReapingWhileIdle covers a stopped server: orphans (for
+// example from kubectl exec) must not pile up as zombies, and they must not
+// disturb the exit status of a process started afterwards.
+func TestReaperKeepsReapingWhileIdle(t *testing.T) {
+	c, _, _ := startSupervisor(t, []string{"/bin/sh", "-c", "exit 7"}, true)
+	var pids []int
+	for i := 0; i < 40; i++ { // more than the exit channel holds
+		cmd := exec.Command("/bin/true")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, cmd.Process.Pid)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for _, pid := range pids {
+		for {
+			if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); os.IsNotExist(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("pid %d was never reaped", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := c.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if m := waitEvent(t, c, protocol.TypeExited, 5*time.Second); m.Exit == nil || m.Exit.Code != 7 {
+		t.Fatalf("exit after idle orphans: %+v", m.Exit)
 	}
 }

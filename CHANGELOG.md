@@ -24,6 +24,7 @@ All notable changes to this project are documented here. The format follows
 - Workflow tokens are scoped to the jobs that need them: `security-events: write` (CodeQL), `contents: write` and `packages: write` (release) and `issues: write` (upstream drift) are no longer granted workflow-wide, closing the Scorecard *Token-Permissions* finding.
 
 ### Fixed
+- The shim keeps reaping orphaned processes while no game runs. It forwarded every reaped pid into a channel that is only drained while a process is supervised, so after 16 orphans (for example from `kubectl exec` into a stopped server) the reaper blocked and every later orphan stayed a zombie; a stale entry could also be mistaken for the exit of a later process that reused the pid. Only the supervised process is forwarded now.
 - The drift resync takes each server's configuration from the per-server endpoint. The Panel's server list eager-loads the startup variables, which returns the egg default for every variable, so the resync never saw a variable change and could overwrite correct values with defaults.
 - A start or restart now syncs the server configuration from the Panel first. The Panel sends no sync for a startup variable change because Wings fetches the live configuration on every boot, but the agent's boot sync is answered from `spec.panel`, so such a change only applied after the next drift resync (up to 15 minutes).
 - The image vulnerability scan could not resolve `aquasecurity/trivy-action@0.36.0` (the tags carry a `v` prefix from 0.29 on), so no Trivy results reached code scanning.

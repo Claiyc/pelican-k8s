@@ -76,6 +76,9 @@ type Supervisor struct {
 	conns map[*conn]struct{}
 
 	childExit chan childExit
+	// spawnMu makes "spawn the child and record its pid" atomic towards the
+	// reaper, which must know the supervised pid before it may reap it.
+	spawnMu sync.Mutex
 }
 
 type childExit struct {
@@ -211,14 +214,7 @@ func (s *Supervisor) reaper(ctx context.Context) {
 		case <-sigs:
 		case <-t.C:
 		}
-		for {
-			var ws unix.WaitStatus
-			pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
-			if err != nil || pid <= 0 {
-				break
-			}
-			s.childExit <- childExit{pid: pid, ws: ws}
-		}
+		s.reapAll()
 	}
 }
 
@@ -376,8 +372,10 @@ func (s *Supervisor) start(env []string) error {
 	cmd.Env = MergeEnv(os.Environ(), env)
 	// Detach the game from the shim's own signals: the process gets its own
 	// session and process group (pty.Start sets Setsid and Setctty).
+	s.spawnMu.Lock()
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		s.spawnMu.Unlock()
 		return fmt.Errorf("spawn %v: %w", argv, err)
 	}
 
@@ -393,6 +391,7 @@ func (s *Supervisor) start(env []string) error {
 	pid := s.pid
 	exited := s.exited
 	s.mu.Unlock()
+	s.spawnMu.Unlock()
 	s.ring.Reset()
 	s.log.Info("process started", "pid", pid, "argv", argv)
 	s.broadcast(&protocol.Message{Type: protocol.TypeStarted, PID: pid})
@@ -422,6 +421,31 @@ func (s *Supervisor) readOutput(ptmx *os.File) {
 	}
 }
 
+// reapAll collects every exited child. Only the supervised process is handed
+// to waitLoop; orphans are dropped here. Forwarding them all filled the channel
+// while no process ran (nothing drains it then), which stopped the reaper and
+// left every later orphan a zombie, and a stale entry could be taken for the
+// exit of a later process that reused the pid.
+func (s *Supervisor) reapAll() {
+	s.spawnMu.Lock()
+	defer s.spawnMu.Unlock()
+	for {
+		var ws unix.WaitStatus
+		pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
+		if err != nil || pid <= 0 {
+			return
+		}
+		s.mu.Lock()
+		supervised := pid == s.pid
+		s.mu.Unlock()
+		if supervised {
+			s.childExit <- childExit{pid: pid, ws: ws}
+		} else {
+			s.log.Debug("reaped orphan", "pid", pid, "status", int(ws))
+		}
+	}
+}
+
 // waitLoop waits for the child's exit status. When a reaper is active the
 // status arrives through childExit; otherwise cmd.Wait is used directly.
 func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan struct{}) {
@@ -432,7 +456,6 @@ func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan
 				ws = ce.ws
 				break
 			}
-			s.log.Debug("reaped orphan", "pid", ce.pid, "status", int(ce.ws))
 		}
 	} else {
 		err := cmd.Wait()
