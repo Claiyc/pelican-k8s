@@ -291,11 +291,16 @@ func TestCreateSyncInstallPowerDelete(t *testing.T) {
 		t.Fatalf("sync did not apply: %s %s", gs.Spec.Panel.PanelRevision, gs.Annotations[v1alpha1.AnnotationPanelName])
 	}
 
-	// Reinstall bumps the install generation with a fresh script ConfigMap.
+	// Reinstall bumps the install generation with a fresh script ConfigMap, and
+	// picks up Panel changes that were never pushed with a sync.
+	h.panel.Get(uuid).Settings["meta"] = map[string]any{"name": "Unsynced"}
 	if code, _, _ := h.call("POST", "/api/servers/"+uuid+"/reinstall", "", nodeToken); code != 202 {
 		t.Fatal("reinstall")
 	}
 	gs = h.gs()
+	if gs.Annotations[v1alpha1.AnnotationPanelName] != "Unsynced" {
+		t.Fatalf("reinstall did not sync the panel configuration: %s", gs.Annotations[v1alpha1.AnnotationPanelName])
+	}
 	if gs.Spec.Install.Generation != 2 || !gs.Spec.Install.Reinstall || gs.Spec.Install.ScriptConfigMap != names.InstallConfigMap(uuid, 2) || gs.Spec.Install.StartOnInstall {
 		t.Fatalf("reinstall spec %+v", gs.Spec.Install)
 	}
