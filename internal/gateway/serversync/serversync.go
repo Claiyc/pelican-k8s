@@ -279,7 +279,13 @@ func (s *Syncer) Apply(ctx context.Context, uuid string, cfg *panel.ServerConfig
 }
 
 // RequestInstall fetches the install payload and bumps spec.install (section 8.2).
+// Like Wings it syncs the Panel configuration first: the Panel does not always
+// send a sync after a build change (a server stuck in "installing"), and the
+// install must not run against stale allocations or limits.
 func (s *Syncer) RequestInstall(ctx context.Context, uuid string, reinstall bool) error {
+	if err := s.Sync(ctx, uuid); err != nil {
+		return err
+	}
 	gs, err := s.Store.Get(ctx, uuid)
 	if err != nil {
 		return err
