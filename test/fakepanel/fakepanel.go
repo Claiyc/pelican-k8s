@@ -16,7 +16,11 @@ type Server struct {
 	UUID                 string
 	Settings             map[string]any
 	ProcessConfiguration map[string]any
-	Install              InstallScript
+	// ListSettings, when set, is what the server list returns instead of
+	// Settings. The real Panel's list carries egg defaults for every startup
+	// variable, so nothing may take configuration from it.
+	ListSettings map[string]any
+	Install      InstallScript
 	// State is updated from container/status posts.
 	State string
 	// Install bookkeeping used by the gateway extension endpoints.
@@ -122,7 +126,11 @@ func (p *Panel) Handler() http.Handler {
 			p.mu.Lock()
 			data := make([]map[string]any, 0, len(p.Servers))
 			for _, s := range p.Servers {
-				data = append(data, p.serverPayload(s))
+				payload := p.serverPayload(s)
+				if s.ListSettings != nil {
+					payload["settings"] = s.ListSettings
+				}
+				data = append(data, payload)
 			}
 			p.mu.Unlock()
 			writeJSON(w, 200, map[string]any{"data": data, "meta": map[string]any{"current_page": 1, "last_page": 1, "per_page": 50, "total": len(data)}})
