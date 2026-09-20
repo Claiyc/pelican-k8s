@@ -947,3 +947,63 @@ func TestUnlimitedCPUWaitsForOffline(t *testing.T) {
 		t.Fatal("recreate should stay pending while the process runs")
 	}
 }
+
+// lbClass puts the default class in LoadBalancer mode.
+func lbClass() *v1alpha1.GameServerClass {
+	c := newClass()
+	c.Spec.Exposure = v1alpha1.ExposureSpec{Mode: v1alpha1.ExposureLoadBalancer}
+	return c
+}
+
+// A LoadBalancer that never gets an address is usually a cluster with no load
+// balancer implementation, which "waiting" does not help anyone diagnose.
+func TestLoadBalancerPendingMessageBecomesActionable(t *testing.T) {
+	h := newHarness(t, newGS(), lbClass())
+	h.reconcile(2)
+
+	c := meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionExposureReady)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Pending" {
+		t.Fatalf("exposure condition %+v", c)
+	}
+	// Early on, "waiting" is the honest answer: a cloud LB takes time.
+	if c.Message != "waiting for the LoadBalancer address" {
+		t.Fatalf("first message should be the plain one: %q", c.Message)
+	}
+
+	h.now = h.now.Add(lbPendingGrace + time.Minute)
+	h.reconcile(1)
+
+	c = meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionExposureReady)
+	if c.Reason != "Pending" || c.Status != metav1.ConditionFalse {
+		t.Fatalf("condition changed unexpectedly: %+v", c)
+	}
+	for _, want := range []string{"no load balancer implementation", "MetalLB", "NodePort", "30000-32767", "HostPort"} {
+		if !strings.Contains(c.Message, want) {
+			t.Fatalf("message must mention %q, got %q", want, c.Message)
+		}
+	}
+}
+
+// An address that does arrive settles the condition and publishes endpoints.
+func TestLoadBalancerReadyWhenAddressArrives(t *testing.T) {
+	h := newHarness(t, newGS(), lbClass())
+	h.reconcile(2)
+
+	var svc corev1.Service
+	if !h.get(&svc, names.ExposureService(uuid)) {
+		t.Fatal("exposure service missing")
+	}
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "203.0.113.7"}}
+	if err := h.c.Status().Update(context.Background(), &svc); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+
+	gs := h.gs()
+	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionExposureReady); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("exposure not ready: %+v", c)
+	}
+	if len(gs.Status.Endpoints) != 1 || gs.Status.Endpoints[0].IP != "203.0.113.7" {
+		t.Fatalf("endpoints should come from the LoadBalancer ingress: %+v", gs.Status.Endpoints)
+	}
+}

@@ -103,13 +103,25 @@ second Service for it:
 
 ### Game port exposure
 
+**Choose this before you create your first server.** Nearly every game's default
+port is below the NodePort range — Minecraft 25565, ARK 7777 and 27015, Valheim
+2456, Rust 28015, Palworld 8211 — so the mode decides whether your allocations
+can use the port the game's own documentation tells players to use.
+
+`LoadBalancer` is the default because it imposes no port constraint and needs no
+configuration on the clusters most people start from: k3s ships ServiceLB, and
+every managed cloud provides one. On a cluster with **no** load balancer
+implementation (kind, bare kubeadm, single-node OpenShift) a game Service waits
+for an address that never arrives; after two minutes `ExposureReady` says so and
+names the alternatives. Install MetalLB ([below](#metallb)) or pick another mode.
+
 Set in the class (`defaultClass.spec.exposure.mode`):
 
 | Mode | Use when | Panel allocations |
 |---|---|---|
 | `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP. `loadBalancer.provider: metallb` fills both in |
-| `NodePort` | single-node clusters | IP = node IP, ports **must be in the NodePort range** (30000–32767 by default) |
-| `HostPort` | single node, ports outside the NodePort range | IP = node IP; needs `serversNamespace.podSecurityLevel=privileged` |
+| `NodePort` | no load balancer available and the game's ports are negotiable | IP = node IP, ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
+| `HostPort` | no load balancer available and the game's ports matter | IP = node IP, any port; needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
 
 `/api/system/ips` (the Panel's allocation IP dropdown) returns
 `gateway.externalIPs`, else the class `exposure.externalIPs`, else the
