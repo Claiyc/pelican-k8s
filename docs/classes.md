@@ -47,6 +47,7 @@ Volumes never shrink: a smaller Panel `disk_space` sets the `DiskShrinkRefused` 
 |---|---|---|
 | `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md) |
 | `externalTrafficPolicy` | `Local` | Preserves client IPs |
+| `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |
 | `loadBalancer.annotations` | | Added verbatim to exposure Services |

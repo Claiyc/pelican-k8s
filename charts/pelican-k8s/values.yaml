@@ -33,6 +33,15 @@ gateway:
   # Addresses returned to the Panel for allocations (defaults to the class
   # exposure.externalIPs, then node addresses).
   externalIPs: []
+  # Offer MetalLB's pool addresses to the Panel's allocation form, so an
+  # allocation cannot land on an address MetalLB will never announce. Needs the
+  # RBAC below; without MetalLB installed it degrades to externalIPs/nodes.
+  metallb:
+    discoverPools: false
+    # Limit discovery to these IPAddressPools. Empty means every pool.
+    poolNames: []
+    # Cap on the addresses offered; a large pool would flood the dropdown.
+    maxAddresses: 256
   # How agents reach the gateway's remote API (in-cluster).
   remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
@@ -113,6 +122,8 @@ defaultClass:
       mode: LoadBalancer
       externalTrafficPolicy: Local
       loadBalancer:
+        # "metallb" fills in the MetalLB annotation keys below; "" adds none.
+        provider: ""
         ipAnnotation: ""
         sharingAnnotation: ""
         annotations: {}

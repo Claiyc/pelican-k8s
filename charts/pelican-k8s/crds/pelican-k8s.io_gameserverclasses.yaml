@@ -89,6 +89,15 @@ spec:
                         description: IPAnnotation pins the Service to the allocation
                           IP (e.g. metallb.io/loadBalancerIPs).
                         type: string
+                      provider:
+                        description: |-
+                          Provider supplies the annotation keys of a known implementation.
+                          "metallb" means metallb.io/loadBalancerIPs and metallb.io/allow-shared-ip.
+                          An explicit ipAnnotation or sharingAnnotation always wins.
+                        enum:
+                        - ""
+                        - metallb
+                        type: string
                       sharingAnnotation:
                         description: SharingAnnotation lets several Services share
                           one IP (e.g. metallb.io/allow-shared-ip).

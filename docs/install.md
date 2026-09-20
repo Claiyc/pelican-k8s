@@ -107,12 +107,50 @@ Set in the class (`defaultClass.spec.exposure.mode`):
 
 | Mode | Use when | Panel allocations |
 |---|---|---|
-| `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP |
+| `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP. `loadBalancer.provider: metallb` fills both in |
 | `NodePort` | single-node clusters | IP = node IP, ports **must be in the NodePort range** (30000–32767 by default) |
 | `HostPort` | single node, ports outside the NodePort range | IP = node IP; needs `serversNamespace.podSecurityLevel=privileged` |
 
 `/api/system/ips` (the Panel's allocation IP dropdown) returns
-`gateway.externalIPs`, else the class `exposure.externalIPs`, else node addresses.
+`gateway.externalIPs`, else the class `exposure.externalIPs`, else the
+discovered MetalLB pool addresses (see below), else node addresses.
+
+### MetalLB
+
+MetalLB needs no special exposure mode: it implements `LoadBalancer`. What it
+needs is that every Panel allocation uses an address MetalLB can announce,
+because `loadBalancer.ipAnnotation` pins each Service to its allocation IP. An
+allocation on any other address produces a Service that waits for an ingress IP
+forever.
+
+```yaml
+defaultClass:
+  spec:
+    exposure:
+      mode: LoadBalancer
+      loadBalancer:
+        provider: metallb     # sets the two annotation keys
+gateway:
+  metallb:
+    discoverPools: true       # offer the pool addresses to the Panel
+    poolNames: []             # [] = every pool
+    maxAddresses: 256
+```
+
+With `discoverPools`, the gateway lists MetalLB's `IPAddressPool` objects and
+returns their addresses from `/api/system/ips`, so the Panel's allocation form
+only offers addresses MetalLB will announce. It reads the pools with an
+uncached client, because the CRD may not be installed; a missing CRD or missing
+RBAC is logged once and falls back to the other sources. The chart adds the
+`metallb.io/ipaddresspools` read permission only when `discoverPools` is set.
+
+Because the Service is pinned to the allocation IP, the address a player sees in
+the Panel is by construction the address MetalLB announces — the Panel needs no
+extra plumbing to learn it.
+
+Several servers can share one address: `sharingAnnotation` (set by the provider)
+makes MetalLB accept it as long as the ports do not overlap, which the Panel
+already guarantees per allocation IP.
 
 ## 4. Verify
 

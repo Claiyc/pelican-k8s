@@ -26,6 +26,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/config"
+	"github.com/Claiyc/pelican-k8s/internal/gateway/metallb"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panelapi"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/remoteapi"
@@ -81,6 +82,20 @@ func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.
 	sessions := sftprelay.NewSessions()
 	g := &Gateway{Cfg: cfg, Log: logger, Store: st, Panel: p, Agents: res, Sync: sync, cache: c}
 	g.PanelAPI = &panelapi.Handler{Cfg: cfg, Store: st, Agents: res, Sync: sync, Log: logger.With("component", "panelapi"), Diagnostics: g.diagnostics}
+	if cfg.MetalLBPools {
+		// Uncached on purpose: the MetalLB CRD may not be installed, and the
+		// cache would start an informer for a kind that does not exist.
+		direct, err := client.New(rc, client.Options{Scheme: scheme})
+		if err != nil {
+			return nil, err
+		}
+		g.PanelAPI.Pools = &metallb.Pools{
+			Reader: direct,
+			Names:  cfg.MetalLBPoolNames,
+			Max:    cfg.MetalLBMaxAddresses,
+			Log:    logger.With("component", "metallb"),
+		}
+	}
 	g.PanelAPI.WS = &wsproxy.Proxy{Cfg: cfg, Store: st, Agents: res, Sync: sync, Log: logger.With("component", "wsproxy"), OriginForAgent: cfg.RemoteURL}
 	g.Remote = &remoteapi.Handler{Store: st, Panel: p, Sync: sync, Agents: res, Sftp: sessions, Log: logger.With("component", "remoteapi")}
 	g.Relay = &sftprelay.Relay{Listen: cfg.ListenSFTP, Panel: p, Store: st, Agents: res, Sessions: sessions, KeyOnly: cfg.SFTPKeyOnly, Log: logger.With("component", "sftp")}

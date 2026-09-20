@@ -643,6 +643,7 @@ spec:
     mode: LoadBalancer          # LoadBalancer | NodePort (single-node clusters only) | HostPort
     externalTrafficPolicy: Local
     loadBalancer:               # implementation-specific annotation keys
+      provider: ""              # "metallb" supplies the two keys below
       ipAnnotation: ""          # pins the Service to the allocation IP
       sharingAnnotation: ""     # lets several Services share one IP
   network:

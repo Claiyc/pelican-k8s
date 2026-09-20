@@ -334,3 +334,57 @@ func TestContainerImageRef(t *testing.T) {
 		t.Fatal("image ref")
 	}
 }
+
+// The provider spares a class the exact annotation keys: a mistyped key is
+// ignored by the load balancer and the mistake only shows as a pending IP.
+func TestLoadBalancerProviderSuppliesAnnotationKeys(t *testing.T) {
+	in := testInput(t, func(i *Input) {
+		i.Class.Spec.Exposure = v1alpha1.ExposureSpec{
+			Mode:         v1alpha1.ExposureLoadBalancer,
+			LoadBalancer: v1alpha1.LoadBalancerSpec{Provider: v1alpha1.LoadBalancerMetalLB},
+		}
+	})
+	svc := ExposureService(in)
+	if svc.Annotations[v1alpha1.MetalLBIPAnnotation] != "203.0.113.10" {
+		t.Fatalf("ip annotation %+v", svc.Annotations)
+	}
+	if svc.Annotations[v1alpha1.MetalLBSharingAnnotation] == "" {
+		t.Fatalf("sharing annotation %+v", svc.Annotations)
+	}
+}
+
+// An explicit key must still win, so a fork or a newer provider version can be
+// pointed at a different annotation without waiting for a release.
+func TestLoadBalancerExplicitKeysOverrideProvider(t *testing.T) {
+	in := testInput(t, func(i *Input) {
+		i.Class.Spec.Exposure = v1alpha1.ExposureSpec{
+			Mode: v1alpha1.ExposureLoadBalancer,
+			LoadBalancer: v1alpha1.LoadBalancerSpec{
+				Provider:     v1alpha1.LoadBalancerMetalLB,
+				IPAnnotation: "example.com/address",
+			},
+		}
+	})
+	svc := ExposureService(in)
+	if svc.Annotations["example.com/address"] != "203.0.113.10" {
+		t.Fatalf("explicit key ignored: %+v", svc.Annotations)
+	}
+	if _, ok := svc.Annotations[v1alpha1.MetalLBIPAnnotation]; ok {
+		t.Fatalf("provider key must not be added too: %+v", svc.Annotations)
+	}
+	// The sharing key is still filled in by the provider.
+	if svc.Annotations[v1alpha1.MetalLBSharingAnnotation] == "" {
+		t.Fatalf("sharing annotation %+v", svc.Annotations)
+	}
+}
+
+// Without a provider nothing is guessed: an unknown load balancer gets a plain
+// Service and picks its own address.
+func TestLoadBalancerWithoutProviderAddsNoAnnotations(t *testing.T) {
+	in := testInput(t, func(i *Input) {
+		i.Class.Spec.Exposure = v1alpha1.ExposureSpec{Mode: v1alpha1.ExposureLoadBalancer}
+	})
+	if svc := ExposureService(in); len(svc.Annotations) != 0 {
+		t.Fatalf("annotations %+v", svc.Annotations)
+	}
+}

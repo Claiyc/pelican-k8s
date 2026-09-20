@@ -72,6 +72,11 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
+  {{- if .Values.gateway.metallb.discoverPools }}
+  - apiGroups: [metallb.io]
+    resources: [ipaddresspools]
+    verbs: [get, list, watch]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

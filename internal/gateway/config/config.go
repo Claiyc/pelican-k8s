@@ -37,6 +37,13 @@ type Config struct {
 	AllowedOrigins []string
 	// ExternalIPs override the addresses returned by /api/system/ips.
 	ExternalIPs []string
+	// MetalLBPools makes /api/system/ips offer the addresses of MetalLB's
+	// IPAddressPools, so Panel allocations land on IPs MetalLB can announce.
+	MetalLBPools bool
+	// MetalLBPoolNames limits discovery to these pools. Empty means every pool.
+	MetalLBPoolNames []string
+	// MetalLBMaxAddresses caps the discovered addresses. Zero means the default.
+	MetalLBMaxAddresses int
 	// ResyncInterval is the Panel/CR drift check period.
 	ResyncInterval time.Duration
 	// SFTPHostKeySecret names the Secret holding the gateway's SSH host key.
@@ -69,6 +76,8 @@ func FromEnv() (*Config, error) {
 		AdvertisedVersion: envOr("PELICAN_GW_ADVERTISED_VERSION", "1.0.0"),
 		AllowedOrigins:    splitList(os.Getenv("PELICAN_GW_ALLOWED_ORIGINS")),
 		ExternalIPs:       splitList(os.Getenv("PELICAN_GW_EXTERNAL_IPS")),
+		MetalLBPools:      os.Getenv("PELICAN_GW_METALLB_POOLS") == "true",
+		MetalLBPoolNames:  splitList(os.Getenv("PELICAN_GW_METALLB_POOL_NAMES")),
 		SFTPHostKeySecret: envOr("PELICAN_GW_SFTP_HOSTKEY_SECRET", "pelican-gateway-sftp-hostkey"),
 		SFTPKeyOnly:       os.Getenv("PELICAN_GW_SFTP_KEY_ONLY") == "true",
 		TrustedProxies:    splitList(os.Getenv("PELICAN_GW_TRUSTED_PROXIES")),
@@ -83,6 +92,13 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("PELICAN_GW_RESYNC_INTERVAL: %w", err)
 		}
 		c.ResyncInterval = d
+	}
+	if v := os.Getenv("PELICAN_GW_METALLB_MAX_ADDRESSES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("PELICAN_GW_METALLB_MAX_ADDRESSES: %w", err)
+		}
+		c.MetalLBMaxAddresses = n
 	}
 	if v := os.Getenv("PELICAN_GW_UPLOAD_LIMIT_MIB"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)

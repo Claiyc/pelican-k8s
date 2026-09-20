@@ -70,6 +70,14 @@ spec:
               value: {{ join "," .Values.gateway.allowedOrigins | quote }}
             - name: PELICAN_GW_EXTERNAL_IPS
               value: {{ join "," .Values.gateway.externalIPs | quote }}
+            {{- if .Values.gateway.metallb.discoverPools }}
+            - name: PELICAN_GW_METALLB_POOLS
+              value: "true"
+            - name: PELICAN_GW_METALLB_POOL_NAMES
+              value: {{ join "," .Values.gateway.metallb.poolNames | quote }}
+            - name: PELICAN_GW_METALLB_MAX_ADDRESSES
+              value: {{ .Values.gateway.metallb.maxAddresses | quote }}
+            {{- end }}
             - name: PELICAN_GW_RESYNC_INTERVAL
               value: {{ .Values.gateway.resyncInterval | quote }}
             - name: PELICAN_GW_UPLOAD_LIMIT_MIB
