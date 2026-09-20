@@ -19,12 +19,15 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/agentclient"
@@ -135,10 +138,15 @@ type harness struct {
 
 func newHarness(t *testing.T, objs ...client.Object) *harness {
 	t.Helper()
+	return newHarnessWith(t, interceptor.Funcs{}, objs...)
+}
+
+func newHarnessWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *harness {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(objs...).WithInterceptorFuncs(funcs).Build()
 	agent := &fakeAgent{}
 	h := &harness{t: t, c: c, agent: agent, now: time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)}
 	h.r = &GameServerReconciler{
@@ -735,3 +743,111 @@ func TestPhaseFromProcessState(t *testing.T) {
 }
 
 var _ = render.AgentPort
+
+// rejectNodePort mimics the API server refusing a NodePort outside
+// --service-node-port-range. The fake client does not validate the range.
+func rejectNodePort(port int32) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			svc, ok := obj.(*corev1.Service)
+			if !ok || svc.Spec.Type != corev1.ServiceTypeNodePort {
+				return c.Create(ctx, obj, opts...)
+			}
+			for _, p := range svc.Spec.Ports {
+				if p.NodePort == port {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Kind: "Service"}, svc.Name,
+						field.ErrorList{field.Invalid(field.NewPath("spec", "ports").Index(0).Child("nodePort"), port,
+							"provided port is not in the valid range. The range of valid ports is 30000-32767")},
+					)
+				}
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+}
+
+func outOfRangeGS() *v1alpha1.GameServer {
+	gs := newGS()
+	gs.Spec.Panel.Settings = settingsJSON(2048, 200, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+	raw := strings.ReplaceAll(string(gs.Spec.Panel.Settings.Raw), "30565", "7777")
+	gs.Spec.Panel.Settings = apiextensionsv1.JSON{Raw: []byte(raw)}
+	return gs
+}
+
+// A NodePort the API server refuses is an operator problem, not a transient
+// one: it must surface as a named condition instead of an endless retry.
+func TestNodePortOutOfRangeIsTerminal(t *testing.T) {
+	h := newHarnessWith(t, rejectNodePort(7777), outOfRangeGS(), newClass())
+	h.reconcile(3)
+	gs := h.gs()
+
+	c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionExposureReady)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "PortOutOfRange" {
+		t.Fatalf("exposure condition %+v", c)
+	}
+	if !strings.Contains(c.Message, "7777") {
+		t.Fatalf("message must name the offending port: %q", c.Message)
+	}
+	// The raw API error must not replace the explanation.
+	if strings.Contains(c.Message, "is invalid") {
+		t.Fatalf("message was overwritten by the API error: %q", c.Message)
+	}
+	if ac := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionAgentReady); ac != nil && ac.Reason == "Error" {
+		t.Fatalf("exposure problem must not be reported as an agent error: %+v", ac)
+	}
+	if gs.Status.Phase != v1alpha1.PhaseError {
+		t.Fatalf("phase = %q, want Error", gs.Status.Phase)
+	}
+	if len(gs.Status.Endpoints) != 0 {
+		t.Fatalf("unreachable server must publish no endpoints: %+v", gs.Status.Endpoints)
+	}
+	// No Service means no reachable server, so nothing should be scheduled.
+	var sts appsv1.StatefulSet
+	if h.get(&sts, names.StatefulSet(uuid)) {
+		t.Fatal("statefulset must not be created while the server is unreachable")
+	}
+}
+
+// Reconcile must stay quiet: returning the error would retry on a backoff that
+// cannot fix a Panel allocation.
+func TestNodePortOutOfRangeDoesNotError(t *testing.T) {
+	h := newHarnessWith(t, rejectNodePort(7777), outOfRangeGS(), newClass())
+	for i := 0; i < 3; i++ {
+		res, err := h.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: names.ForUUID(uuid)}})
+		if err != nil {
+			t.Fatalf("reconcile %d returned %v, want nil", i, err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("reconcile %d must keep requeueing so a widened range recovers", i)
+		}
+	}
+}
+
+// Once the allocation moves into range the condition must clear.
+func TestNodePortOutOfRangeRecovers(t *testing.T) {
+	h := newHarnessWith(t, rejectNodePort(7777), outOfRangeGS(), newClass())
+	h.reconcile(2)
+	if c := meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionExposureReady); c == nil || c.Reason != "PortOutOfRange" {
+		t.Fatalf("precondition: %+v", c)
+	}
+
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Panel.Settings = settingsJSON(2048, 200, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+		gs.Generation++
+	})
+	h.reconcile(3)
+
+	gs := h.gs()
+	c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionExposureReady)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "Ready" {
+		t.Fatalf("exposure did not recover: %+v", c)
+	}
+	var svc corev1.Service
+	if !h.get(&svc, names.ExposureService(uuid)) || svc.Spec.Ports[0].NodePort != 30565 {
+		t.Fatalf("exposure service %+v", svc.Spec)
+	}
+	if len(gs.Status.Endpoints) != 1 || gs.Status.Endpoints[0].Port != 30565 {
+		t.Fatalf("endpoints %+v", gs.Status.Endpoints)
+	}
+}
