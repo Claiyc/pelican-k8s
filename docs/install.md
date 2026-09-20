@@ -46,7 +46,7 @@ to the gateway (see `gateway.extraCA` and the OpenShift section).
 ## 3. Install the chart
 
 ```bash
-helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.0 \
+helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.1 \
   -n pelican-system --create-namespace \
   --set gateway.panelURL=https://panel.example.com \
   --set gateway.nodeTokenID=<token_id> \
@@ -221,7 +221,7 @@ spec:
   sources:
     - repoURL: https://github.com/Claiyc/pelican-k8s.git
       path: charts/pelican-k8s
-      targetRevision: v0.1.0          # a tag, or the OCI chart oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s
+      targetRevision: v0.1.1          # a tag, or the OCI chart oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s
       helm:
         releaseName: pelican-k8s
         valueFiles: [$values/pelican-k8s/values.yaml]

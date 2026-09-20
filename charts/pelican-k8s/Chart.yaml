@@ -6,8 +6,8 @@ description: |
   resources into pods, volumes and services, and the per-pod agent (Wings as
   a library) with its process shim.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.1.1
+appVersion: "0.1.1"
 kubeVersion: ">=1.33.0-0"
 keywords: [pelican, wings, game-server, operator]
 home: https://github.com/Claiyc/pelican-k8s
