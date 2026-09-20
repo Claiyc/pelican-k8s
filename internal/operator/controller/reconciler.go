@@ -384,7 +384,7 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 			}
 		}
 		if len(ips) == 0 {
-			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "Pending", "waiting for the LoadBalancer address")
+			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "Pending", pendingMessage(s))
 			s.requeue = requeueFast
 			return nil
 		}
@@ -425,6 +425,30 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// lbPendingGrace is how long a LoadBalancer may stay without an address before
+// the condition stops saying "waiting" and starts naming the likely cause.
+// Cloud load balancers routinely take a minute or two; a cluster with no
+// implementation at all waits forever, and the two look identical at first.
+const lbPendingGrace = 2 * time.Minute
+
+// pendingMessage explains an address that never arrives. "Waiting" is honest
+// for the first minutes and useless after that: the common case is a cluster
+// with no load balancer implementation, where nothing will ever assign one and
+// the reader needs to be told what to do instead.
+func pendingMessage(s *scope) string {
+	const waiting = "waiting for the LoadBalancer address"
+	c := meta.FindStatusCondition(s.gs.Status.Conditions, v1alpha1.ConditionExposureReady)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Pending" {
+		return waiting
+	}
+	if s.now.Sub(c.LastTransitionTime.Time) < lbPendingGrace {
+		return waiting
+	}
+	return "no LoadBalancer address after " + lbPendingGrace.String() +
+		"; the cluster may have no load balancer implementation. Install one (MetalLB on bare metal), " +
+		"or set the class exposure.mode to NodePort with allocation ports in 30000-32767, or to HostPort"
 }
 
 func endpointsFor(ips []string, st *settings.Settings) []v1alpha1.Endpoint {
@@ -845,7 +869,10 @@ func (r *GameServerReconciler) setCondition(s *scope, t string, status metav1.Co
 	if reason == "" {
 		reason = string(status)
 	}
-	meta.SetStatusCondition(&s.gs.Status.Conditions, metav1.Condition{Type: t, Status: status, Reason: reason, Message: msg, ObservedGeneration: s.gs.Generation})
+	// Stamp with the reconciler's clock rather than letting meta default to
+	// wall time: conditions whose age drives behaviour (see pendingMessage)
+	// must move with the same clock the rest of the reconcile uses.
+	meta.SetStatusCondition(&s.gs.Status.Conditions, metav1.Condition{Type: t, Status: status, Reason: reason, Message: msg, ObservedGeneration: s.gs.Generation, LastTransitionTime: s.now})
 }
 
 func (r *GameServerReconciler) event(s *scope, typ, reason, format string, args ...any) {
