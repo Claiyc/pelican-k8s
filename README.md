@@ -51,7 +51,7 @@ default; single-node clusters can use `NodePort`.
 **1. Deploy the Panel** (skip if you already run one; any Pelican Panel works):
 
 ```bash
-helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.0 \
+helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.1 \
   -n pelican --create-namespace \
   --set panel.url=https://panel.example.com \
   --set ingress.enabled=true --set ingress.host=panel.example.com
@@ -70,7 +70,7 @@ the node's *Configuration* tab and copy `token_id` and `token`.
 in a checkout):
 
 ```bash
-helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.0 \
+helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 0.1.1 \
   -n pelican-system --create-namespace \
   --set gateway.panelURL=https://panel.example.com \
   --set gateway.nodeTokenID=<token_id> --set gateway.nodeToken=<token> \
