@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -256,5 +259,59 @@ func TestReaperKeepsReapingWhileIdle(t *testing.T) {
 	}
 	if m := waitEvent(t, c, protocol.TypeExited, 5*time.Second); m.Exit == nil || m.Exit.Code != 7 {
 		t.Fatalf("exit after idle orphans: %+v", m.Exit)
+	}
+}
+
+func TestStragglerPIDs(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"1", "7", "42", "self", "net", "cpuinfo"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A regular file whose name is numeric must not be taken for a process.
+	if err := os.WriteFile(filepath.Join(dir, "99"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stragglerPIDs(dir, 1)
+	sort.Ints(got)
+	if len(got) != 2 || got[0] != 7 || got[1] != 42 {
+		t.Fatalf("got %v, want [7 42]", got)
+	}
+	// Excluding self is what keeps the shim from killing itself.
+	for _, p := range got {
+		if p == 1 {
+			t.Fatal("self must be excluded")
+		}
+	}
+}
+
+func TestStragglerPIDsMissingProc(t *testing.T) {
+	if got := stragglerPIDs(filepath.Join(t.TempDir(), "absent"), 1); got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+}
+
+// The sweep is guarded on the real PID, not on a flag: outside a PID namespace
+// it would kill unrelated processes on the host.
+func TestKillStragglersOnlyRunsAsPID1(t *testing.T) {
+	if os.Getpid() == 1 {
+		t.Skip("test process is PID 1")
+	}
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+
+	s := &Supervisor{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.killStragglers()
+
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("unrelated process was killed: %v", err)
 	}
 }
