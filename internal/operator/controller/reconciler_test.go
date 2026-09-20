@@ -851,3 +851,99 @@ func TestNodePortOutOfRangeRecovers(t *testing.T) {
 		t.Fatalf("endpoints %+v", gs.Status.Endpoints)
 	}
 }
+
+func TestLimitsRemoved(t *testing.T) {
+	q := func(s string) resource.Quantity { return resource.MustParse(s) }
+	both := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: q("4"), corev1.ResourceMemory: q("2Gi")}}
+	memOnly := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: q("2Gi")}}
+	none := corev1.ResourceRequirements{}
+
+	if got := limitsRemoved(memOnly, both); strings.Join(got, ",") != "cpu" {
+		t.Fatalf("dropping the cpu limit: %v", got)
+	}
+	if got := limitsRemoved(none, both); strings.Join(got, ",") != "cpu,memory" {
+		t.Fatalf("dropping both: %v", got)
+	}
+	// Keeping a limit at a different value is a resize, not a removal.
+	changed := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: q("8"), corev1.ResourceMemory: q("2Gi")}}
+	if got := limitsRemoved(changed, both); got != nil {
+		t.Fatalf("changed limits are resizable: %v", got)
+	}
+	// Adding one is not a removal either.
+	if got := limitsRemoved(both, memOnly); got != nil {
+		t.Fatalf("added limits: %v", got)
+	}
+	if got := limitsRemoved(both, both); got != nil {
+		t.Fatalf("unchanged: %v", got)
+	}
+}
+
+// Setting a Panel server to unlimited CPU drops the container limit, which the
+// resize subresource rejects unconditionally. The pod must be recreated instead
+// of retrying a request that can never succeed.
+func TestUnlimitedCPURecreatesThePod(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	if h.pod() == nil {
+		t.Fatal("precondition: pod exists")
+	}
+
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Panel.Settings = settingsJSON(2048, 0, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+	})
+	h.reconcile(1)
+
+	gs := h.gs()
+	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionResizePending); c == nil || c.Reason != "RecreateRequired" {
+		t.Fatalf("resize condition %+v", c)
+	}
+	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionRecreatePending); c == nil || c.Status != metav1.ConditionTrue || c.Reason != "ResizeNeedsRecreate" {
+		t.Fatalf("recreate condition %+v", c)
+	}
+	if h.pod() != nil {
+		t.Fatal("offline server: the pod must be recreated so the change can land")
+	}
+
+	// The fresh pod carries the new resources and settles.
+	h.createPod(true)
+	h.reconcile(2)
+	pod := h.pod()
+	if pod == nil {
+		t.Fatal("pod not recreated")
+	}
+	i := render.GameContainerIndex(&pod.Spec)
+	if _, ok := pod.Spec.Containers[i].Resources.Limits[corev1.ResourceCPU]; ok {
+		t.Fatalf("new pod still has a cpu limit: %+v", pod.Spec.Containers[i].Resources)
+	}
+	gs = h.gs()
+	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionResizePending); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("resize should have settled: %+v", c)
+	}
+	if meta.IsStatusConditionTrue(gs.Status.Conditions, v1alpha1.ConditionRecreatePending) {
+		t.Fatal("recreate should have settled")
+	}
+}
+
+// A running server is not killed to apply a resource change; the recreate waits
+// for the process to go offline like any other template change.
+func TestUnlimitedCPUWaitsForOffline(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	h.agent.state = v1alpha1.ProcessRunning
+
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Panel.Settings = settingsJSON(2048, 0, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+	})
+	h.reconcile(2)
+
+	if h.pod() == nil {
+		t.Fatal("a running server must not be killed for a resource change")
+	}
+	if !meta.IsStatusConditionTrue(h.gs().Status.Conditions, v1alpha1.ConditionRecreatePending) {
+		t.Fatal("recreate should stay pending while the process runs")
+	}
+}

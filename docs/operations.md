@@ -77,6 +77,7 @@ Upgrading the Panel is independent; re-run the compatibility checks in
 | `server pod unavailable` (503) | the game pod is not running or the agent sidecar has not started |
 | Players cannot connect | `kubectl get svc gs-<uuid>`; NodePort mode needs allocation ports in the NodePort range; check `ExposureReady` |
 | `ExposureReady=False` with `PortOutOfRange` | The API server refused the allocation port as a NodePort. Move the allocation into the range, widen `--service-node-port-range`, or switch the class to `LoadBalancer` or `HostPort`. The server stays in `Error` and gets no pod until then |
+| `ResizePending=RecreateRequired` | The Panel dropped a CPU or memory limit (set to unlimited). Kubernetes cannot remove a container limit in place, so the pod is recreated once the process is offline |
 | Server keeps restarting | Wings crash detection: `kubectl logs -c game` shows why the process exits; `detect_clean_exit_as_crash` in `agent.crashDetection` |
 
 Panel-side: `php artisan p:node:list`, `p:node:configuration <id>` (tokens), and

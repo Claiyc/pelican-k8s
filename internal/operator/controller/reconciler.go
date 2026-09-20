@@ -602,6 +602,22 @@ func ptrEq(a, b *int32) bool {
 	return *a == *b
 }
 
+// limitsRemoved names the container limits the pod carries and the desired
+// resources drop. The API server rejects removing a limit through the resize
+// subresource, so such a change is only applied by recreating the pod.
+func limitsRemoved(want, have corev1.ResourceRequirements) []string {
+	var out []string
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		if _, ok := have.Limits[name]; !ok {
+			continue
+		}
+		if _, ok := want.Limits[name]; !ok {
+			out = append(out, string(name))
+		}
+	}
+	return out
+}
+
 // reconcilePod handles recreation, in-place resize, node loss and exit relay.
 func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	pod := s.pod
@@ -646,17 +662,29 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionFalse, "NodeReady", "")
 
 	// In-place resize of the game container.
+	resizeRecreate := false
 	if i := render.GameContainerIndex(&pod.Spec); i >= 0 {
 		want := render.GameResources(s.settings.Build, s.class.Spec.Resources)
 		have := pod.Spec.Containers[i].Resources
 		if !resourcesEqual(want, have) {
-			resized := pod.DeepCopy()
-			resized.Spec.Containers[i].Resources = want
-			if err := r.SubResource("resize").Update(s.ctx, resized); err != nil {
-				r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "ResizeFailed", truncate(err.Error()))
+			// Kubernetes refuses to remove a container limit in place, so a
+			// Panel change to "unlimited" can only land on a fresh pod.
+			// Attempting the resize would fail on every reconcile forever.
+			if removed := limitsRemoved(want, have); len(removed) > 0 {
+				resizeRecreate = true
+				r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "RecreateRequired",
+					fmt.Sprintf("removing the %s limit needs a new pod; it is applied once the process is offline", strings.Join(removed, " and ")))
+				r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate",
+					"resources cannot be applied in place; the pod is recreated once the process is offline")
 			} else {
-				r.event(s, corev1.EventTypeNormal, "Resized", "applied in-place resource change")
-				r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
+				resized := pod.DeepCopy()
+				resized.Spec.Containers[i].Resources = want
+				if err := r.SubResource("resize").Update(s.ctx, resized); err != nil {
+					r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "ResizeFailed", truncate(err.Error()))
+				} else {
+					r.event(s, corev1.EventTypeNormal, "Resized", "applied in-place resource change")
+					r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
+				}
 			}
 		} else if deferred := resizeDeferred(pod); deferred != "" {
 			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, deferred, "in-place resize is pending; it is applied at the next pod recreate")
@@ -664,6 +692,7 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
 		}
 	}
+	recreate := outdated || restartRequested || resizeRecreate
 
 	// Agent readiness.
 	ready, ip := agentReady(pod)
@@ -672,7 +701,7 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 		s.requeue = requeueFast
 		// An outdated pod whose game container never started (the agent sidecar
 		// gates it) can be recreated without losing a running process.
-		if (outdated || restartRequested) && !gameContainerStarted(pod) {
+		if recreate && !gameContainerStarted(pod) {
 			r.event(s, corev1.EventTypeNormal, "Recreate", "deleting outdated pod before the game container started")
 			if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 				return err
@@ -702,7 +731,7 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	}
 
 	// Deferred recreate once the process is offline.
-	if outdated || restartRequested {
+	if recreate {
 		state, err := s.agent.GetServer(s.ctx, s.in.UUID())
 		if err != nil {
 			return err
