@@ -388,3 +388,53 @@ func TestLoadBalancerWithoutProviderAddsNoAnnotations(t *testing.T) {
 		t.Fatalf("annotations %+v", svc.Annotations)
 	}
 }
+
+// The Panel's memory_limit is a cap, not an estimate, so the default reserves
+// all of it. A class may reserve less and overcommit deliberately.
+func TestMemoryRequestPercentOfLimit(t *testing.T) {
+	base := v1alpha1.ResourcesSpec{MemoryOverheadPercent: 5, CPURequestPercentOfLimit: 25, MinCPU: resource.MustParse("100m")}
+	b := settings.Build{MemoryLimit: 8192, CPULimit: 400}
+
+	full := GameResources(b, base)
+	if got := full.Requests.Memory().Value(); got != 8192*1024*1024 {
+		t.Fatalf("default request %d, want the full limit", got)
+	}
+	if got := full.Limits.Memory().Value(); got != 8601*1024*1024 {
+		t.Fatalf("limit %d, want memory_limit plus overhead", got)
+	}
+
+	half := base
+	half.MemoryRequestPercentOfLimit = 50
+	got := GameResources(b, half)
+	if v := got.Requests.Memory().Value(); v != 4096*1024*1024 {
+		t.Fatalf("request %d, want half the limit", v)
+	}
+	// The limit is unaffected: overcommit changes what is reserved, not the cap.
+	if v := got.Limits.Memory().Value(); v != 8601*1024*1024 {
+		t.Fatalf("limit %d must not change with the request percentage", v)
+	}
+
+	// An out-of-range value falls back to reserving everything rather than
+	// silently overcommitting.
+	for _, pct := range []int32{0, -10, 200} {
+		r := base
+		r.MemoryRequestPercentOfLimit = pct
+		res := GameResources(b, r)
+		if v := res.Requests.Memory().Value(); v != 8192*1024*1024 {
+			t.Fatalf("percent %d: request %d, want the full limit", pct, v)
+		}
+	}
+}
+
+// An install Job reserving the full limit would undo the class's overcommit.
+func TestInstallResourcesFollowTheGameRequest(t *testing.T) {
+	r := v1alpha1.ResourcesSpec{MemoryOverheadPercent: 0, CPURequestPercentOfLimit: 25, MinCPU: resource.MustParse("100m"), MemoryRequestPercentOfLimit: 50}
+	i := v1alpha1.InstallJobSpec{Resources: v1alpha1.ContainerResources{CPU: resource.MustParse("1"), Memory: resource.MustParse("1Gi")}}
+	got := InstallResources(settings.Build{MemoryLimit: 8192, CPULimit: 400}, r, i)
+	if v := got.Requests.Memory().Value(); v != 4096*1024*1024 {
+		t.Fatalf("install memory request %d, want half the limit", v)
+	}
+	if got.Limits.Memory().String() != "8Gi" {
+		t.Fatalf("install memory limit %v must stay at the cap", got.Limits[corev1.ResourceMemory])
+	}
+}

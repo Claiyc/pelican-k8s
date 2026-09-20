@@ -308,6 +308,18 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
+                  memoryRequestPercentOfLimit:
+                    default: 100
+                    description: |-
+                      MemoryRequestPercentOfLimit is the memory overcommit knob. 100 reserves
+                      the Panel's memory_limit for every server, which is what the scheduler
+                      needs to guarantee it. Lower values overcommit deliberately: memory is
+                      incompressible, so a server that grows into its limit on a full node is
+                      evicted rather than throttled.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   minCpu:
                     anyOf:
                     - type: integer
