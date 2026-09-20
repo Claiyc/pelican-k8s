@@ -75,6 +75,18 @@ const (
 	uidRangeAnn = "openshift.io/sa.scc.uid-range"
 )
 
+// errExposureBlocked halts a reconcile that only an operator can unblock. The
+// condition already names the cause, so it is not returned to the controller:
+// that would bury the message under a generic AgentReady=Error and retry on an
+// exponential backoff that cannot help. The regular requeue picks the server up
+// again once the class or the allocation changes.
+var errExposureBlocked = errors.New("exposure blocked")
+
+// reasonPortOutOfRange marks allocation ports the API server refuses as
+// NodePorts. computePhase reports it as Error: without a Service no player can
+// reach the server, so it must not look healthy in the Panel.
+const reasonPortOutOfRange = "PortOutOfRange"
+
 // scope carries everything a single reconcile needs.
 type scope struct {
 	ctx      context.Context
@@ -114,7 +126,9 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	err := r.reconcile(s)
-	if err != nil {
+	if errors.Is(err, errExposureBlocked) {
+		err = nil
+	} else if err != nil {
 		logger.Error(err, "reconcile failed")
 		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Error", truncate(err.Error()))
 	}
@@ -339,14 +353,19 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		}
 		return nil
 	}
-	if s.class.Spec.Exposure.Mode == v1alpha1.ExposureNodePort {
-		for _, p := range s.settings.Ports() {
-			if p < 30000 || p > 32767 {
-				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "PortOutOfRange", fmt.Sprintf("NodePort exposure needs allocation ports in the NodePort range; %d is not (configure the API server's --service-node-port-range or use another exposure mode)", p))
+	if err := r.applyService(s, exposure); err != nil {
+		// The API server owns --service-node-port-range, so let it judge the
+		// ports and only classify the rejection here: a hardcoded range would
+		// block allocations that a widened range accepts.
+		if s.class.Spec.Exposure.Mode == v1alpha1.ExposureNodePort && apierrors.IsInvalid(err) {
+			if bad := portsOutsideDefaultNodePortRange(s.settings.Ports()); len(bad) > 0 {
+				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, reasonPortOutOfRange,
+					fmt.Sprintf("NodePort exposure needs allocation ports in the NodePort range; %s %s not (widen the API server's --service-node-port-range, move the allocation, or use LoadBalancer or HostPort exposure)",
+						joinPorts(bad), plural(len(bad), "is", "are")))
+				s.gs.Status.Endpoints = nil
+				return errExposureBlocked
 			}
 		}
-	}
-	if err := r.applyService(s, exposure); err != nil {
 		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 		return err
 	}
@@ -371,10 +390,41 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		}
 	}
 	s.gs.Status.Endpoints = endpointsFor(ips, s.settings)
-	if c := meta.FindStatusCondition(s.gs.Status.Conditions, v1alpha1.ConditionExposureReady); c == nil || c.Reason != "PortOutOfRange" {
-		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
-	}
+	r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
 	return nil
+}
+
+// defaultNodePortLow and defaultNodePortHigh are Kubernetes' default
+// --service-node-port-range. They only classify a rejection the API server has
+// already made; they never gate a Service the API server would have accepted.
+const (
+	defaultNodePortLow  = 30000
+	defaultNodePortHigh = 32767
+)
+
+func portsOutsideDefaultNodePortRange(ports []int32) []int32 {
+	var out []int32
+	for _, p := range ports {
+		if p < defaultNodePortLow || p > defaultNodePortHigh {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func joinPorts(ports []int32) string {
+	parts := make([]string, 0, len(ports))
+	for _, p := range ports {
+		parts = append(parts, strconv.Itoa(int(p)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func endpointsFor(ips []string, st *settings.Settings) []v1alpha1.Endpoint {
@@ -790,6 +840,9 @@ func computePhase(s *scope) v1alpha1.Phase {
 	gs := s.gs
 	if s.settings != nil && s.settings.Suspended {
 		return v1alpha1.PhaseSuspended
+	}
+	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionExposureReady); c != nil && c.Status == metav1.ConditionFalse && c.Reason == reasonPortOutOfRange {
+		return v1alpha1.PhaseError
 	}
 	if c := meta.FindStatusCondition(gs.Status.Conditions, v1alpha1.ConditionAgentReady); c != nil && c.Reason == "Error" {
 		return v1alpha1.PhaseError
