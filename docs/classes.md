@@ -72,6 +72,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 |---|---|---|
 | `memoryOverheadPercent` | 5 | Memory limit = Panel `memory_limit` × (1 + overhead); request = `memory_limit` |
 | `cpuRequestPercentOfLimit` | 25 | CPU request as a share of the limit (overcommit) |
+| `memoryRequestPercentOfLimit` | 100 | Share of `memory_limit` reserved. 100 guarantees it; lower overcommits (memory is incompressible, so an over-full node evicts rather than throttles) |
 | `unlimitedMemoryMiB` | 4096 | Used when `memory_limit` is 0; the agent also reports it as `SERVER_MEMORY` |
 | `unlimitedCpuPercent` | 0 | Used when `cpu_limit` is 0; 0 means no CPU limit |
 | `minCpu` | 100m | Minimum CPU request |

@@ -141,6 +141,9 @@ defaultClass:
     resources:
       memoryOverheadPercent: 5
       cpuRequestPercentOfLimit: 25
+      # Share of memory_limit reserved for the scheduler. 100 guarantees it;
+      # lower values overcommit, trading eviction risk for density.
+      memoryRequestPercentOfLimit: 100
       unlimitedMemoryMiB: 4096
       unlimitedCpuPercent: 0
       minCpu: 100m

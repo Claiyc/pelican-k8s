@@ -180,6 +180,15 @@ type ResourcesSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	CPURequestPercentOfLimit int32 `json:"cpuRequestPercentOfLimit,omitempty"`
+	// MemoryRequestPercentOfLimit is the memory overcommit knob. 100 reserves
+	// the Panel's memory_limit for every server, which is what the scheduler
+	// needs to guarantee it. Lower values overcommit deliberately: memory is
+	// incompressible, so a server that grows into its limit on a full node is
+	// evicted rather than throttled.
+	// +kubebuilder:default=100
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	MemoryRequestPercentOfLimit int32 `json:"memoryRequestPercentOfLimit,omitempty"`
 	// UnlimitedMemoryMiB is used when memory_limit is 0.
 	// +kubebuilder:default=4096
 	// +kubebuilder:validation:Minimum=1

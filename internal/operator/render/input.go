@@ -97,7 +97,17 @@ func GameResources(b settings.Build, r v1alpha1.ResourcesSpec) corev1.ResourceRe
 		overhead = 0
 	}
 	limMiB := memMiB * (100 + overhead) / 100
-	req := corev1.ResourceList{corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI)}
+	// The Panel's memory_limit is a cap, not an estimate. Reserving all of it
+	// is the safe default; a class may reserve less and overcommit on purpose.
+	reqPct := int64(r.MemoryRequestPercentOfLimit)
+	if reqPct <= 0 || reqPct > 100 {
+		reqPct = 100
+	}
+	reqMiB := memMiB * reqPct / 100
+	if reqMiB < 1 {
+		reqMiB = 1
+	}
+	req := corev1.ResourceList{corev1.ResourceMemory: *resource.NewQuantity(reqMiB*1024*1024, resource.BinarySI)}
 	lim := corev1.ResourceList{corev1.ResourceMemory: *resource.NewQuantity(limMiB*1024*1024, resource.BinarySI)}
 
 	minCPU := r.MinCPU
@@ -163,8 +173,14 @@ func InstallResources(b settings.Build, r v1alpha1.ResourcesSpec, i v1alpha1.Ins
 	if !i.Resources.Memory.IsZero() && i.Resources.Memory.Cmp(mem) > 0 {
 		mem = i.Resources.Memory
 	}
+	// The request follows the game container, so a class that overcommits
+	// memory is not undone by every install Job reserving the full limit.
+	memReq := game.Requests[corev1.ResourceMemory]
+	if memReq.Cmp(mem) > 0 {
+		memReq = mem
+	}
 	out := corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{corev1.ResourceMemory: mem},
+		Requests: corev1.ResourceList{corev1.ResourceMemory: memReq},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: mem},
 	}
 	cpuLimit, hasLimit := game.Limits[corev1.ResourceCPU]

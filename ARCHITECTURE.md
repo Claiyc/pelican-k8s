@@ -652,7 +652,8 @@ spec:
       additional: []            # e.g. [{cidr: 10.43.0.0/16, ports: [9000]}] for an in-cluster S3
   resources:
     memoryOverheadMultiplier: 1.05   # Wings docker.overhead default
-    cpuRequestPercentOfLimit: 25     # overcommit knob
+    cpuRequestPercentOfLimit: 25     # cpu overcommit knob
+    memoryRequestPercentOfLimit: 100 # memory overcommit knob; 100 reserves memory_limit
     unlimitedMemoryMiB: 4096         # used when memory_limit = 0
     unlimitedCpuPercent: 0           # used when cpu_limit = 0; 0 = no limit, request = minCpu
     minCpu: 100m
@@ -1141,7 +1142,7 @@ archives on the pod's scratch volume, which does not survive pod recreation.
 
 | Panel `build` | Wings/Docker | Kubernetes (game container) |
 |---|---|---|
-| `memory_limit` (MiB) | `MemoryReservation` = limit; `Memory` = limit × overhead | `requests.memory` = limit; `limits.memory` = limit × `memoryOverheadMultiplier`. `0` (unlimited) ⇒ class `unlimitedMemoryMiB` is used for both, and `SERVER_MEMORY` reports it |
+| `memory_limit` (MiB) | `MemoryReservation` = limit; `Memory` = limit × overhead | `requests.memory` = limit × `memoryRequestPercentOfLimit`; `limits.memory` = limit × `memoryOverheadMultiplier`. `0` (unlimited) ⇒ class `unlimitedMemoryMiB` is used for both, and `SERVER_MEMORY` reports it |
 | `cpu_limit` (%) | `CPUQuota` = % × 1000 | `limits.cpu` = %/100; `requests.cpu` = limits × `cpuRequestPercentOfLimit`, at least `minCpu`. `0` ⇒ class `unlimitedCpuPercent`; if that is also 0, no limit and request = `minCpu` |
 | `disk_space` (MiB) | soft quota | soft quota (agent) + PVC size |
 | `swap` | `MemorySwap` | **not supported** (§16) |
