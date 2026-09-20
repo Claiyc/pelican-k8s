@@ -446,6 +446,52 @@ func (s *Supervisor) reapAll() {
 	}
 }
 
+// killStragglers SIGKILLs everything left in the PID namespace. A process that
+// calls setsid leaves the child's process group, so the group kill above misses
+// it: Wine's wineserver does exactly that, and the game it hosts then survives
+// a stop, holding its ports and the WINEPREFIX lock. The next start stacks a
+// second server on top and neither makes progress.
+//
+// This is only safe as PID 1 of a PID namespace, where the namespace holds
+// nothing but the shim and what the game started. The pod does not set
+// shareProcessNamespace, so the agent and the other containers are not in it.
+// Outside a namespace this would kill unrelated processes, so the check is on
+// the real PID and not on a configuration flag.
+func (s *Supervisor) killStragglers() {
+	if os.Getpid() != 1 {
+		return
+	}
+	for _, pid := range stragglerPIDs("/proc", 1) {
+		if err := unix.Kill(pid, unix.SIGKILL); err != nil && !errors.Is(err, unix.ESRCH) {
+			s.log.Warn("could not kill straggler", "pid", pid, "error", err)
+			continue
+		}
+		s.log.Info("killed straggler that escaped the process group", "pid", pid)
+	}
+}
+
+// stragglerPIDs lists the processes in procDir other than self. The pids are
+// read from the directory names, so a process that exits meanwhile simply
+// yields ESRCH to the caller.
+func stragglerPIDs(procDir string, self int) []int {
+	entries, err := os.ReadDir(procDir)
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == self || pid <= 0 {
+			continue
+		}
+		out = append(out, pid)
+	}
+	return out
+}
+
 // waitLoop waits for the child's exit status. When a reaper is active the
 // status arrives through childExit; otherwise cmd.Wait is used directly.
 func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan struct{}) {
@@ -470,6 +516,7 @@ func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan
 	// The direct child is gone: make sure nothing of its session survives,
 	// which is what a container teardown would do, then release the PTY.
 	_ = unix.Kill(-pid, unix.SIGKILL)
+	s.killStragglers()
 	// Give the output reader a moment to drain what is still buffered.
 	time.Sleep(50 * time.Millisecond)
 	_ = ptmx.Close()
