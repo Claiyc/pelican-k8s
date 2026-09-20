@@ -70,14 +70,57 @@ type StorageSpec struct {
 	SnapshotRetain int32 `json:"snapshotRetain,omitempty"`
 }
 
+// LoadBalancerProvider names a load balancer implementation whose annotation
+// keys are known, so a class does not have to spell them out. A wrong key is
+// silently ignored by the provider, which is hard to notice.
+// +kubebuilder:validation:Enum="";metallb
+type LoadBalancerProvider string
+
+const (
+	// LoadBalancerMetalLB fills in the MetalLB annotation keys.
+	LoadBalancerMetalLB LoadBalancerProvider = "metallb"
+)
+
 // LoadBalancerSpec carries implementation specific annotation keys.
 type LoadBalancerSpec struct {
+	// Provider supplies the annotation keys of a known implementation.
+	// "metallb" means metallb.io/loadBalancerIPs and metallb.io/allow-shared-ip.
+	// An explicit ipAnnotation or sharingAnnotation always wins.
+	Provider LoadBalancerProvider `json:"provider,omitempty"`
 	// IPAnnotation pins the Service to the allocation IP (e.g. metallb.io/loadBalancerIPs).
 	IPAnnotation string `json:"ipAnnotation,omitempty"`
 	// SharingAnnotation lets several Services share one IP (e.g. metallb.io/allow-shared-ip).
 	SharingAnnotation string `json:"sharingAnnotation,omitempty"`
 	// Annotations are added verbatim to every exposure Service.
 	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// MetalLB annotation keys.
+const (
+	MetalLBIPAnnotation      = "metallb.io/loadBalancerIPs"
+	MetalLBSharingAnnotation = "metallb.io/allow-shared-ip"
+)
+
+// IPKey returns the annotation that pins a Service to an address.
+func (l LoadBalancerSpec) IPKey() string {
+	if l.IPAnnotation != "" {
+		return l.IPAnnotation
+	}
+	if l.Provider == LoadBalancerMetalLB {
+		return MetalLBIPAnnotation
+	}
+	return ""
+}
+
+// SharingKey returns the annotation that lets Services share an address.
+func (l LoadBalancerSpec) SharingKey() string {
+	if l.SharingAnnotation != "" {
+		return l.SharingAnnotation
+	}
+	if l.Provider == LoadBalancerMetalLB {
+		return MetalLBSharingAnnotation
+	}
+	return ""
 }
 
 // ExposureSpec configures how game ports reach players.

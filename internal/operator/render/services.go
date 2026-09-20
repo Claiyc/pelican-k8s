@@ -36,11 +36,11 @@ func ExposureService(in *Input) *corev1.Service {
 		svc.Spec.Type = corev1.ServiceTypeNodePort
 	default:
 		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
-		if ex.LoadBalancer.IPAnnotation != "" {
-			svc.Annotations[ex.LoadBalancer.IPAnnotation] = in.Settings.Allocations.Default.IP
+		if k := ex.LoadBalancer.IPKey(); k != "" {
+			svc.Annotations[k] = in.Settings.Allocations.Default.IP
 		}
-		if ex.LoadBalancer.SharingAnnotation != "" {
-			svc.Annotations[ex.LoadBalancer.SharingAnnotation] = "pelican-" + in.Settings.Allocations.Default.IP
+		if k := ex.LoadBalancer.SharingKey(); k != "" {
+			svc.Annotations[k] = "pelican-" + in.Settings.Allocations.Default.IP
 		}
 	}
 	if len(svc.Annotations) == 0 {

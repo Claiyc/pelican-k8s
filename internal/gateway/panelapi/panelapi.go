@@ -44,6 +44,15 @@ type Handler struct {
 	Diagnostics func(ctx context.Context) string
 	// ClusterVersion is shown in /api/system.
 	ClusterVersion string
+	// Pools offers the addresses a load balancer can assign, so the Panel's
+	// allocation form does not invite IPs that will never be announced. Nil
+	// disables discovery.
+	Pools AddressPools
+}
+
+// AddressPools reports the addresses a load balancer is configured to hand out.
+type AddressPools interface {
+	Addresses(ctx context.Context) []string
 }
 
 // Routes returns the HTTP handler.
@@ -214,6 +223,9 @@ func (h *Handler) systemIPs(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			ips = cls.Spec.Exposure.ExternalIPs
 		}
+	}
+	if len(ips) == 0 && h.Pools != nil {
+		ips = h.Pools.Addresses(r.Context())
 	}
 	if len(ips) == 0 {
 		nodes := &corev1.NodeList{}
