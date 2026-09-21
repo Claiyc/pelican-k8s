@@ -48,11 +48,16 @@ jobs:
           script: |
             const title = 'Contract suite fails against the latest Pelican Panel image';
             const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // The suite records the step it died in. Only the steps that assert
+            // on the Panel protocol can mean the Panel changed; anything before
+            // them (cluster, images, Panel or chart install) is a local problem.
+            const phase = process.env.SUITE_PHASE || 'unknown';
+            const where = `It failed in: \`${phase}\`.`;
             const {data: issues} = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'upstream'});
             const existing = issues.find(i => i.title === title);
             if (existing) {
-              await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body: `Still failing: ${url}`});
+              await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body: `Still failing: ${url}\n\n${where}`});
             } else {
               await github.rest.issues.create({...context.repo, title, labels: ['upstream'],
-                body: `The nightly contract run against ghcr.io/pelican/panel:latest failed: ${url}\n\nCompare docs/wings-panel-contract.md with the new Panel version and fix the gateway or agent.`});
+                body: `The nightly contract run against ghcr.io/pelican/panel:latest failed: ${url}\n\n${where}\n\nIf the step reached the Panel protocol, compare docs/wings-panel-contract.md with the new Panel version and fix the gateway or agent. If it failed before that, start with the diagnostics at the end of the log (pods, Services and endpoints): a run that never reached an assertion says nothing about upstream.`});
             }
