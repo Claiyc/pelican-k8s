@@ -18,19 +18,32 @@ PANEL_IMAGE=${PANEL_IMAGE:-}
 GAME_IMAGE=${GAME_IMAGE:-ghcr.io/pelican-eggs/yolks:java_25}
 EGG_URL=${EGG_URL:-https://raw.githubusercontent.com/pelican-eggs/minecraft/main/java/paper/egg-paper.yaml}
 KIND=${KIND:-kind}
+# The address the Panel is told to reach the node on, i.e. the gateway Service.
+GW_FQDN=${GW_FQDN:-pelican-k8s-gateway.pelican-system.svc}
+GW_PORT=${GW_PORT:-8080}
+GW_SFTP_ALIAS=${GW_SFTP_ALIAS:-pelican-k8s-gateway-sftp.pelican-system.svc}
 KUBECTL_BIN=${KUBECTL:-kubectl}   # e.g. KUBECTL=oc on machines without kubectl
 export KUBECONFIG=${KUBECONFIG:-$HOME/.kube/kind-$CLUSTER}
 kubectl() { command "$KUBECTL_BIN" "$@"; }
 
-log() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
+PHASE=
+log() { PHASE=$*; printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 panel() { kubectl -n pelican exec deploy/pelican-panel -- php artisan "$@"; }
 tinker() { kubectl -n pelican exec deploy/pelican-panel -- php artisan tinker --execute="$1" 2>&1 | tail -n "${2:-1}"; }
 # The Panel's view of the server state, asked from the gateway (an enum on current Panels, a string on older ones).
 panel_status() { tinker '$x = App\Models\Server::find(1)->retrieveStatus(); echo $x instanceof BackedEnum ? $x->value : $x, PHP_EOL;' || true; }
 cleanup() {
   local rc=$?
+  local phase=${PHASE:-startup}
   if [ $rc -ne 0 ]; then
-    log "FAILED (rc=$rc): diagnostics"
+    # The step name reaches the nightly drift issue: a failure before the first
+    # Panel -> gateway assertion is a cluster problem, not a contract change.
+    [ -n "${GITHUB_ENV:-}" ] && echo "SUITE_PHASE=$phase" >> "$GITHUB_ENV" || true
+    log "FAILED in \"$phase\" (rc=$rc): diagnostics"
+    # Pods, Services and endpoints first: a Panel call that fails to connect at
+    # all is answered here, not by the route table.
+    kubectl -n pelican-system get pods,svc,endpointslices -o wide 2>/dev/null || true
+    kubectl -n pelican get pods -o wide 2>/dev/null || true
     kubectl get gameservers -A -o yaml 2>/dev/null | sed -n '1,200p' || true
     kubectl -n pelican-servers get pods,jobs 2>/dev/null || true
     kubectl -n pelican-system logs deploy/pelican-k8s-gateway --tail=80 2>/dev/null || true
@@ -67,9 +80,9 @@ ADMIN_PW=contract-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
 panel p:user:make --admin=1 --email=contract@example.com --username=admin --password="$ADMIN_PW" --no-interaction >/dev/null
 tinker '$s = app(App\Services\Eggs\Sharing\EggImporterService::class); $e = $s->fromUrl("'"$EGG_URL"'"); echo "egg ", $e->id, " ", $e->name, PHP_EOL;'
 NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-panel p:node:make --name=k8s --description=contract --fqdn=pelican-k8s-gateway.pelican-system.svc --public=1 --scheme=http --proxy=0 --maintenance=0 \
+panel p:node:make --name=k8s --description=contract --fqdn="$GW_FQDN" --public=1 --scheme=http --proxy=0 --maintenance=0 \
   --maxMemory=16384 --overallocateMemory=0 --maxDisk=100000 --overallocateDisk=0 --maxCpu=800 --overallocateCpu=0 --uploadSize=100 \
-  --daemonListeningPort=8080 --daemonConnectingPort=8080 --daemonSFTPPort=2022 --daemonSFTPAlias=pelican-k8s-gateway-sftp.pelican-system.svc \
+  --daemonListeningPort="$GW_PORT" --daemonConnectingPort="$GW_PORT" --daemonSFTPPort=2022 --daemonSFTPAlias="$GW_SFTP_ALIAS" \
   --daemonBase=/var/lib/pelican/volumes --no-interaction >/dev/null
 TOKEN_ID=$(panel p:node:configuration 1 2>/dev/null | awk '/^token_id:/ {print $2}')
 TOKEN=$(panel p:node:configuration 1 2>/dev/null | awk '/^token:/ {print $2}')
@@ -88,9 +101,23 @@ kubectl -n pelican-system rollout status deploy/pelican-k8s-gateway --timeout=3m
 kubectl -n pelican-system rollout status deploy/pelican-k8s-operator --timeout=3m
 
 log "Panel -> gateway: node system information"
+# A rolled-out Deployment is not yet an endpoint kube-proxy has programmed, so
+# the Panel's first call can be refused a second after `rollout status` returns.
+# That is cluster plumbing, but it reaches the Panel as a connection error and
+# reads exactly like a contract change, so wait for the path the Panel actually
+# uses - its own pod's DNS, the Service, the gateway - before asking it.
+for i in $(seq 1 30); do
+  kubectl -n pelican exec deploy/pelican-panel -- curl -sf -o /dev/null --max-time 5 "http://$GW_FQDN:$GW_PORT/healthz" && break
+  [ "$i" = 30 ] && { echo "the gateway is not reachable from the Panel pod at $GW_FQDN:$GW_PORT"; exit 1; }
+  sleep 2
+done
 panel cache:clear >/dev/null
 INFO=$(tinker 'echo json_encode(App\Models\Node::find(1)->systemInformation()), PHP_EOL;')
-echo "$INFO"; echo "$INFO" | grep -q '"version"'; echo "$INFO" | grep -q exception && { echo "node exception"; exit 1; } || true
+echo "$INFO"
+# systemInformation() returns the daemon's payload, or {"exception": "..."} for
+# anything it could not do; report which of the two failed.
+if echo "$INFO" | grep -q exception; then echo "the Panel could not read the node, see the exception above"; exit 1; fi
+echo "$INFO" | grep -q '"version"' || { echo "no version in the node system information: the Panel and the gateway disagree about /api/system"; exit 1; }
 
 log "create a server through the Panel (start on completion)"
 UUID=$(tinker '$a = App\Models\Allocation::whereNull("server_id")->orderBy("port")->first(); $s = app(App\Services\Servers\ServerCreationService::class)->handle(["name" => "contract", "owner_id" => 1, "egg_id" => 1, "allocation_id" => $a->id, "memory" => 1536, "disk" => 4096, "cpu" => 200, "swap" => 0, "io" => 500, "oom_killer" => true, "image" => "'"$GAME_IMAGE"'", "environment" => ["MINECRAFT_VERSION" => "latest", "SERVER_JARFILE" => "server.jar", "BUILD_NUMBER" => "latest"], "start_on_completion" => true, "skip_scripts" => false]); echo $s->uuid;')

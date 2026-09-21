@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The nightly contract run no longer files cluster plumbing as Panel drift. The suite asked the Panel for the node's system information about a second after `kubectl rollout status` returned, and a Deployment that has rolled out is not yet an endpoint kube-proxy has programmed, so the Panel's very first call could be refused at the TCP layer. The assertion that the payload carries a `version` then aborted the script without printing anything, the diagnostics showed a healthy gateway and no pods, Services or endpoints, and the workflow opened an `upstream` issue telling the reader to compare the contract document against a Panel version the run had never spoken a word of protocol to. The suite now waits for the gateway to answer `/healthz` from inside the Panel pod - the same DNS and Service path the Panel's own HTTP client takes - before it asks the Panel anything, distinguishes an exception from a missing `version`, dumps the pods, Services and endpoints of both namespaces on failure, and records the step it died in so the nightly issue names it instead of assuming upstream.
+
 ## [0.1.1] - 2026-09-20
 
 ### Added
