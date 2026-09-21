@@ -17,6 +17,13 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly, day: monday}
+    groups:
+      # Every step of the CodeQL Action must come from one release: `analyze`
+      # refuses a configuration file written by a different version of `init`.
+      # Dependabot treats each path as its own dependency, so without this they
+      # arrive as separate pull requests, each of which fails on its own.
+      codeql-action:
+        patterns: ["github/codeql-action*"]
   - package-ecosystem: docker
     directories: ["/build"]
     schedule: {interval: weekly, day: monday}
