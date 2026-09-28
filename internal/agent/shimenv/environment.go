@@ -312,6 +312,14 @@ func (e *Environment) Start(ctx context.Context) error {
 	st, err := c.Status(ctx)
 	if isConnError(err) {
 		// The container restarted under us: wait for the new shim and retry once.
+		// Close the dead client and wait until it is marked done first, or
+		// waitClient may hand it straight back before its reader sees EOF.
+		_ = c.Close()
+		select {
+		case <-c.Done():
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		if c, err = e.waitClient(ctx); err != nil {
 			return err
 		}
