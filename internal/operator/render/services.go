@@ -75,6 +75,9 @@ func AgentService(in *Input) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: in.Meta(names.AgentService(in.UUID()), "agent"),
 		Spec: corev1.ServiceSpec{
+			// The API server's default, set anyway: the reconciler compares
+			// the type against the stored Service, which always carries one.
+			Type:                     corev1.ServiceTypeClusterIP,
 			ClusterIP:                corev1.ClusterIPNone,
 			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: "game"},
 			PublishNotReadyAddresses: true,

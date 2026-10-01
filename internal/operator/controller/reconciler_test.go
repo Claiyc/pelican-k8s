@@ -1036,3 +1036,40 @@ func TestLoadBalancerReadyWhenAddressArrives(t *testing.T) {
 		t.Fatalf("endpoints should come from the LoadBalancer ingress: %+v", gs.Status.Endpoints)
 	}
 }
+
+// apiServerServices mimics the API server storing an untyped Service as
+// ClusterIP. The fake client does not default the type. Service deletes are
+// counted so a test can tell a patch from a recreate.
+func apiServerServices(deletes *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if svc, ok := obj.(*corev1.Service); ok && svc.Spec.Type == "" {
+				svc.Spec.Type = corev1.ServiceTypeClusterIP
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				*deletes++
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}
+}
+
+// The API server stores the agent Service as ClusterIP. Reconciling an
+// unchanged server must patch its Services in place, not read that default as
+// a type change and recreate them.
+func TestServicesSurviveAPIServerDefaulting(t *testing.T) {
+	deletes := 0
+	h := newHarnessWith(t, apiServerServices(&deletes), newGS(), lbClass())
+	h.reconcile(5)
+
+	if deletes != 0 {
+		t.Fatalf("%d Service deletes across reconciles of an unchanged server, want 0", deletes)
+	}
+	var svc corev1.Service
+	if !h.get(&svc, names.AgentService(uuid)) || svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("agent service %+v", svc.Spec)
+	}
+}

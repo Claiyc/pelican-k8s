@@ -248,7 +248,7 @@ func TestServices(t *testing.T) {
 		t.Fatal("servers without allocation get no exposure service")
 	}
 	agent := AgentService(in)
-	if agent.Spec.ClusterIP != "None" || len(agent.Spec.Ports) != 2 || agent.Spec.Ports[1].Port != 2022 {
+	if agent.Spec.Type != corev1.ServiceTypeClusterIP || agent.Spec.ClusterIP != "None" || len(agent.Spec.Ports) != 2 || agent.Spec.Ports[1].Port != 2022 {
 		t.Fatalf("agent service %+v", agent.Spec)
 	}
 }
