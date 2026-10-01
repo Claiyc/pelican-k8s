@@ -852,6 +852,35 @@ func TestNodePortOutOfRangeRecovers(t *testing.T) {
 	}
 }
 
+// The API server stores an untyped Service as ClusterIP. applyService must
+// read that default as no type change, not delete and recreate the Service on
+// every reconcile.
+func TestApplyServiceUntypedMatchesClusterIP(t *testing.T) {
+	stored := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "untyped"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone},
+	}
+	h := newHarness(t, newGS(), newClass(), stored)
+	s := &scope{ctx: context.Background(), gs: h.gs(), requeue: requeueSlow}
+	desired := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "untyped"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Ports:     []corev1.ServicePort{{Name: "agent", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	if err := h.r.applyService(s, desired); err != nil {
+		t.Fatal(err)
+	}
+	var svc corev1.Service
+	if !h.get(&svc, "untyped") {
+		t.Fatal("untyped service was deleted")
+	}
+	if s.requeue != requeueSlow || len(svc.Spec.Ports) != 1 {
+		t.Fatalf("service not patched in place: requeue %v, spec %+v", s.requeue, svc.Spec)
+	}
+}
+
 func TestLimitsRemoved(t *testing.T) {
 	q := func(s string) resource.Quantity { return resource.MustParse(s) }
 	both := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: q("4"), corev1.ResourceMemory: q("2Gi")}}
