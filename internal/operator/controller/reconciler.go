@@ -477,7 +477,7 @@ func (r *GameServerReconciler) applyService(s *scope, desired *corev1.Service) e
 	if err != nil {
 		return err
 	}
-	if existing.Spec.Type != desired.Spec.Type {
+	if serviceType(existing) != serviceType(desired) {
 		// Type changes (class edit) are simplest through recreation.
 		if err := r.Delete(s.ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return err
@@ -491,10 +491,19 @@ func (r *GameServerReconciler) applyService(s *scope, desired *corev1.Service) e
 	existing.Spec.Ports = desired.Spec.Ports
 	existing.Spec.Selector = desired.Spec.Selector
 	existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
-	if desired.Spec.Type != corev1.ServiceTypeClusterIP && desired.Spec.ClusterIP != corev1.ClusterIPNone {
+	if serviceType(desired) != corev1.ServiceTypeClusterIP && desired.Spec.ClusterIP != corev1.ClusterIPNone {
 		existing.Spec.ExternalTrafficPolicy = desired.Spec.ExternalTrafficPolicy
 	}
 	return r.Patch(s.ctx, existing, patch)
+}
+
+// serviceType applies the API server's ClusterIP default, so a rendered Service
+// that leaves the type unset matches the stored one.
+func serviceType(svc *corev1.Service) corev1.ServiceType {
+	if svc.Spec.Type == "" {
+		return corev1.ServiceTypeClusterIP
+	}
+	return svc.Spec.Type
 }
 
 func (r *GameServerReconciler) ensureNetworkPolicy(s *scope) error {
