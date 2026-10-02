@@ -1397,8 +1397,9 @@ pelican-k8s/
     cache and diffs the registered routes against the gateway's intercept list and prefix proxy, and
     the remote client's calls against the gateway's remote-API table (§5.7). An unknown route or call
     fails CI.
-  - Renovate keeps the Wings module and the Panel image current; every bump runs the contract suite
-    against a real Panel container.
+  - The nightly upstream-drift workflow tests against the tip of the Wings hooks branch and opens an
+    issue when a new Panel release appears; the Wings pin and the Panel `appVersion` are bumped by
+    hand, and every bump runs the contract suite against a real Panel container.
   - In production, proxied `404`s and blocked remote-API calls are logged and counted so they surface
     in staging.
 

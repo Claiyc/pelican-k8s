@@ -8,9 +8,32 @@ permissions:
   contents: read
 
 jobs:
+  # The OCI chart is versioned from the tag, but a chart installed from a
+  # checkout or a git tag (the Argo CD example) takes its version and image tag
+  # from Chart.yaml. Refuse a tag the tree was not prepared for, before anything
+  # is pushed.
+  verify:
+    name: Verify the tree matches the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Chart version, appVersion and CHANGELOG section
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          v="${VERSION#v}"
+          chart=$(sed -n 's/^version:[[:space:]]*//p' charts/pelican-k8s/Chart.yaml | tr -d '"')
+          app=$(sed -n 's/^appVersion:[[:space:]]*//p' charts/pelican-k8s/Chart.yaml | tr -d '"')
+          ok=1
+          [ "$chart" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::version is $chart, tag is $v"; ok=0; }
+          [ "$app" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::appVersion is $app, tag is $v"; ok=0; }
+          grep -qF "## [$v]" CHANGELOG.md || { echo "::error file=CHANGELOG.md::no '## [$v]' section"; ok=0; }
+          [ "$ok" = 1 ]
+
   images:
     name: Release images
     runs-on: ubuntu-latest
+    needs: [verify]
     permissions:
       contents: read
       packages: write

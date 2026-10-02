@@ -6,10 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-02
+
+Republishes 1.0.0 with a tree that matches its tag. The images and the OCI chart of 1.0.0 were correct; anything installed from a checkout or the `v1.0.0` git tag was not.
+
 ### Fixed
+- A chart installed from a checkout or a git tag now runs the images of its own release. `v1.0.0` was tagged with `charts/pelican-k8s/Chart.yaml` still at `0.1.1`. The OCI chart is versioned from the tag by the release workflow and was right, but the Argo CD example (`path: charts/pelican-k8s` at the `v1.0.0` tag) and `helm install charts/pelican-k8s` take `image.tag` from the chart's `appVersion`, so they deployed the 0.1.1 images under a 1.0.0 label. The release workflow now verifies before pushing anything that the tag matches the chart's `version` and `appVersion` and that CHANGELOG.md has a section for it, and `test/docs` checks the same invariants, plus the chart versions stated in the chart READMEs and the Panel guide, on every pull request.
+- The release notes carry the changelog again. The release workflow takes them from the CHANGELOG section of the tag, and 1.0.0 had none, so its notes read only "See CHANGELOG.md."; the 1.0.0 section below has been written up after the fact.
+- The `pelican-panel` chart is `0.1.2`, unchanged in content. The release workflow pushes it on every tag at the version in its `Chart.yaml`, and 1.0.0 pushed `0.1.1` again over the published artifact.
+- The install commands in README.md and docs/install.md, and the Argo CD example, pin this release; the `pelican-panel` README stated chart version `0.1.0`; ARCHITECTURE.md still credited Renovate with keeping Wings and the Panel current.
+
+## [1.0.0] - 2026-10-01
+
+### Changed
+- A `LoadBalancer` address that never arrives is explained. `ExposureReady` said "waiting for the LoadBalancer address" indefinitely, which is honest during normal provisioning and useless on a cluster with no load balancer implementation at all (kind, bare kubeadm, single-node OpenShift), where nothing will ever assign one. After a two-minute grace period the condition names that likely cause and the ways out: install an implementation such as MetalLB, or move the class to `NodePort` (allocation ports in the NodePort range) or `HostPort`. docs/install.md now asks for the exposure mode before the first server is created, since nearly every game's default port is below the NodePort range, and docs/operations.md lists the condition.
+
+### Fixed
+- The operator no longer deletes and recreates the agent Service on every reconcile. The API server stores a Service rendered without a `type` as `ClusterIP`, and `applyService` read that default as a type change, which it handles by deleting the Service. The agent Service now renders its type explicitly, and the comparison applies the default on both sides so any Service rendered without a type is patched in place.
 - The CodeQL steps are bumped together. Every step of the CodeQL Action reads the configuration the `init` step wrote and refuses one from another release (`Loaded a configuration file for version '4.38.0', but running version '4.38.1'`), but Dependabot treats `github/codeql-action/init`, `/analyze` and `/upload-sarif` as three dependencies and opens a pull request for each, so a release arrives as up to three changes that each fail on their own and only pass once all of them have landed. `init` and `analyze` are back in step, and a Dependabot group keeps all of the paths in one pull request from now on.
 - The nightly contract run no longer files cluster plumbing as Panel drift. The suite asked the Panel for the node's system information about a second after `kubectl rollout status` returned, and a Deployment that has rolled out is not yet an endpoint kube-proxy has programmed, so the Panel's very first call could be refused at the TCP layer. The assertion that the payload carries a `version` then aborted the script without printing anything, the diagnostics showed a healthy gateway and no pods, Services or endpoints, and the workflow opened an `upstream` issue telling the reader to compare the contract document against a Panel version the run had never spoken a word of protocol to. The suite now waits for the gateway to answer `/healthz` from inside the Panel pod - the same DNS and Service path the Panel's own HTTP client takes - before it asks the Panel anything, distinguishes an exception from a missing `version`, dumps the pods, Services and endpoints of both namespaces on failure, and records the step it died in so the nightly issue names it instead of assuming upstream.
-
 - A crash restart that races the game container's own restart no longer fails with `broken pipe`. When the old shim died, its exit event could put the server offline before the agent had noticed the dead connection, so Wings' crash handler called `Start` on it. `Start` retried once on a connection error, but the dead client was not marked done until its reader saw EOF, so the retry could be handed the same connection and fail again. `Start` now closes the dead client and waits for it to be done before it waits for the new shim.
 
 ## [0.1.1] - 2026-09-20
@@ -64,6 +79,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v0.1.1...v1.0.0
 [0.1.1]: https://github.com/Claiyc/pelican-k8s/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Claiyc/pelican-k8s/releases/tag/v0.1.0
