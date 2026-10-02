@@ -142,3 +142,90 @@ func TestExampleRevisionsMatchTheChart(t *testing.T) {
 		t.Skip("no targetRevision examples in the docs")
 	}
 }
+
+// TestChartAppVersionIsTheRelease covers installs from a checkout or a git tag:
+// those take image.tag from appVersion, so an appVersion left behind deploys
+// the previous release's images under the new tag.
+func TestChartAppVersionIsTheRelease(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot, "charts", "pelican-k8s", "Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		Version    string `yaml:"version"`
+		AppVersion string `yaml:"appVersion"`
+	}
+	if err := yaml.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.AppVersion != c.Version {
+		t.Errorf("charts/pelican-k8s/Chart.yaml: appVersion %q differs from version %q; the images are released at the chart version",
+			c.AppVersion, c.Version)
+	}
+}
+
+// TestChangelogHasTheRelease fails when the chart version has no CHANGELOG
+// section: the release workflow takes the release notes from it.
+func TestChangelogHasTheRelease(t *testing.T) {
+	want, ok := chartVersions(t)["pelican-k8s"]
+	if !ok {
+		t.Fatal("charts/pelican-k8s not found")
+	}
+	b, err := os.ReadFile(filepath.Join(repoRoot, "CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\n## ["+want+"]") {
+		t.Errorf("CHANGELOG.md has no \"## [%s]\" section for the version charts/pelican-k8s/Chart.yaml releases", want)
+	}
+	if !strings.Contains(string(b), "\n["+want+"]: ") {
+		t.Errorf("CHANGELOG.md has no [%s] link reference", want)
+	}
+}
+
+// TestChartReadmesStateTheChartVersion covers the version tables in the chart
+// READMEs and the Panel guide, which are not install commands.
+func TestChartReadmesStateTheChartVersion(t *testing.T) {
+	versions := chartVersions(t)
+	stated := regexp.MustCompile("Chart version \\| `([^`]+)`|name ([a-z0-9-]+), version (\\S+),")
+	files := []string{"docs/panel.md"}
+	m, err := filepath.Glob(filepath.Join(repoRoot, "charts", "*", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range m {
+		rel, _ := filepath.Rel(repoRoot, f)
+		files = append(files, rel)
+	}
+	checked := 0
+	for _, f := range files {
+		b, err := os.ReadFile(filepath.Join(repoRoot, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			s := stated.FindStringSubmatch(line)
+			if s == nil {
+				continue
+			}
+			chart, documented := s[2], s[3]
+			if s[1] != "" {
+				// A chart README states its own version.
+				chart, documented = filepath.Base(filepath.Dir(f)), s[1]
+			}
+			want, known := versions[chart]
+			if !known {
+				t.Errorf("%s:%d: states a version for chart %q, which is not in charts/", f, i+1, chart)
+				continue
+			}
+			checked++
+			if documented != want {
+				t.Errorf("%s:%d: states %s version %s, but charts/%s/Chart.yaml releases %s",
+					f, i+1, chart, documented, chart, want)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no stated chart versions found; the matcher is broken")
+	}
+}

@@ -5,7 +5,7 @@ image `ghcr.io/pelican/panel`.
 
 | | |
 |---|---|
-| Chart version | `0.1.0` |
+| Chart version | `0.1.2` |
 | Default app version | `v1.0.0-beta38` |
 | Kubernetes | `>= 1.22` (needs the `net.ipv4.ip_unprivileged_port_start` safe sysctl) |
 | Helm | `>= 3.9` |
