@@ -16,7 +16,11 @@ KIND_IMAGE=${KIND_IMAGE:-kindest/node:v1.36.4}
 TAG=${TAG:-contract}
 PANEL_IMAGE=${PANEL_IMAGE:-}
 GAME_IMAGE=${GAME_IMAGE:-ghcr.io/pelican-eggs/yolks:java_25}
-EGG_URL=${EGG_URL:-https://raw.githubusercontent.com/pelican-eggs/minecraft/main/java/paper/egg-paper.yaml}
+# Pinned: the egg is test input, not the contract. Tracking main let an egg
+# change (a new required variable) fail the nightly run as Panel drift (#50).
+EGG_URL=${EGG_URL:-https://raw.githubusercontent.com/pelican-eggs/minecraft/9c122fd010ebb003d1990c0e9adbc96ccd6a9b2e/java/paper/egg-paper.yaml}
+# The Paper egg's installer refuses to run without one (PaperMC downloads API policy).
+EGG_USER_AGENT=${EGG_USER_AGENT:-pelican-k8s-contract (https://github.com/Claiyc/pelican-k8s)}
 KIND=${KIND:-kind}
 # The address the Panel is told to reach the node on, i.e. the gateway Service.
 GW_FQDN=${GW_FQDN:-pelican-k8s-gateway.pelican-system.svc}
@@ -29,7 +33,16 @@ kubectl() { command "$KUBECTL_BIN" "$@"; }
 PHASE=
 log() { PHASE=$*; printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 panel() { kubectl -n pelican exec deploy/pelican-panel -- php artisan "$@"; }
-tinker() { kubectl -n pelican exec deploy/pelican-panel -- php artisan tinker --execute="$1" 2>&1 | tail -n "${2:-1}"; }
+# Prints the last line(s) of the output; on failure the whole output goes to
+# stderr, since a caller like UUID=$(tinker ...) would otherwise swallow the exception.
+tinker() {
+  local out
+  if ! out=$(kubectl -n pelican exec deploy/pelican-panel -- php artisan tinker --execute="$1" 2>&1); then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  printf '%s\n' "$out" | tail -n "${2:-1}"
+}
 # The Panel's view of the server state, asked from the gateway (an enum on current Panels, a string on older ones).
 panel_status() { tinker '$x = App\Models\Server::find(1)->retrieveStatus(); echo $x instanceof BackedEnum ? $x->value : $x, PHP_EOL;' || true; }
 cleanup() {
@@ -120,7 +133,7 @@ if echo "$INFO" | grep -q exception; then echo "the Panel could not read the nod
 echo "$INFO" | grep -q '"version"' || { echo "no version in the node system information: the Panel and the gateway disagree about /api/system"; exit 1; }
 
 log "create a server through the Panel (start on completion)"
-UUID=$(tinker '$a = App\Models\Allocation::whereNull("server_id")->orderBy("port")->first(); $s = app(App\Services\Servers\ServerCreationService::class)->handle(["name" => "contract", "owner_id" => 1, "egg_id" => 1, "allocation_id" => $a->id, "memory" => 1536, "disk" => 4096, "cpu" => 200, "swap" => 0, "io" => 500, "oom_killer" => true, "image" => "'"$GAME_IMAGE"'", "environment" => ["MINECRAFT_VERSION" => "latest", "SERVER_JARFILE" => "server.jar", "BUILD_NUMBER" => "latest"], "start_on_completion" => true, "skip_scripts" => false]); echo $s->uuid;')
+UUID=$(tinker '$a = App\Models\Allocation::whereNull("server_id")->orderBy("port")->first(); $s = app(App\Services\Servers\ServerCreationService::class)->handle(["name" => "contract", "owner_id" => 1, "egg_id" => 1, "allocation_id" => $a->id, "memory" => 1536, "disk" => 4096, "cpu" => 200, "swap" => 0, "io" => 500, "oom_killer" => true, "image" => "'"$GAME_IMAGE"'", "environment" => ["MINECRAFT_VERSION" => "latest", "SERVER_JARFILE" => "server.jar", "BUILD_NUMBER" => "latest", "USER_AGENT" => "'"$EGG_USER_AGENT"'"], "start_on_completion" => true, "skip_scripts" => false]); echo $s->uuid;')
 echo "server uuid $UUID"; [ ${#UUID} -eq 36 ]
 for i in $(seq 1 90); do
   r=$(kubectl -n pelican-servers get gameserver "gs-$UUID" -o jsonpath='{.status.phase}/{.status.install.result}/{.status.process.state}' 2>/dev/null || true)

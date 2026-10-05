@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The contract suite (`hack/e2e-kind.sh`) creates its Paper server again (#50). The Paper egg, imported from `pelican-eggs/minecraft` `main`, gained a required `USER_AGENT` variable for the PaperMC downloads API, so the Panel's variable validation rejected the server before it ever reached the gateway, and the nightly run reported it as Panel drift. The suite now imports the egg at a pinned commit (`EGG_URL` still overrides it) and passes `USER_AGENT` (`EGG_USER_AGENT`). A failing `tinker` call now prints the Panel's exception instead of exiting silently.
+
 ## [1.0.1] - 2026-10-02
 
 Republishes 1.0.0 with a tree that matches its tag. The images and the OCI chart of 1.0.0 were correct; anything installed from a checkout or the `v1.0.0` git tag was not.
