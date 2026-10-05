@@ -4,7 +4,10 @@ ARG VERSION=dev
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# proxy.golang.org now and then resets a stream mid-download; finished modules
+# stay in the cache mount, so a retry only fetches what failed.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    for i in 1 2 3; do go mod download && exit 0; echo "go mod download failed (attempt $i), retrying" >&2; sleep 5; done; exit 1
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \

@@ -19,14 +19,19 @@
 # The pelican-panel chart is not touched: it is bumped by the PR that changes
 # it and pushed at that version on every release.
 #
-# Prints the version. Exits 3 when nothing was merged since the last release.
+# Prints the version. Exits 3 when there is nothing to prepare: nothing was
+# merged since the last release, or the chart's version is not tagged yet.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 chart=charts/pelican-k8s/Chart.yaml
 current=$(sed -n 's/^version:[[:space:]]*//p' "$chart" | tr -d '"')
-git rev-parse -q --verify "refs/tags/v$current" >/dev/null ||
-  { echo "tag v$current not found: fetch the tags (actions/checkout: fetch-depth: 0)" >&2; exit 1; }
+# Right after a release PR is merged, the chart is at a version whose release
+# (and tag) the Release workflow is still making: nothing to prepare yet.
+if ! git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
+  echo "v$current is not tagged (yet): its release is still running, or the tags were not fetched (actions/checkout: fetch-depth: 0)" >&2
+  exit 3
+fi
 # Release PRs only carry this script's edits; they are not changes to release.
 if [ -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]; then
   echo "nothing merged since v$current, nothing to release" >&2

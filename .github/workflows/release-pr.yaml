@@ -50,7 +50,7 @@ jobs:
           v=$(hack/release-prep.sh) || rc=$?
           case $rc in
             0) echo "version=$v" >> "$GITHUB_OUTPUT" ;;
-            3) echo "version=" >> "$GITHUB_OUTPUT" ;;  # nothing merged since the last release
+            3) echo "version=" >> "$GITHUB_OUTPUT" ;;  # nothing to release, or a release still running
             *) exit "$rc" ;;
           esac
       - name: Close a release PR left over from before the last release
