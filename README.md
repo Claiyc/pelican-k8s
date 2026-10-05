@@ -4,6 +4,7 @@
 [![CodeQL](https://github.com/Claiyc/pelican-k8s/actions/workflows/codeql.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/security/code-scanning)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Claiyc/pelican-k8s/badge)](https://scorecard.dev/viewer/?uri=github.com/Claiyc/pelican-k8s)
 [![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
+[![Commits since release](https://img.shields.io/github/commits-since/Claiyc/pelican-k8s/latest/master?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/commits/master)
 [![License](https://img.shields.io/github/license/Claiyc/pelican-k8s)](LICENSE)
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
