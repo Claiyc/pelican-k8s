@@ -1,39 +1,80 @@
+# Releases when the chart version on master has no tag yet, which is what
+# merging the release PR (release-pr.yaml) does; pushing a vX.Y.Z tag by hand
+# still works. Either way it tags the commit, pushes the images and charts and
+# publishes the GitHub release.
 name: Release
 
 on:
   push:
+    branches: [master, main]
     tags: ["v*"]
 
 permissions:
   contents: read
 
+# A push that lands while a release is running waits for it, then finds the
+# tag and does nothing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  # The OCI chart is versioned from the tag, but a chart installed from a
-  # checkout or a git tag (the Argo CD example) takes its version and image tag
-  # from Chart.yaml. Refuse a tag the tree was not prepared for, before anything
-  # is pushed.
-  verify:
-    name: Verify the tree matches the tag
+  plan:
+    name: Is this push a release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: plan
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          v=$(sed -n 's/^version:[[:space:]]*//p' charts/pelican-k8s/Chart.yaml | tr -d '"')
+          # Exit code 2 is "no such ref"; anything else is a failed lookup,
+          # which must not start a release.
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null || rc=$?
+          case $rc in
+            0) echo "v$v is already released, nothing to do" ;;
+            2) echo "charts/pelican-k8s/Chart.yaml is at $v, which has no tag: releasing v$v"
+               echo "version=$v" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+  # The OCI chart is versioned from the release, but a chart installed from a
+  # checkout or a git tag (the Argo CD example) takes its version and image tag
+  # from Chart.yaml. Refuse a release the tree was not prepared for, before
+  # anything is pushed.
+  verify:
+    name: Verify the tree matches the release
+    runs-on: ubuntu-latest
+    needs: [plan]
+    if: needs.plan.outputs.version != ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Chart version, appVersion and CHANGELOG section
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
-          v="${VERSION#v}"
+          v="$VERSION"
           chart=$(sed -n 's/^version:[[:space:]]*//p' charts/pelican-k8s/Chart.yaml | tr -d '"')
           app=$(sed -n 's/^appVersion:[[:space:]]*//p' charts/pelican-k8s/Chart.yaml | tr -d '"')
           ok=1
-          [ "$chart" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::version is $chart, tag is $v"; ok=0; }
-          [ "$app" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::appVersion is $app, tag is $v"; ok=0; }
+          [ "$chart" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::version is $chart, the release is $v"; ok=0; }
+          [ "$app" = "$v" ] || { echo "::error file=charts/pelican-k8s/Chart.yaml::appVersion is $app, the release is $v"; ok=0; }
           grep -qF "## [$v]" CHANGELOG.md || { echo "::error file=CHANGELOG.md::no '## [$v]' section"; ok=0; }
           [ "$ok" = 1 ]
 
   images:
     name: Release images
     runs-on: ubuntu-latest
-    needs: [verify]
+    needs: [plan, verify]
     permissions:
       contents: read
       packages: write
@@ -53,8 +94,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/pelican-k8s/${{ matrix.component }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ needs.plan.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.plan.outputs.version }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -63,35 +104,35 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=v${{ needs.plan.outputs.version }}
 
   charts:
     name: Release Helm charts
     runs-on: ubuntu-latest
-    needs: [images]
+    needs: [plan, images]
     permissions:
-      contents: write   # draft the GitHub release
+      contents: write   # create the tag and publish the GitHub release
       packages: write   # push the charts as OCI artifacts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Package and push charts to ghcr.io (OCI)
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
           OWNER: ${{ github.repository_owner }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          v="${VERSION#v}"
+          v="$VERSION"
           owner="${OWNER,,}"   # OCI repository names must be lowercase
           helm package charts/pelican-k8s --version "$v" --app-version "$v" -d dist
           helm package charts/pelican-panel -d dist
           for f in dist/*.tgz; do helm push "$f" "oci://ghcr.io/$owner/pelican-k8s/charts"; done
       - name: Release notes from CHANGELOG
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          v="${VERSION#v}"
+          v="$VERSION"
           owner="${OWNER,,}"
           awk -v v="$v" '$0 ~ "^## \\["v"\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
@@ -103,10 +144,17 @@ jobs:
             echo
             echo "Charts: \`helm install pelican-k8s oci://ghcr.io/$owner/pelican-k8s/charts/pelican-k8s --version $v\`"
           } >> notes.md
-      - name: GitHub release (draft)
+      # Creates the tag at this commit when it does not exist yet. A tag created
+      # with GITHUB_TOKEN starts no workflow, so this does not release twice.
+      # The notes are the CHANGELOG.md section, which hack/release-prep.sh
+      # already filled with GitHub's generated notes; generating them again
+      # here would list every PR twice.
+      - name: GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          draft: true
+          tag_name: v${{ needs.plan.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           body_path: notes.md
-          generate_release_notes: true
+          generate_release_notes: false
           files: dist/*.tgz

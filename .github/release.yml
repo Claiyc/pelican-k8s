@@ -1,0 +1,5 @@
+# GitHub's generated release notes, used for the GitHub release and, through
+# hack/release-prep.sh, for each CHANGELOG.md section.
+changelog:
+  exclude:
+    labels: [release]  # the release PRs themselves (release-pr.yaml)

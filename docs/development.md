@@ -129,7 +129,35 @@ first release, and *Maintained* clears once the repository is 90 days old.
 
 ## Releases
 
-Tag `vX.Y.Z`. The release workflow builds and pushes the images with semver
-tags and publishes both charts as OCI packages to
-`oci://ghcr.io/claiyc/pelican-k8s/charts`, plus a GitHub release with the
-chart tarballs.
+Merge the release PR. Nothing else is manual.
+
+- **The release PR.** Whenever something was merged since the last release,
+  the `Release PR` workflow keeps a `release: X.Y.Z` PR open on the
+  `release/next` branch and rewrites it on every push to master. It runs
+  `hack/release-prep.sh`, which writes the `CHANGELOG.md` section from
+  GitHub's generated release notes (the PRs merged since the last tag; release
+  PRs are left out by `.github/release.yml`) and bumps
+  `charts/pelican-k8s/Chart.yaml` and the pinned install commands that
+  `test/docs` checks.
+- **The version.** A patch release by default. Notes written by hand under
+  `## [Unreleased]` are kept above the generated list, and their headings raise
+  it: `### Added`, `### Changed` or `### Deprecated` make a minor release,
+  `### Removed` or the word `BREAKING` a major one.
+- **Merging it.** The `Release` workflow sees a chart version on master with
+  no tag. It checks that the chart's `version`, `appVersion` and the
+  `CHANGELOG.md` section agree, builds and pushes the images
+  (`ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`, tagged `X.Y.Z`
+  and `X.Y`), pushes both charts to `oci://ghcr.io/claiyc/pelican-k8s/charts`,
+  then tags the commit `vX.Y.Z` and publishes the GitHub release with the
+  changelog section as its notes and the chart tarballs attached.
+- **The Panel chart** is not bumped by a release: bump `charts/pelican-panel`
+  in the PR that changes it. Every release pushes it at its current version.
+- **CI on the release PR.** PRs opened with the default `GITHUB_TOKEN` start no
+  workflows. To run CI on the release PR, add a `RELEASE_PR_TOKEN` secret: a
+  fine-grained PAT or GitHub App token with *Contents* and *Pull requests*
+  write access to this repository. Either way the workflow runs `test/docs` on
+  the prepared tree before pushing it, and the repository setting *Allow
+  GitHub Actions to create and approve pull requests* must be on.
+- **By hand.** `hack/release-prep.sh [X.Y.Z]` prepares the same change locally
+  (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag still releases
+  that tag.
