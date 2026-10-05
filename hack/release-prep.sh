@@ -5,16 +5,20 @@
 # The release PR workflow (.github/workflows/release-pr.yaml) runs it on every
 # push to master; it works the same locally.
 #
-#   hack/release-prep.sh          # the next patch version, or see below
+#   hack/release-prep.sh          # the next version, see below
 #   hack/release-prep.sh 1.2.0    # an explicit version
+#
+# The next version is a patch release unless a PR merged since the last
+# release carries the label "minor" or "major", or the hand-written notes
+# under [Unreleased] ask for more: "### Added", "### Changed" or
+# "### Deprecated" make a minor release, "### Removed" or the word BREAKING a
+# major one. The largest of these wins; the reason is printed as "bump: ...".
 #
 # The section is GitHub's generated release notes for the PRs merged since the
 # last release (the same list a GitHub release generates; .github/release.yml
 # configures it), fetched with `gh api`, so gh must be logged in. Anything
-# written by hand under [Unreleased] is kept above the list, and its headings
-# pick the version: "### Removed" or the word BREAKING makes a major release,
-# "### Added", "### Changed" or "### Deprecated" a minor one; otherwise it is
-# a patch release. RELEASE_NOTES=<file> uses that file instead of the API.
+# written by hand under [Unreleased] is kept above the list.
+# RELEASE_NOTES=<file> uses that file instead of the API.
 #
 # The pelican-panel chart is not touched: it is bumped by the PR that changes
 # it and pushed at that version on every release.
@@ -38,17 +42,39 @@ if [ -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)
   exit 3
 fi
 
+repo() { gh repo view --json nameWithOwner --jq .nameWithOwner; }
 unreleased=$(awk '/^## \[Unreleased\]/ {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md)
 next=${1:-}
 if [ -z "$next" ]; then
-  IFS=. read -r major minor patch <<<"$current"
+  # The largest bump any reason asks for: 0 patch, 1 minor, 2 major.
+  bump=0 why="no major or minor label on the PRs merged since v$current"
+  raise() { if [ "$1" -gt "$bump" ]; then bump=$1 why=$2; fi; }
+  # A major or minor label on any PR merged since the last release. The PR
+  # number is the last "(#N)" of a squash merge's subject, or "#N" of a merge
+  # commit's "Merge pull request #N".
+  r=$(repo)
+  for pr in $(git log --format=%s "v$current..HEAD" | grep -v '^release: ' |
+    sed -nE -e 's/^Merge pull request #([0-9]+).*/\1/p' -e 's/.*\(#([0-9]+)\)$/\1/p' | sort -un); do
+    for label in $(gh api "repos/$r/issues/$pr" --jq '.labels[].name'); do
+      case $label in
+        major) raise 2 "#$pr is labelled major" ;;
+        minor) raise 1 "#$pr is labelled minor" ;;
+      esac
+    done
+  done
+  # Hand-written notes under [Unreleased] can raise it too.
   if grep -qE '^### Removed|BREAKING' <<<"$unreleased"; then
-    next="$((major + 1)).0.0"
+    raise 2 "CHANGELOG.md [Unreleased] has a ### Removed heading or says BREAKING"
   elif grep -qE '^### (Added|Changed|Deprecated)' <<<"$unreleased"; then
-    next="$major.$((minor + 1)).0"
-  else
-    next="$major.$minor.$((patch + 1))"
+    raise 1 "CHANGELOG.md [Unreleased] has an ### Added, ### Changed or ### Deprecated heading"
   fi
+  IFS=. read -r major minor patch <<<"$current"
+  case $bump in
+    2) next="$((major + 1)).0.0" level=major ;;
+    1) next="$major.$((minor + 1)).0" level=minor ;;
+    *) next="$major.$minor.$((patch + 1))" level=patch ;;
+  esac
+  echo "bump: $level release, because $why" >&2
 fi
 [[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: $next" >&2; exit 1; }
 [ "$next" != "$current" ] || { echo "$next is already the chart version" >&2; exit 1; }
@@ -58,8 +84,7 @@ trap 'rm -f "$notes" "$notes.section"' EXIT
 if [ -n "${RELEASE_NOTES:-}" ]; then
   cat "$RELEASE_NOTES" >"$notes"
 else
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-  gh api "repos/$repo/releases/generate-notes" -f tag_name="v$next" -f previous_tag_name="v$current" \
+  gh api "repos/$(repo)/releases/generate-notes" -f tag_name="v$next" -f previous_tag_name="v$current" \
     -f target_commitish="$(git rev-parse HEAD)" --jq .body >"$notes"
 fi
 # One level down, to sit under "## [X.Y.Z]"; the compare link is the
@@ -69,7 +94,7 @@ fi
     sed -e '/./,$!d' <<<"$unreleased" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
     echo
   fi
-  sed -e 's/^## /### /' -e '/^\*\*Full Changelog\*\*/d' "$notes" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+  sed -e 's/^## /### /' -e '/^\*\*Full Changelog\*\*/d' -e '/^<!-- Release notes generated/d' "$notes" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
 } >"$notes.section"
 grep -q '[^[:space:]]' "$notes.section" || { echo "no release notes generated" >&2; exit 1; }
 
