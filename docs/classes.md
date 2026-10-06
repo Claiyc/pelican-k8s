@@ -45,8 +45,8 @@ Volumes never shrink: a smaller Panel `disk_space` sets the `DiskShrinkRefused` 
 
 | Field | Default | Meaning |
 |---|---|---|
-| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md) |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs |
+| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the pod on the node whose InternalIP or ExternalIP is the allocation IP |
+| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the pod is not tied to a node |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |
@@ -61,7 +61,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | true | Create the per-server NetworkPolicy |
-| `blockedEgressCIDRs` | [] | Pod CIDR, service CIDR, node and LAN ranges game pods must not reach (link-local is always blocked) |
+| `blockedEgressCIDRs` | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` | IPv4 ranges excluded from game pods' internet egress; the defaults cover the usual pod, service, node and LAN ranges. Link-local is always blocked; `[]` blocks only link-local. DNS, the gateway remote API and `inClusterEgress` are separate allow rules and reach these ranges regardless. The chart's `install-jobs` policy uses the default class's list |
 | `nodeCIDRs` | [] | Node addresses admitted on the agent port for kubelet probes on CNIs without implicit host access |
 | `inClusterEgress.gameServers` | true | Game pods may reach other game pods (proxies such as Velocity) |
 | `inClusterEgress.additional` | [] | `{cidr, ports}` allowances (in-cluster S3, databases) |

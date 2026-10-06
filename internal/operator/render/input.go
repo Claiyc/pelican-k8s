@@ -31,6 +31,8 @@ const (
 	ScratchDir     = "/scratch"
 	GameContainer  = "game"
 	AgentContainer = "agent"
+	// ShimTokenKey is the key of the shim token in the ShimSecret.
+	ShimTokenKey = "token"
 
 	// AnnotationTemplateHash marks a pod with the hash of the template it was created from.
 	AnnotationTemplateHash = "pelican-k8s.io/template-hash"
@@ -56,6 +58,10 @@ type Input struct {
 	SystemNamespace string
 	// EnvSecretExists reports whether the egg variable Secret is present (install Job envFrom).
 	EnvSecretExists bool
+	// NodeNames, when set, are the only nodes the game pod may run on: the
+	// nodes that own the allocation IP under NodePort (externalTrafficPolicy
+	// Local) and HostPort exposure.
+	NodeNames []string
 }
 
 // UUID returns the server UUID.

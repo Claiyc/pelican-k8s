@@ -60,8 +60,10 @@ func NetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 		To:    []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}}},
 		Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns}, {Protocol: &udp, Port: &dnsAlt}, {Protocol: &tcp, Port: &dnsAlt}},
 	})
-	// Egress: the internet minus cluster and LAN ranges.
-	except := append([]string{"169.254.0.0/16"}, net.BlockedEgressCIDRs...)
+	// Egress: the internet minus link-local and the blocked (by default the
+	// private and shared) ranges. The DNS, gateway and in-cluster rules are
+	// separate allow rules, so they still apply to destinations in those ranges.
+	except := append([]string{v1alpha1.LinkLocalCIDR}, BlockedEgressCIDRs(net)...)
 	np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: except}}},
 	})
@@ -86,4 +88,14 @@ func NetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 		np.Spec.Egress = append(np.Spec.Egress, rule)
 	}
 	return np
+}
+
+// BlockedEgressCIDRs returns the class's blocked egress ranges, or the default
+// private and shared ranges when the field is unset. An explicit empty list
+// blocks only link-local.
+func BlockedEgressCIDRs(net v1alpha1.NetworkSpec) []string {
+	if net.BlockedEgressCIDRs == nil {
+		return v1alpha1.DefaultBlockedEgressCIDRs
+	}
+	return net.BlockedEgressCIDRs
 }

@@ -63,8 +63,8 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 | Package | Role |
 |---|---|
-| `internal/shim/supervisor` | PTY process supervisor and socket server (PID 1) |
-| `internal/shim/protocol` | JSON-lines protocol and client |
+| `internal/shim/supervisor` | PTY process supervisor (PID 1); connects to the agent's socket and serves it |
+| `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
 | `internal/shim/cgroup` | cgroup v2 and `/proc/net/dev` sampling |
 | `internal/shim/prepare` | PVC layout, entrypoint probe, install-run |
 | `internal/agent/app` | Wings boot sequence without Docker |

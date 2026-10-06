@@ -41,7 +41,7 @@ native sidecars and `ValidatingAdmissionPolicy` are used), a StorageClass that
 supports volume expansion, Helm 3, and a way to expose two things: the
 gateway's HTTP API (Ingress or OpenShift Route with long timeouts) and its SFTP
 port (NodePort or LoadBalancer). Game ports use `LoadBalancer` Services by
-default; single-node clusters can use `NodePort`.
+default; `NodePort` and `HostPort` work without a load balancer.
 
 **1. Deploy the Panel** (skip if you already run one; any Pelican Panel works):
 

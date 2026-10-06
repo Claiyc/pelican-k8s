@@ -14,6 +14,7 @@ import (
 	"github.com/apex/log/handlers/json"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/app"
+	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 )
 
 // errorStringHandler renders error fields as their message: the JSON handler
@@ -31,7 +32,7 @@ func (h errorStringHandler) HandleLog(e *log.Entry) error {
 
 func main() {
 	configPath := flag.String("config", "/etc/pelican/config.yml", "Wings configuration file")
-	socket := flag.String("shim-socket", "/pelican/run/shim.sock", "shim unix socket")
+	socket := flag.String("shim-socket", "/pelican/run/shim.sock", "unix socket the shim connects to")
 	debug := flag.Bool("debug", false, "debug logging")
 	flag.Parse()
 
@@ -46,7 +47,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	if err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimSocket: *socket, Logger: logger}); err != nil {
+	if err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimSocket: *socket, ShimToken: os.Getenv(protocol.TokenEnv), Logger: logger}); err != nil {
 		logger.Error("agent failed", "error", err)
 		os.Exit(1)
 	}

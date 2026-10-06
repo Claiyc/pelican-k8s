@@ -1,5 +1,6 @@
 // Package shimenv implements Wings' environment.ProcessEnvironment on top of
-// the shim socket in the game container. See ARCHITECTURE.md section 6.4.
+// the shim in the game container, which connects to the agent's socket. See
+// ARCHITECTURE.md section 6.4.
 package shimenv
 
 import (
@@ -37,13 +38,15 @@ var ErrNotAttached = errors.New("environment/shim: not attached to process")
 
 // Options configure an Environment.
 type Options struct {
-	// SocketPath is the shim's unix socket.
+	// Connect returns the next authenticated shim connection (protocol.Listener.Accept).
+	Connect func(ctx context.Context) (*protocol.Client, error)
+	// SocketPath is the socket the shim connects to (for messages).
 	SocketPath string
 	// RunLog is the per-run console log written by the agent (Readlog source).
 	RunLog string
 	// ExtraEnv is appended to every start (e.g. INTERNAL_IP=<pod ip>).
 	ExtraEnv []string
-	// DialTimeout bounds how long Attach waits for the shim socket.
+	// DialTimeout bounds how long Attach waits for the shim to connect.
 	DialTimeout time.Duration
 	Logger      *slog.Logger
 }
@@ -114,7 +117,7 @@ func New(id string, cfg *environment.Configuration, o Options) *Environment {
 	return e
 }
 
-// Close stops the connection loop.
+// Close stops the connection loop and drops the current shim connection.
 func (e *Environment) Close() {
 	e.cancel()
 }
@@ -626,7 +629,7 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 				select {
 				case <-time.After(50 * time.Millisecond):
 				case <-deadline.Done():
-					return nil, fmt.Errorf("environment/shim: shim socket %s is not reachable: %w", e.o.SocketPath, deadline.Err())
+					return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.SocketPath, deadline.Err())
 				}
 				continue
 			default:
@@ -636,7 +639,7 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 		select {
 		case <-ch:
 		case <-deadline.Done():
-			return nil, fmt.Errorf("environment/shim: shim socket %s is not reachable: %w", e.o.SocketPath, deadline.Err())
+			return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.SocketPath, deadline.Err())
 		}
 	}
 }
@@ -650,13 +653,16 @@ func isConnError(err error) bool {
 	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection closed") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "use of closed")
 }
 
+// connectLoop takes authenticated shim connections from the listener, one at a
+// time: the shim reconnects after an agent restart and a game container
+// restart brings a new shim.
 func (e *Environment) connectLoop() {
 	backoff := 250 * time.Millisecond
 	for {
 		if e.ctx.Err() != nil {
 			return
 		}
-		c, err := protocol.Dial(e.ctx, e.o.SocketPath)
+		c, err := e.o.Connect(e.ctx)
 		if err != nil {
 			select {
 			case <-e.ctx.Done():
@@ -669,9 +675,13 @@ func (e *Environment) connectLoop() {
 			continue
 		}
 		backoff = 250 * time.Millisecond
+		// A closed environment releases its connection, so the shim
+		// reconnects to whoever takes connections next.
+		release := context.AfterFunc(e.ctx, func() { _ = c.Close() })
 		e.onConnected(c)
 		e.consume(c)
 		e.onDisconnected(c)
+		release()
 	}
 }
 

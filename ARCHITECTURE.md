@@ -179,8 +179,7 @@ for agents) and `:2022` (SFTP).
 7. Keep CRs in line with the Panel (resync, §13) and send the Panel's once-per-boot server reset (§8.9).
 
 Wings' token denylist, one-time token store and boot cutoff run inside each agent for its own server.
-The gateway's per-replica state is the live websocket and SSH connections, the state cache and the
-SFTP session credentials (§5.6, §14).
+The gateway's per-replica state is the live websocket and SSH connections and the state cache (§14).
 
 ### 5.2 Route handling
 
@@ -274,10 +273,10 @@ sequenceDiagram
   C->>G: auth user "alice.1a2b3c4d" + password/key
   G->>P: POST /api/remote/sftp/auth {type, username, password, ip, ...}
   P-->>G: {user, server, permissions}
-  G->>G: create a session credential for (server, user)
+  G->>G: seal a session credential (username, server, user, permissions, expiry)
   G->>A: SSH connect as "alice.1a2b3c4d", password = session credential
   A->>G: POST /api/remote/sftp/auth (agent's remote API = gateway)
-  G-->>A: {user, server, permissions} from the recorded session
+  G-->>A: {user, server, permissions} from the verified credential
   C->>G: session channel requests ("sftp" subsystem)
   G->>A: same requests
   C-->>A: SFTP packets relayed as opaque bytes
@@ -288,8 +287,11 @@ sequenceDiagram
   SSH client toward the agent's **Wings SFTP server**. Permission checks, denylist file rules, disk quota
   and SFTP activity logging are Wings code.
 - Usernames must have the form `<name>.<8-character server id>`, and the server must have a
-  `GameServer`. The session credential is 24 random bytes, valid for 2 minutes, held in the memory of
-  the replica that created it.
+  `GameServer`. The session credential carries the SSH username, the Panel's answer (server, user,
+  permissions), a random nonce and an expiry 2 minutes ahead, sealed with HMAC-SHA256 under a key
+  derived from the node token. Any gateway replica verifies it without shared state, so the agent's
+  `/sftp/auth` call may reach any replica; the agent cannot forge or alter one, and the gateway
+  answers only credentials for the calling agent's own server.
 - The agent's host key is pinned on first connection (SHA256 fingerprint in
   `status.agent.sftpHostKey`). The gateway's own host key is an ED25519 key in Secret
   `pelican-gateway-sftp-hostkey` (key `id_ed25519`), generated on first start.
@@ -313,7 +315,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `POST /servers/{uuid}/install` | Record `status.install.result`, `finishedAt` and `reportedGeneration`; forward to the Panel; on success with `spec.install.startOnInstall`, start the server |
 | `POST /activity` | Forward rows whose `server` is the caller; drop the rest. A `422` from the Panel drops the batch |
 | `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls); a result post removes the entry; unknown backups get `404` |
-| `POST /sftp/auth` | Answer from the gateway's SFTP session credentials (§5.6); never forwarded |
+| `POST /sftp/auth` | Verify the SFTP session credential (§5.6) and answer with the Panel response sealed in it when it is for the caller's server; never forwarded |
 | transfers, anything else | `404`, logged as a warning |
 
 `test/upstream` diffs Wings' remote client calls against the list the gateway serves (§17).
@@ -358,8 +360,9 @@ flowchart TB
   A -- "PVC root → /var/lib/pelican" --- V2
 ```
 
-The game container mounts `/pelican/bin` and `/pelican/etc` read-only and `/pelican/run`
-read-write; the agent mounts only `/pelican/run`. Both containers mount the same `/tmp`.
+The game container mounts `/pelican/bin`, `/pelican/etc` and `/pelican/run` read-only; the agent
+mounts only `/pelican/run`, read-write, and listens on the shim socket there. Both containers mount the
+same `/tmp`.
 
 ### 6.2 PVC layout
 
@@ -442,7 +445,18 @@ readiness shows whether the game runs. The container has no liveness or startup 
 consumes pod readiness (both Services publish not-ready addresses, the StatefulSet is `OnDelete` +
 `Parallel`).
 
-**Protocol** (JSON lines on `/pelican/run/shim.sock`, mode 0600; both containers run as the same UID):
+**Socket and authentication.** The agent listens on `/pelican/run/shim.sock` (mode 0600; both
+containers run as the same UID) and the shim connects to it, reconnecting after an agent restart. The
+game container mounts `/pelican/run` read-only, so the game process can connect to the socket but cannot
+remove, rename or replace it. Every connection starts with a challenge from the agent; the shim answers
+with HMAC-SHA256 over the challenge keyed with the shim token (`PELICAN_SHIM_TOKEN` from Secret
+`gs-<uuid>-shim`, in the env of both containers). The agent hands only authenticated connections to
+Wings, and a newer one replaces the previous one. The shim makes itself non-dumpable
+(`PR_SET_DUMPABLE=0`) before it reads the token, so a process with the same UID and no capabilities
+cannot read its memory, `/proc/1/environ` or `/proc/1/fd`, and it removes the token from the
+environment it gives the game process. Events reach a connection only after the agent subscribes.
+
+**Protocol** (JSON lines over the authenticated connection):
 
 - `start{env}`: spawn the argv in a PTY, process group of its own, `cwd=/home/container`, the
   environment from the agent merged over the container's. The argv is the container's `args` when the
@@ -467,7 +481,7 @@ consumes pod readiness (both Services publish not-ready addresses, the StatefulS
 - **SIGTERM** (pod deletion, eviction, drain): kubelet runs the game container's `preStop` hook first,
   which calls the agent's `/internal/v1/prestop`; the agent runs Wings' stop procedure (stop command or
   signal, `WaitForStop`, then terminate) and returns once the process is offline. The shim then
-  receives SIGTERM: it removes the socket, reports that it is stopping, sends SIGTERM to the process
+  receives SIGTERM: it stops reconnecting, reports that it is stopping, sends SIGTERM to the process
   group, and SIGKILL after 10 s. The agent is a native sidecar, so it is terminated after the game
   container has exited.
 - **Stats** every 2 s while a process runs: memory (`memory.current` minus `inactive_file`; the limit
@@ -478,7 +492,7 @@ consumes pod readiness (both Services publish not-ready addresses, the StatefulS
 
 | Method | Behaviour |
 |---|---|
-| `Attach` | Connect to the socket and subscribe; `exited` ⇒ `SetState(offline)` (drives Wings' crash detection) |
+| `Attach` | Wait for the shim's authenticated connection and subscribe; `exited` ⇒ `SetState(offline)` (drives Wings' crash detection) |
 | `Start` | Wait for the shim connection, truncate the console log, `starting`, `start{env}`. If the shim already runs the process, mark it running and attach |
 | `Stop` | Stop type `signal` ⇒ `signal{}` (Wings' mapping, unknown ⇒ SIGKILL); type `command` ⇒ `stdin{value+"\n"}` |
 | `WaitForStop` / `Terminate` | Poll the shim status; SIGKILL on timeout |
@@ -490,9 +504,9 @@ consumes pod readiness (both Services publish not-ready addresses, the StatefulS
 | `Create`, `Exists` | No-op and always true; the pod belongs to the operator |
 | `Destroy` | `stopping`, SIGKILL to the process group through the shim (`kill`), then `offline` |
 
-**Agent restart:** the agent container restarts while the game keeps running. The agent reconnects,
-finds the process running and re-attaches; the console history comes from the console log, or from the
-shim's ring buffer when the log is empty.
+**Agent restart:** the agent container restarts while the game keeps running. The shim reconnects to
+the new agent's socket, and the agent finds the process running and re-attaches; the console history
+comes from the console log, or from the shim's ring buffer when the log is empty.
 
 ---
 
@@ -610,7 +624,7 @@ status:
   snapshot: {lastAt: "…", lastName: gs-…-20261006-120000}
   conditions:
     - type: VolumeReady          # PVC bound
-    - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange)
+    - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange, AllocationIPNotOnNode)
     - type: AgentReady           # agent container started and ready
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
     - type: Installed            # True once a generation finished; reason Succeeded or Failed
@@ -654,7 +668,7 @@ spec:
     externalIPs: []               # offered to the Panel by /api/system/ips
   network:
     enabled: true                 # per-server NetworkPolicy
-    blockedEgressCIDRs: []        # pod, service, node and LAN ranges game pods must not reach
+    blockedEgressCIDRs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]   # excluded from internet egress
     nodeCIDRs: []                 # node addresses admitted on the agent port (kubelet probes)
     inClusterEgress:
       gameServers: true           # game pods may reach other game pods (proxies such as Velocity)
@@ -709,6 +723,7 @@ With `openshift.enabled` the chart sets `security.useNamespaceUIDRange` and `ins
 | PersistentVolumeClaim | `gs-<uuid>` | RWO, size = `disk_space × (1 + overhead)`, expanded online on change. No ownerReference under `deletionPolicy: Retain` |
 | Secret | `gs-<uuid>-env` | Egg variables plus the derived `STARTUP`, `SERVER_MEMORY`, `SERVER_IP`, `SERVER_PORT`, `SERVER_PUBLIC_IP`, `TZ`; created by the gateway, owned by the CR. Served to the agent as part of its Wings configuration (§5.7) and used via `envFrom` by install Jobs |
 | Secret | `gs-<uuid>-agent` | The agent's own Wings `token_id` and `token` (§5.4); generated by the operator, owned by the CR, exposed to the agent container as `WINGS_TOKEN_ID`/`WINGS_TOKEN` |
+| Secret | `gs-<uuid>-shim` | The shim token (`token`, §6.4); generated by the operator, owned by the CR, exposed to the agent and game containers as `PELICAN_SHIM_TOKEN` |
 | StatefulSet | `gs-<uuid>` | `replicas: 1` (0 while suspended with `suspendScalesToZero`), `updateStrategy: OnDelete`, `podManagementPolicy: Parallel`, `serviceName: gs-<uuid>-agent`, explicit PVC volume (no `volumeClaimTemplates`), PVC retention `Retain`. At most one pod, so the RWO volume is never double-mounted |
 | Service (exposure) | `gs-<uuid>` | One port entry per allocation port for each of TCP and UDP; type from the class (a type change recreates it); `publishNotReadyAddresses: true`. Not created in HostPort mode or for a server without an allocation. With `sharingAnnotation`, the value is `pelican-<allocation IP>` |
 | Service (agent) | `gs-<uuid>-agent` | Headless, agent HTTP (8080) and SFTP (2022) ports, `publishNotReadyAddresses: true`; the StatefulSet's `serviceName` |
@@ -761,6 +776,7 @@ spec:
         - {name: PELICAN_POD_IP, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
         - {name: WINGS_TOKEN_ID, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token_id}}}
         - {name: WINGS_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token}}}
+        - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}
       resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}   # class resources.agent
       securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
       volumeMounts:
@@ -780,13 +796,16 @@ spec:
       readinessProbe: {httpGet: {path: /internal/v1/ready, port: 8080}, periodSeconds: 5, failureThreshold: 1}
       lifecycle: {preStop: {httpGet: {path: /internal/v1/prestop, port: 8080}}}
       securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-      env: [{name: HOME, value: /home/container}, {name: USER, value: container}]
+      env:
+        - {name: HOME, value: /home/container}
+        - {name: USER, value: container}
+        - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}   # read by the shim, never passed to the game process
       volumeMounts:
         - {name: data, mountPath: /home/container, subPath: volumes/<uuid>}
         - {name: data, mountPath: /etc/machine-id, subPath: machine-id, readOnly: true}
         - {name: pelican, mountPath: /pelican/bin, subPath: bin, readOnly: true}
         - {name: pelican, mountPath: /pelican/etc, subPath: etc, readOnly: true}
-        - {name: pelican, mountPath: /pelican/run, subPath: run}
+        - {name: pelican, mountPath: /pelican/run, subPath: run, readOnly: true}
         - {name: pelican, mountPath: /etc/passwd, subPath: etc/passwd, readOnly: true}   # with generatePasswdEntry
         - {name: pelican, mountPath: /etc/group, subPath: etc/group, readOnly: true}     # with generatePasswdEntry
         - {name: tmp, mountPath: /tmp}
@@ -798,6 +817,7 @@ spec:
     - {name: agent-config, configMap: {name: pelican-agent-config}}
   imagePullSecrets: <class pullSecrets>
   nodeSelector / tolerations / priorityClassName: <class>
+  affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchFields: [{key: metadata.name, operator: In, values: [<nodes owning the allocation IP>]}]}]}}}   # HostPort, NodePort with Local (§9.3)
 ```
 
 **Egg environment.** The game process gets its environment from the agent (`start{env}`, built by
@@ -1094,8 +1114,17 @@ Invariant: **container port = service port = external port = Panel allocation po
 | Mode | How | Client IP | Panel allocations |
 |---|---|---|---|
 | **LoadBalancer** (default) | Service `type: LoadBalancer`; the class's annotations pin the allocation IP and allow IP sharing; `externalTrafficPolicy: Local` | preserved | IP = LB pool IP, any port. Works on any cluster size: the LB follows the pod. Needs a LoadBalancer implementation (cloud, k3s ServiceLB, MetalLB, kube-vip); without one, `ExposureReady` reports it after two minutes |
-| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local` | preserved | IP = node IP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error`. For single-node clusters: with `Local` the allocation IP serves traffic only while the pod runs on that node |
-| **HostPort** | `hostPort` = allocation port on the game container; no Service | preserved | IP = node IP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) and the pod must run on the node owning the IP |
+| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local`; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error` |
+| **HostPort** | `hostPort` = allocation port on the game container; no Service; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) |
+
+**Node placement (NodePort with `Local`, HostPort).** With `externalTrafficPolicy: Local` a NodePort
+delivers traffic only on nodes that run the pod, and a hostPort exists only on the pod's node. The
+operator lists the nodes, takes those whose `InternalIP` or `ExternalIP` addresses include every
+allocation IP (`0.0.0.0` and loopback name no node and are skipped), and sets a required node affinity
+on `metadata.name` for them. A changed match is a pod template change (§7.6). A cluster with one node
+gets no affinity. With more than one node and no match, the pod is not pinned and `ExposureReady=False`
+(`AllocationIPNotOnNode`) names the address; the server keeps running. With
+`externalTrafficPolicy: Cluster` every node forwards the NodePort and the pod is not pinned.
 
 `GET /api/system/ips` offers the addresses the Panel's allocation form shows (§5.2).
 
@@ -1185,6 +1214,7 @@ memory limit leaves room for Wings' compress, decompress and archive code on lar
 |---|---|---|
 | Node daemon token (`token_id.token`) | Gateway Secret | agents, game pods, install Jobs, operator |
 | Per-agent Wings token (Secret `gs-<uuid>-agent`) | Agent container (env), gateway and operator (read) | game container, install Jobs, CR |
+| Shim token (Secret `gs-<uuid>-shim`) | Agent container and the shim (env; the shim is non-dumpable) | game process, install Jobs, CR |
 | SFTP host key (gateway) | Gateway Secret | pods |
 | Egg variables (Secret `gs-<uuid>-env`; may hold tokens and passwords) | Gateway (serves them to the agent), install Job (`envFrom`), game process environment | CR spec, ConfigMaps, pod specs |
 | Panel S3 credentials | Panel | agents (they get presigned URLs only) |
@@ -1192,8 +1222,9 @@ memory limit leaves room for Wings' compress, decompress and archive code on lar
 **Blast radius of a compromised game process** (arbitrary egg code, RCE in a game):
 - it can read and modify its own server files
 - it can use the pod's egress (limited by the NetworkPolicy), which includes the gateway's remote API port
-- it shares `/pelican/run` and the UID with the shim, so it can replace the shim socket and feed its own
-  agent false process state, console output, stats and exit codes
+- it can connect to the shim socket, but it cannot replace the socket (read-only mount) or pass the
+  agent's handshake (the shim token is out of its reach, §6.4), so process state, stats and exit codes
+  come from the shim
 - it **cannot** use the gateway's remote API without the agent token, reach other servers' agents, the
   Panel, the Kubernetes API (no token), or the node token
 
@@ -1239,9 +1270,12 @@ enforce the workload shapes:
   - ingress on the agent ports (8080, 2022) from pelican-k8s pods in the system namespace, and from
     `network.nodeCIDRs` on 8080 for kubelet probes on CNIs without implicit host access
   - egress: DNS (53 and 5353, TCP and UDP) to any namespace; TCP 8081 to pelican-k8s pods in the system
-    namespace (remote API); `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (empty by
-    default: list the pod, service, node and LAN ranges there); with `inClusterEgress.gameServers`, all
-    ports of other game pods; `inClusterEgress.additional` CIDR/port pairs
+    namespace (remote API); `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (by
+    default the private and shared ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
+    `100.64.0.0/10`, covering the usual pod, service, node and LAN ranges); with
+    `inClusterEgress.gameServers`, all ports of other game pods; `inClusterEgress.additional` CIDR/port
+    pairs. Rules are additive, so DNS, the remote API and the in-cluster rules reach their
+    destinations inside the blocked ranges
 - **Install Jobs** (chart policy `install-jobs`): DNS and `0.0.0.0/0` except link-local and the default
   class's `blockedEgressCIDRs`.
 - **System namespace:** the gateway accepts 8080 and 2022 from anywhere and 8081 from the servers
@@ -1277,7 +1311,7 @@ enforce the workload shapes:
 | Local backups | Scratch volume | — |
 | S3 backups | S3 and the Panel database | — |
 | Revocation, one-time tokens, boot cutoff | **Agent** (Wings, per server) | — |
-| Live websocket and SFTP connections, SFTP session credentials | The gateway replica that accepted them | — |
+| Live websocket and SFTP connections | The gateway replica that accepted them | — |
 
 **Drift handling:** the gateway resyncs at start and every `gateway.resyncInterval` (default 15 min):
 - it lists the node's servers via `GET /api/remote/servers` and fetches each server's configuration
@@ -1295,7 +1329,7 @@ enforce the workload shapes:
 | Component | Replicas |
 |---|---|
 | Panel | 1 (web, queue worker and scheduler in the upstream image) |
-| Gateway | 1 (`gateway.replicas`). Websocket and SSH connections are per replica and drop on a rollout. SFTP session credentials are held by the replica that authenticated the client, while the agent's `/sftp/auth` call goes through the gateway Service, so with more than one replica SFTP logins fail when that call reaches another replica |
+| Gateway | 1 (`gateway.replicas`). Websocket and SSH connections are per replica and drop on a rollout. Every replica verifies SFTP session credentials (§5.6), so SFTP works with any replica count |
 | Operator | 1, with leader election |
 | Game servers | 1 pod each (StatefulSet). On a **NotReady node** the pod stays `Terminating` and the StatefulSet does not replace it. With `failover.forceDeleteAfter` set, the operator sets `NodeLost` and force-deletes the pod after that duration, so it reschedules and the RWO volume reattaches; this is safe only when the storage layer fences the old node or the node is confirmed down |
 

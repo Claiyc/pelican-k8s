@@ -27,14 +27,18 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/agent/installer"
 	"github.com/Claiyc/pelican-k8s/internal/agent/routes"
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
+	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
 // Options configure the agent.
 type Options struct {
 	ConfigPath string
+	// ShimSocket is the unix socket the agent listens on for the shim.
 	ShimSocket string
-	Logger     *slog.Logger
+	// ShimToken is the secret the shim proves on every connection.
+	ShimToken string
+	Logger    *slog.Logger
 	// Ready, when non-nil, is closed once the HTTP server is listening.
 	Ready chan struct{}
 }
@@ -89,7 +93,15 @@ func Run(ctx context.Context, o Options) error {
 	if ip := os.Getenv("PELICAN_POD_IP"); ip != "" {
 		extraEnv = append(extraEnv, "INTERNAL_IP="+ip)
 	}
-	registry := shimenv.NewRegistry(socket, extraEnv, logger)
+	if o.ShimToken == "" {
+		return errors.New("the shim token is not set")
+	}
+	shimListener, err := protocol.Listen(socket, []byte(o.ShimToken), logger.With("component", "shim-socket"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = shimListener.Close() }()
+	registry := shimenv.NewRegistry(shimListener, extraEnv, logger)
 	gw := gatewayclient.New(cfg.PanelLocation, cfg.Token.ID, cfg.Token.Token)
 	inst := &installer.Installer{Gateway: gw, Root: cfg.System.RootDirectory, LogDir: cfg.System.LogDirectory, Logger: logger}
 

@@ -1,5 +1,6 @@
 // Package protocol defines the newline-delimited JSON protocol spoken over the
-// shim's unix socket. The shim is the server, the agent is the client.
+// shim socket. The agent listens on the socket and sends requests; the shim
+// connects, proves knowledge of the shared token (auth.go) and answers them.
 //
 // Requests carry an ID; the shim answers every request with a Reply of the same
 // ID. Events (output, stats, started, exited) are pushed to every connection

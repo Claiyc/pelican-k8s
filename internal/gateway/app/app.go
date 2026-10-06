@@ -79,7 +79,7 @@ func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.
 	p := panel.New(cfg.PanelURL, cfg.NodeTokenID, cfg.NodeToken, cfg.UserAgent())
 	res := agents.NewResolver(st, cfg.StateCacheTTL)
 	sync := &serversync.Syncer{Store: st, Panel: p, Timezone: cfg.Timezone, Log: logger.With("component", "sync")}
-	sessions := sftprelay.NewSessions()
+	sessions := sftprelay.NewSessions(cfg.NodeToken)
 	g := &Gateway{Cfg: cfg, Log: logger, Store: st, Panel: p, Agents: res, Sync: sync, cache: c}
 	g.PanelAPI = &panelapi.Handler{Cfg: cfg, Store: st, Agents: res, Sync: sync, Log: logger.With("component", "panelapi"), Diagnostics: g.diagnostics}
 	if cfg.MetalLBPools {
