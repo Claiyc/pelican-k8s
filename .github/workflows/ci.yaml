@@ -75,7 +75,7 @@ jobs:
       # all of them (Makefile, LINT_GATE).
       - name: Lint
         run: |
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"; export PATH="$(go env GOPATH)/bin:$PATH"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           make lint LINT_BASE=origin/${{ github.base_ref || github.event.repository.default_branch }}
       # Every finding of every linter, existing code included, goes to code
       # scanning; it never fails the job.
