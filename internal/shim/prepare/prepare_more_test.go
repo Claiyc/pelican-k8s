@@ -201,7 +201,7 @@ func TestInstallRunReportsSignalDeathAndClearsOldExitCode(t *testing.T) {
 	}
 }
 
-func TestInstallRunSuccessWritesZeroAndChownsMissingPathQuietly(t *testing.T) {
+func TestInstallRunSuccessWritesZeroAndWarnsAboutAMissingChownPath(t *testing.T) {
 	dir := t.TempDir()
 	var out strings.Builder
 	r := InstallRun{
@@ -215,8 +215,9 @@ func TestInstallRunSuccessWritesZeroAndChownsMissingPathQuietly(t *testing.T) {
 	if !strings.Contains(out.String(), "hello") {
 		t.Fatalf("stdout %q", out.String())
 	}
-	if strings.Contains(out.String(), "warning") {
-		t.Fatalf("chown of a missing path is best effort and silent: %q", out.String())
+	// A failed chown is reported, but does not fail an install that succeeded.
+	if !strings.Contains(out.String(), "install-run: warning: chown "+r.ChownPath) {
+		t.Fatalf("a failed chown must be reported: %q", out.String())
 	}
 	if b, _ := os.ReadFile(r.ExitFile); string(b) != "0\n" {
 		t.Fatalf("exit file %q", b)
