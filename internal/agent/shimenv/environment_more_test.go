@@ -527,3 +527,22 @@ type nopPanel struct{ remote.Client }
 func (nopPanel) PushServerStateChange(context.Context, string, remote.ServerStateChange) error {
 	return nil
 }
+
+// When the parent deadline interrupts the stop itself, the caller sees the
+// parent's error and not the cancellation of the internal timeout context.
+func TestWaitForStopReportsParentDeadlineDuringStop(t *testing.T) {
+	e, _, _ := newTestEnv(t, []string{"/bin/sh", "-c", `trap '' TERM; echo ready; while true; do sleep 0.05; done`})
+	e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGTERM"})
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitLogLine(t, e, "ready")
+	pctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := e.WaitForStop(pctx, time.Minute, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the parent's DeadlineExceeded", err)
+	}
+	if e.State() == environment.ProcessOfflineState {
+		t.Fatal("the process must not have been killed")
+	}
+}
