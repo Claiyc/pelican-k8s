@@ -15,6 +15,16 @@ func setBase(t *testing.T) {
 	t.Setenv("PELICAN_GW_PANEL_URL", "https://panel.example.com/")
 	t.Setenv("PELICAN_GW_TOKEN_ID", "id1")
 	t.Setenv("PELICAN_GW_TOKEN", "secret")
+	// Start from the defaults whatever the environment the tests run in.
+	for _, k := range []string{
+		"PELICAN_GW_LISTEN_PANEL", "PELICAN_GW_LISTEN_REMOTE", "PELICAN_GW_LISTEN_SFTP",
+		"PELICAN_GW_REMOTE_URL", "PELICAN_GW_ADVERTISED_VERSION", "PELICAN_GW_ALLOWED_ORIGINS",
+		"PELICAN_GW_EXTERNAL_IPS", "PELICAN_GW_METALLB_POOLS", "PELICAN_GW_METALLB_POOL_NAMES",
+		"PELICAN_GW_SFTP_HOSTKEY_SECRET", "PELICAN_GW_SFTP_KEY_ONLY", "PELICAN_GW_RESYNC_INTERVAL",
+		"PELICAN_GW_METALLB_MAX_ADDRESSES", "PELICAN_GW_TOKEN_FILE", "PELICAN_GW_TOKEN_ID_FILE",
+	} {
+		t.Setenv(k, "")
+	}
 }
 
 func TestFromEnvDefaults(t *testing.T) {

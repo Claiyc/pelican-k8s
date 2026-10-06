@@ -186,6 +186,8 @@ type relayOpts struct {
 	pinnedKey  string
 	panelUUID  string
 	rejectAuth bool
+	// dial replaces the dial to the agent; it is set before the relay runs.
+	dial func(network, addr string) (net.Conn, error)
 }
 
 func newRelayEnv(t *testing.T, o relayOpts) *relayEnv {
@@ -253,6 +255,9 @@ func newRelayEnv(t *testing.T, o relayOpts) *relayEnv {
 		dial: func(network, _ string) (net.Conn, error) {
 			return net.DialTimeout(network, e.agent.addr, 5*time.Second)
 		},
+	}
+	if o.dial != nil {
+		e.relay.dial = o.dial
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
@@ -449,8 +454,7 @@ func TestRelayAgentUnavailable(t *testing.T) {
 }
 
 func TestRelayAgentDialFailure(t *testing.T) {
-	e := newRelayEnv(t, relayOpts{})
-	e.relay.dial = func(string, string) (net.Conn, error) { return nil, io.ErrClosedPipe }
+	e := newRelayEnv(t, relayOpts{dial: func(string, string) (net.Conn, error) { return nil, io.ErrClosedPipe }})
 	c, err := e.connect("alice."+srvUUID[:8], ssh.Password("pw"))
 	if err != nil {
 		t.Fatal(err)

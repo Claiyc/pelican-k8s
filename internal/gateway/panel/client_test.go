@@ -81,7 +81,10 @@ func TestDoSendsCredentialsAndQuery(t *testing.T) {
 }
 
 func TestDoErrors(t *testing.T) {
-	c := New("http://127.0.0.1:1", tokenID, token, "ua")
+	// A server that was closed refuses connections on a port nothing else owns.
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	c := New(dead.URL, tokenID, token, "ua")
 	if _, _, err := c.Do(context.Background(), http.MethodGet, "/x", nil, nil); err == nil {
 		t.Fatal("connection refused must be an error")
 	}

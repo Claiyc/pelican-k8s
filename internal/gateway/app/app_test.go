@@ -281,8 +281,11 @@ func TestEnsureHostKey(t *testing.T) {
 		if string(again.PublicKey().Marshal()) != string(signer.PublicKey().Marshal()) {
 			t.Error("host key changed between calls")
 		}
-		if api.posts != 1 {
-			t.Errorf("secret created %d times", api.posts)
+		api.mu.Lock()
+		posts := api.posts
+		api.mu.Unlock()
+		if posts != 1 {
+			t.Errorf("secret created %d times", posts)
 		}
 	})
 
