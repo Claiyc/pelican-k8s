@@ -36,8 +36,9 @@ Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
 
 You need Kubernetes ≥ 1.33, Helm 3, a StorageClass with volume expansion and
 a way to expose the gateway: an Ingress or Route for its API, a `NodePort` or
-`LoadBalancer` for SFTP. [docs/install.md](docs/install.md) is the full guide
-with every option.
+`LoadBalancer` for SFTP. Game ports use `LoadBalancer` Services here;
+`NodePort` and `HostPort` work without a load balancer.
+[docs/install.md](docs/install.md) is the full guide with every option.
 
 **1. Deploy the Panel.** Skip this if you already run one
 ([docs/panel.md](docs/panel.md) has the details).
@@ -73,8 +74,8 @@ helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --v
   --set defaultClass.spec.exposure.mode=LoadBalancer
 ```
 
-**4. Create a server in the Panel** as you would with Wings, and watch it
-come up.
+**4. Add allocations to the node and create a server in the Panel** as you
+would with Wings, and watch it come up.
 
 ```bash
 kubectl -n pelican-servers get gameservers
