@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews pull requests as an advisory second reader; nothing here
+# blocks a merge (docs/development.md, "Dependencies, security and quality").
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  in_progress_fortune: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Version bumps and release PRs carry no code to review, and the
+    # open-source plan allows few reviews per hour.
+    ignore_usernames: ["dependabot[bot]"]
+    ignore_title_keywords: ["release:"]
+  path_filters:
+    - "!**/zz_generated.*.go"
+    - "!charts/pelican-k8s/crds/**"
+    - "!go.sum"
+  path_instructions:
+    - path: "internal/gateway/**"
+      instructions: >-
+        The gateway must keep behaving like Wings towards an unmodified Pelican
+        Panel. Check changes to requests, responses and status codes against
+        docs/wings-panel-contract.md.
+    - path: "docs/**"
+      instructions: >-
+        The docs describe the system as it is on master: no history, no
+        "previously", no deviations from another document.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Every action is pinned to a 40-character commit SHA with a version
+        comment, and write scopes are granted per job, never at the top level
+        (test/supplychain enforces both).
+chat:
+  auto_reply: true
