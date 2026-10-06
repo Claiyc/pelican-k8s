@@ -119,11 +119,13 @@ fine-grained PAT in `scorecard.yaml` to read classic branch protection rules.
 
 ## Releases
 
-Merge the release PR. Nothing else is manual.
+Mark the release PR ready and merge it. Nothing else is manual.
 
 - **The release PR.** Whenever something was merged since the last release,
   the `Release PR` workflow keeps a `release: X.Y.Z` PR open on the
-  `release/next` branch and rewrites it on every push to master. It runs
+  `release/next` branch and rewrites it on every push to master. The PR is
+  opened as a draft, and rewriting it leaves the draft state alone, so it
+  cannot be merged until a maintainer marks it ready. It runs
   `hack/release-prep.sh`, which writes the `CHANGELOG.md` section from
   GitHub's generated release notes (the PRs merged since the last tag; release
   PRs are left out by `.github/release.yml`) and bumps
