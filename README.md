@@ -71,7 +71,7 @@ kubectl -n pelican exec deploy/pelican-panel -- php artisan p:user:make --admin=
 **3. Install pelican-k8s.**
 
 ```bash
-helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 1.0.2 \
+helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 1.1.0 \
   -n pelican-system --create-namespace \
   --set gateway.panelURL=https://panel.example.com \
   --set gateway.nodeTokenID=<token_id> --set gateway.nodeToken=<token> \

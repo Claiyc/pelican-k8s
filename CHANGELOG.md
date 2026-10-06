@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-06
+
+### What's Changed
+* ci: apply the Trivy severity filter to the SARIF upload by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/60
+* ci: report coverage and code quality by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/59
+* ci: open the release PR as a draft by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/63
+* readme: shorten the introduction and the quick start by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/61
+* security: fix the SonarQube findings that are real by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/64
+* sonar: leave the main packages out of the coverage figure by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/68
+* sonar: raise the reliability rating by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/67
+* gateway: split wsproxy session.run into pumps and handleAuth by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/66
+* operator: split reconcilePod into phases by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/65
+* gateway: unit-test the Panel API, Remote API, sync, proxies and startup by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/69
+* operator, agent, shim: unit-test the controller, clients and Wings glue by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/70
+* ci: leave gocognit out of the SonarQube report by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/72
+* ci: run nothing on the release PR while it is a draft by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/71
+* gateway: stop doubling the jwt: prefix on token errors by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/73
+* ci: let a minor or major label on the release PR itself raise the version by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/74
+
 ## [1.0.2] - 2026-10-06
 
 ### Fixed
@@ -93,7 +112,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v0.1.1...v1.0.0
