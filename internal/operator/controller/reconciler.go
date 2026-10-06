@@ -258,17 +258,29 @@ func (r *GameServerReconciler) resolveUID(s *scope) (int64, error) {
 	return n, nil
 }
 
+// ensureAgentSecret creates the agent's Wings token Secret and the shim
+// socket token Secret once; their values never change afterwards.
 func (r *GameServerReconciler) ensureAgentSecret(s *scope) error {
+	if err := r.ensureSecret(s, names.AgentSecret(s.in.UUID()), func() *corev1.Secret {
+		return render.AgentSecret(s.in, randomHex(8), randomHex(32))
+	}); err != nil {
+		return err
+	}
+	return r.ensureSecret(s, names.ShimSecret(s.in.UUID()), func() *corev1.Secret {
+		return render.ShimSecret(s.in, randomHex(32))
+	})
+}
+
+func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {
 	sec := &corev1.Secret{}
-	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.AgentSecret(s.in.UUID())}, sec)
+	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: name}, sec)
 	if err == nil {
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
-	id, token := randomHex(8), randomHex(32)
-	desired := render.AgentSecret(s.in, id, token)
+	desired := build()
 	if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
 		return err
 	}

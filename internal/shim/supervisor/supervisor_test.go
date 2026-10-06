@@ -36,21 +36,30 @@ func (s *safeBuf) String() string {
 	return s.b.String()
 }
 
+var testToken = []byte("shim-token")
+
 func startSupervisor(t *testing.T, argv []string, reap bool) (*protocol.Client, *safeBuf, context.CancelFunc) {
+	t.Helper()
+	c, out, cancel, _ := startSupervisorListener(t, argv, reap)
+	return c, out, cancel
+}
+
+// startSupervisorListener plays the agent: it listens on the socket, lets the
+// supervisor connect and authenticate, and subscribes to its events.
+func startSupervisorListener(t *testing.T, argv []string, reap bool) (*protocol.Client, *safeBuf, context.CancelFunc, *protocol.Listener) {
 	t.Helper()
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "shim.sock")
-	out := &safeBuf{}
-	s := New(Options{Socket: sock, Argv: argv, Dir: dir, RingSize: 64, Stdout: out, KillGrace: time.Second, ReapOrphans: reap})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Run(ctx) }()
-	dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
-	defer dcancel()
-	c, err := protocol.WaitReady(dctx, sock, 20*time.Millisecond)
+	ln, err := protocol.Listen(sock, testToken, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	out := &safeBuf{}
+	s := New(Options{Socket: sock, Token: testToken, Argv: argv, Dir: dir, RingSize: 64, Stdout: out, KillGrace: time.Second, ReapOrphans: reap})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	c := acceptShim(t, ln)
 	t.Cleanup(func() {
 		c.Close()
 		cancel()
@@ -59,8 +68,23 @@ func startSupervisor(t *testing.T, argv []string, reap bool) (*protocol.Client, 
 		case <-time.After(5 * time.Second):
 			t.Error("supervisor did not stop")
 		}
+		ln.Close()
 	})
-	return c, out, cancel
+	return c, out, cancel, ln
+}
+
+func acceptShim(t *testing.T, ln *protocol.Listener) *protocol.Client {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := ln.Accept(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Subscribe(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 func waitEvent(t *testing.T, c *protocol.Client, typ string, timeout time.Duration) *protocol.Message {
@@ -138,7 +162,7 @@ func TestLifecycle(t *testing.T) {
 }
 
 func TestSignalAndReplay(t *testing.T) {
-	c, _, _ := startSupervisor(t, []string{"/bin/sh", "-c", `trap 'echo term; exit 0' TERM; echo ready; while true; do sleep 0.1; done`}, false)
+	c, _, _, ln := startSupervisorListener(t, []string{"/bin/sh", "-c", `trap 'echo term; exit 0' TERM; echo ready; while true; do sleep 0.1; done`}, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := c.Start(ctx, nil); err != nil {
@@ -152,19 +176,19 @@ func TestSignalAndReplay(t *testing.T) {
 	if err := c.Signal(ctx, "bogus"); err == nil {
 		t.Fatal("bogus signal accepted")
 	}
-	// A second client sees the replayed ring buffer.
-	c2, err := protocol.Dial(ctx, c2path(t, c))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// An agent restart: the shim reconnects while the process keeps running,
+	// and the new connection sees the replayed ring buffer.
+	c.Close()
+	c2 := acceptShim(t, ln)
 	defer c2.Close()
-	if _, err := c2.Subscribe(ctx, true); err != nil {
-		t.Fatal(err)
+	if st, err := c2.Subscribe(ctx, true); err != nil || !st.Running {
+		t.Fatalf("resubscribe: %+v %v", st, err)
 	}
 	ev := waitEvent(t, c2, protocol.TypeOutput, 2*time.Second)
 	if !strings.Contains(string(ev.Data), "ready") {
 		t.Fatalf("replay %q", ev.Data)
 	}
+	c = c2
 	if err := c.Signal(ctx, "SIGTERM"); err != nil {
 		t.Fatal(err)
 	}
@@ -175,12 +199,6 @@ func TestSignalAndReplay(t *testing.T) {
 	if err := c.Signal(ctx, "SIGTERM"); err == nil {
 		t.Fatal("signal on stopped process should fail")
 	}
-}
-
-// c2path finds the socket path from the first client's connection.
-func c2path(t *testing.T, c *protocol.Client) string {
-	t.Helper()
-	return c.RemoteAddr()
 }
 
 // TestHelperProcess is re-executed as the supervised process by other tests.
@@ -313,5 +331,62 @@ func TestKillStragglersOnlyRunsAsPID1(t *testing.T) {
 
 	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("unrelated process was killed: %v", err)
+	}
+}
+
+// The shim token reaches neither the game process nor anything it starts,
+// whether it comes from the shim's environment or the agent's start request.
+func TestTokenNotInProcessEnvironment(t *testing.T) {
+	t.Setenv(protocol.TokenEnv, "from-container-env")
+	c, _, _ := startSupervisor(t, []string{"/bin/sh", "-c", `echo "token:${` + protocol.TokenEnv + `:-none}:$GREETING"`}, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := c.Start(ctx, []string{protocol.TokenEnv + "=from-agent", "GREETING=hi"}); err != nil {
+		t.Fatal(err)
+	}
+	var collected string
+	for !strings.Contains(collected, "token:") || !strings.Contains(collected, "\n") {
+		ev := waitEvent(t, c, protocol.TypeOutput, 3*time.Second)
+		collected += string(ev.Data)
+	}
+	if !strings.Contains(collected, "token:none:hi") {
+		t.Fatalf("process saw %q", collected)
+	}
+}
+
+func TestWithoutKey(t *testing.T) {
+	got := WithoutKey([]string{"A=1", "TOKEN=x", "TOKENX=y", "TOKEN=z", "B"}, "TOKEN")
+	if strings.Join(got, ",") != "A=1,TOKENX=y,B" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// Without a token the shim refuses to run rather than serve an
+// unauthenticated channel.
+func TestRunRequiresToken(t *testing.T) {
+	s := New(Options{Socket: filepath.Join(t.TempDir(), "shim.sock"), Argv: []string{"/bin/true"}})
+	if err := s.Run(context.Background()); err == nil {
+		t.Fatal("Run without a token succeeded")
+	}
+}
+
+// A process that is not the shim (the game, same UID) cannot pass the
+// agent's handshake: the agent never hands its connection out.
+func TestImpostorIsNotAccepted(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "shim.sock")
+	ln, err := protocol.Listen(sock, testToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	impostor := New(Options{Socket: sock, Token: []byte("guessed"), Argv: []string{"/bin/true"}, Dir: dir})
+	go func() { _ = impostor.Run(ctx) }()
+	actx, acancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer acancel()
+	if c, err := ln.Accept(actx); err == nil {
+		t.Fatalf("impostor accepted: %v", c)
 	}
 }

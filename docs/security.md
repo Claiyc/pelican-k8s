@@ -6,6 +6,7 @@
 |---|---|---|
 | Node daemon token (`token_id.token`) | Gateway (Secret in the system namespace) | agents, game pods, install Jobs, operator |
 | Per-agent Wings token (`gs-<uuid>-agent`) | agent container env; read by gateway and operator | game container, install Jobs, CR |
+| Shim token (`gs-<uuid>-shim`) | agent container and shim env (the shim is non-dumpable) | game process, install Jobs, CR |
 | Gateway SSH host key (`pelican-gateway-sftp-hostkey`) | gateway | pods |
 | Egg variables (`gs-<uuid>-env`) | gateway (served to the agent), install Job `envFrom`, game process env | CR spec, ConfigMaps |
 | Panel S3 credentials | Panel | agents (presigned URLs only) |
@@ -48,11 +49,14 @@ the namespace UID range, `anyuid` for the installer).
 ## Blast radius
 
 A compromised game process can read and write its own files and use the
-pod's allowed egress, which includes the gateway's remote API port. It shares
-`/pelican/run` and the UID with the shim, so it can also replace the shim
-socket and feed its own agent false process state, console output, stats and
-exit codes. It cannot reach the Panel, other agents, the Kubernetes API or the
-node token.
+pod's allowed egress, which includes the gateway's remote API port. It runs
+with the shim's UID, but the agent listens on the shim socket in a directory
+the game container mounts read-only, and every connection must answer a
+challenge keyed with the shim token. The shim reads that token from its
+environment after making itself non-dumpable and removes it from the game's
+environment, so the game process can neither replace the socket nor pose as
+the shim: process state, stats and exit codes come from the shim. It cannot
+reach the Panel, other agents, the Kubernetes API or the node token.
 
 A compromised agent holds its own Wings token: it can act as its own server
 towards the Panel through the gateway's allow-list (state, activity, install

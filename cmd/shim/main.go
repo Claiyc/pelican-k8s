@@ -12,8 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Claiyc/pelican-k8s/internal/shim/cgroup"
 	"github.com/Claiyc/pelican-k8s/internal/shim/prepare"
+	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 	"github.com/Claiyc/pelican-k8s/internal/shim/supervisor"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
@@ -68,9 +71,21 @@ func splitDashDash(args []string) (flags, rest []string) {
 }
 
 func runCmd(args []string, logger *slog.Logger) error {
+	// The game process runs as the same UID. Non-dumpable, the shim's memory,
+	// environment and file descriptors are closed to it (no ptrace, no
+	// /proc/1/environ, /proc/1/mem or /proc/1/fd), so it cannot read the token.
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		return fmt.Errorf("make the shim non-dumpable: %w", err)
+	}
+	token := os.Getenv(protocol.TokenEnv)
+	if token == "" {
+		return fmt.Errorf("%s is not set", protocol.TokenEnv)
+	}
+	_ = os.Unsetenv(protocol.TokenEnv)
+
 	flags, rest := splitDashDash(args)
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	socket := fs.String("socket", "/pelican/run/shim.sock", "unix socket path")
+	socket := fs.String("socket", "/pelican/run/shim.sock", "the agent's unix socket to connect to")
 	argvFile := fs.String("argv-file", "/pelican/etc/argv", "JSON array with the image entrypoint, used when no argv follows --")
 	dir := fs.String("dir", "/home/container", "working directory of the process")
 	tmp := fs.String("tmp", "/tmp", "directory emptied before each start (empty disables)")
@@ -80,7 +95,7 @@ func runCmd(args []string, logger *slog.Logger) error {
 	noStats := fs.Bool("no-stats", false, "disable cgroup sampling")
 	_ = fs.Parse(flags)
 
-	o := supervisor.Options{Socket: *socket, Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
+	o := supervisor.Options{Socket: *socket, Token: []byte(token), Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
 	if !*noStats {
 		cg := cgroup.New()
 		if cg.Available() {

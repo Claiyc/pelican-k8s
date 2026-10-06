@@ -7,10 +7,9 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
-// Client talks to a shim over its unix socket. One connection carries requests,
+// Client is the agent's end of one shim connection. One connection carries requests,
 // replies and events. Events are delivered on the Events channel; the caller
 // must drain it.
 type Client struct {
@@ -30,22 +29,18 @@ type Client struct {
 	err       error
 }
 
-// Dial connects to the shim socket at path.
-func Dial(ctx context.Context, path string) (*Client, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", path)
-	if err != nil {
-		return nil, err
-	}
-	return NewClient(conn), nil
-}
-
 // NewClient wraps an established connection.
 func NewClient(conn net.Conn) *Client {
+	return newClient(conn, NewEncoder(conn), NewDecoder(conn))
+}
+
+// newClient wraps a connection whose encoder and decoder are already in use
+// (after the handshake).
+func newClient(conn net.Conn, enc *Encoder, dec *Decoder) *Client {
 	c := &Client{
 		conn:    conn,
-		enc:     NewEncoder(conn),
-		dec:     NewDecoder(conn),
+		enc:     enc,
+		dec:     dec,
 		pending: map[uint64]chan *Message{},
 		Events:  make(chan *Message, 256),
 		closed:  make(chan struct{}),
@@ -200,23 +195,3 @@ func (c *Client) Subscribe(ctx context.Context, replay bool) (*Status, error) {
 	}
 	return r.Status, nil
 }
-
-// WaitReady blocks until the socket accepts connections or ctx ends.
-func WaitReady(ctx context.Context, path string, interval time.Duration) (*Client, error) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		c, err := Dial(ctx, path)
-		if err == nil {
-			return c, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("shim socket %s not ready: %w (last error: %w)", path, ctx.Err(), err)
-		case <-t.C:
-		}
-	}
-}
-
-// RemoteAddr returns the socket path the client is connected to.
-func (c *Client) RemoteAddr() string { return c.conn.RemoteAddr().String() }

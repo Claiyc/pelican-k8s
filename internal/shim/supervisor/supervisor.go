@@ -1,6 +1,8 @@
 // Package supervisor is the shim's process supervisor: it spawns the egg's
 // entrypoint in a PTY, relays its output, forwards stdin and signals, samples
-// resource usage and reports exits over the unix socket protocol.
+// resource usage and reports exits over the unix socket protocol. The shim
+// connects to the agent's socket and authenticates with the shared token
+// before it serves requests.
 package supervisor
 
 import (
@@ -31,8 +33,11 @@ import (
 
 // Options configure a Supervisor.
 type Options struct {
-	// Socket is the unix socket path to listen on.
+	// Socket is the agent's unix socket the shim connects to.
 	Socket string
+	// Token is the shared secret proven to the agent on every connection. It
+	// is never passed to the game process.
+	Token []byte
 	// Argv is the command to run. When empty, ArgvFile is read (a JSON array).
 	Argv []string
 	// ArgvFile holds the argv written by the probe init container.
@@ -118,23 +123,14 @@ func New(o Options) *Supervisor {
 	}
 }
 
-// Run serves the socket until ctx is cancelled or SIGTERM/SIGINT arrives. On
-// termination a running process is stopped (SIGTERM, then SIGKILL after
-// KillGrace) before Run returns.
+// Run keeps a connection to the agent and serves it until ctx is cancelled or
+// SIGTERM/SIGINT arrives. On termination a running process is stopped
+// (SIGTERM, then SIGKILL after KillGrace) before Run returns.
 func (s *Supervisor) Run(ctx context.Context) error {
-	if err := os.MkdirAll(filepath.Dir(s.o.Socket), 0o770); err != nil {
-		return err
+	if len(s.o.Token) == 0 {
+		return errors.New("no shim token configured")
 	}
-	_ = os.Remove(s.o.Socket)
-	ln, err := net.Listen("unix", s.o.Socket)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", s.o.Socket, err)
-	}
-	defer ln.Close()
-	if err := os.Chmod(s.o.Socket, 0o600); err != nil {
-		return err
-	}
-	s.log.Info("shim listening", "socket", s.o.Socket, "pid", os.Getpid())
+	s.log.Info("shim started", "socket", s.o.Socket, "pid", os.Getpid())
 
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -144,27 +140,20 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		go s.reaper(ctx)
 	}
 
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go s.serve(c)
-		}
-	}()
+	connCtx, stopConnecting := context.WithCancel(ctx)
+	defer stopConnecting()
+	go s.connectLoop(connCtx)
 
 	select {
 	case <-ctx.Done():
 	case sig := <-sigs:
 		s.log.Info("shim received signal, shutting down", "signal", sig.String())
 	}
-	// Stop accepting connections first so a reconnecting agent does not latch
-	// onto a shim that is about to exit.
-	ln.Close()
-	_ = os.Remove(s.o.Socket)
+	// Stop connecting first so the agent does not latch onto a shim that is
+	// about to exit; the current connection stays to report the exit.
+	stopConnecting()
 	s.shutdown()
-	// Drop the remaining agent connections so they reconnect to the successor.
+	// Drop the agent connection; the next shim connects on its own.
 	s.mu.Lock()
 	for c := range s.conns {
 		c.c.Close()
@@ -218,8 +207,50 @@ func (s *Supervisor) reaper(ctx context.Context) {
 	}
 }
 
-func (s *Supervisor) serve(c net.Conn) {
-	cn := &conn{enc: protocol.NewEncoder(c), c: c, subscribed: true}
+// connectLoop dials the agent's socket, answers its challenge and serves the
+// connection, reconnecting until ctx ends (agent restarts, rejected
+// handshakes). A shim that is shutting down stops dialing.
+func (s *Supervisor) connectLoop(ctx context.Context) {
+	backoff := 100 * time.Millisecond
+	for ctx.Err() == nil {
+		var d net.Dialer
+		c, err := d.DialContext(ctx, "unix", s.o.Socket)
+		if err == nil {
+			enc := protocol.NewEncoder(c)
+			var dec *protocol.Decoder
+			dec, err = protocol.Answer(c, enc, s.o.Token, protocol.HandshakeTimeout)
+			if err == nil {
+				s.log.Info("connected to agent", "socket", s.o.Socket)
+				since := time.Now()
+				s.serve(c, enc, dec)
+				s.log.Info("agent connection ended")
+				// A connection the agent drops at once (a rejected proof) keeps
+				// backing off; one that was in use reconnects quickly.
+				if time.Since(since) > 5*time.Second {
+					backoff = 100 * time.Millisecond
+				}
+			} else {
+				_ = c.Close()
+			}
+		}
+		if err != nil {
+			s.log.Debug("agent not reachable", "socket", s.o.Socket, "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func (s *Supervisor) serve(c net.Conn, enc *protocol.Encoder, dec *protocol.Decoder) {
+	// Events flow only after the agent subscribes, so a connection the agent
+	// has not picked up yet never blocks the output relay.
+	cn := &conn{enc: enc, c: c}
 	s.mu.Lock()
 	s.conns[cn] = struct{}{}
 	s.mu.Unlock()
@@ -229,7 +260,6 @@ func (s *Supervisor) serve(c net.Conn) {
 		s.mu.Unlock()
 		c.Close()
 	}()
-	dec := protocol.NewDecoder(c)
 	for {
 		var m protocol.Message
 		if err := dec.Decode(&m); err != nil {
@@ -369,7 +399,8 @@ func (s *Supervisor) start(env []string) error {
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = s.o.Dir
-	cmd.Env = MergeEnv(os.Environ(), env)
+	// The shim token never reaches the game process.
+	cmd.Env = WithoutKey(MergeEnv(os.Environ(), env), protocol.TokenEnv)
 	// Detach the game from the shim's own signals: the process gets its own
 	// session and process group (pty.Start sets Setsid and Setctty).
 	s.spawnMu.Lock()
@@ -580,6 +611,17 @@ func (s *Supervisor) broadcast(m *protocol.Message) {
 			c.c.Close()
 		}
 	}
+}
+
+// WithoutKey returns env without the entries for key.
+func WithoutKey(env []string, key string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != key {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // MergeEnv overlays override onto base by key; later entries win.
