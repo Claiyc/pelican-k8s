@@ -8,7 +8,7 @@ Wings node.
 
 | Repo | Commit | Notes |
 |---|---|---|
-| `github.com/pelican/wings` (formerly `pelican-dev/wings`) | `65422ff` (2026-08-28) | Go module `github.com/pelican/wings`, MIT |
+| `github.com/pelican/wings` (formerly `pelican-dev/wings`) | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
 | `github.com/pelican/panel` | `6ba5264` (2026-09-14) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still in beta
@@ -124,7 +124,7 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 |---|---|
 | Core | `GET ""` (Panel: 1 s timeout, reads `state`; on failure the Panel assumes `state: "missing"`), `DELETE ""`, `GET /logs`, `GET /install-logs`, `POST /power {action}`, `POST /commands`, `POST /install`, `POST /reinstall` (409 if a power action is running), `POST /sync`, `POST /ws/deny`, `POST /transfer`, `DELETE /transfer`, `DELETE /deleteAllBackups` |
 | Files | `GET /files/contents`, `GET /files/list-directory`, `PUT /files/rename`, `POST /files/{copy,write,create-directory,delete,compress,decompress,chmod}`, `GET /files/search`, `GET/POST /files/pull`, `DELETE /files/pull/:download` |
-| Backups | `POST /backup {adapter, uuid, ignore}`, `POST /backup/:backup/restore {adapter, truncate_directory, download_url}`, `DELETE /backup/:backup` |
+| Backups | `POST /backup {adapter, uuid, ignore}` (400 when `ignore` is not a valid ignore list, since `9fb682f`), `POST /backup/:backup/restore {adapter, truncate_directory, download_url}`, `DELETE /backup/:backup` |
 
 Panel timeouts worth noting: compress and decompress 15 min, search 2 min (`DaemonFileRepository`).
 

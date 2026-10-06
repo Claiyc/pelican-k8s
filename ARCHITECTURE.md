@@ -5,7 +5,7 @@
 | **Status** | v1.0 of the design, implemented (see `docs/compatibility.md` for deviations and limitations) |
 | **Date** | 2026-09-15 |
 | **Target** | Any conformant Kubernetes ≥ 1.35 (in-place pod resize stable, native sidecars, ValidatingAdmissionPolicy), single- or multi-node |
-| **Upstream basis** | Pelican Wings `65422ff`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
+| **Upstream basis** | Pelican Wings `9fb682f`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
 | **Working name** | `pelican-k8s` (placeholder; CRD group `pelican-k8s.io` is also a placeholder) |
 
 ---
