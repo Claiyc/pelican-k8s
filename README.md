@@ -8,6 +8,7 @@
 [![License](https://img.shields.io/github/license/Claiyc/pelican-k8s)](LICENSE)
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
+
 pelican-k8s presents a whole cluster to the Panel as a single Wings node.
 Each game server becomes a `GameServer` custom resource, which an operator
 runs as an ordinary pod with Wings embedded as a library. The Panel, the eggs
