@@ -52,7 +52,6 @@ type env struct {
 	agentOrigin chan string
 	agentConn   chan *websocket.Conn
 	agentRecv   chan string
-	panelSrv    *httptest.Server
 }
 
 type opts struct {
@@ -166,10 +165,11 @@ func (e *env) dial(uuid string, hdr http.Header) (*websocket.Conn, *http.Respons
 
 func (e *env) connect() *websocket.Conn {
 	e.t.Helper()
-	conn, _, err := e.dial(uuid, nil)
+	conn, res, err := e.dial(uuid, nil)
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	res.Body.Close()
 	e.t.Cleanup(func() { conn.Close() })
 	return conn
 }
@@ -275,6 +275,7 @@ func TestUnknownServer(t *testing.T) {
 	if err == nil || res == nil || res.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404 handshake failure, got %v %v", res, err)
 	}
+	res.Body.Close()
 }
 
 func TestOriginRejected(t *testing.T) {
@@ -283,11 +284,13 @@ func TestOriginRejected(t *testing.T) {
 	if err == nil || res == nil || res.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403 handshake failure, got %v %v", res, err)
 	}
+	res.Body.Close()
 	e = newEnv(t, opts{origins: []string{"https://ok.example"}})
-	conn, _, err := e.dial(uuid, http.Header{"Origin": {"https://ok.example"}})
+	conn, res, err := e.dial(uuid, http.Header{"Origin": {"https://ok.example"}})
 	if err != nil {
 		t.Fatalf("allowed origin rejected: %v", err)
 	}
+	res.Body.Close()
 	conn.Close()
 }
 
@@ -600,10 +603,11 @@ func TestSetStateExpiredToken(t *testing.T) {
 		close(ready)
 	}))
 	defer srv.Close()
-	peer, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	peer, res, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	res.Body.Close()
 	defer peer.Close()
 	<-ready
 	mu.Lock()

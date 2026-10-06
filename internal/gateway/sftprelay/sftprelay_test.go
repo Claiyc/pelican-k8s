@@ -2,6 +2,7 @@ package sftprelay
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -473,7 +474,7 @@ func TestRelayChannelsAndRequests(t *testing.T) {
 	if ch, _, err := c.OpenChannel("direct-tcpip", nil); err == nil {
 		ch.Close()
 		t.Fatal("non-session channel accepted")
-	} else if _, ok := err.(*ssh.OpenChannelError); !ok {
+	} else if oce := new(*ssh.OpenChannelError); !errors.As(err, oce) {
 		t.Fatalf("want OpenChannelError, got %T %v", err, err)
 	}
 

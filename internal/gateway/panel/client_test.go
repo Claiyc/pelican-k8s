@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -135,19 +136,15 @@ func TestNotFoundIsTyped(t *testing.T) {
 }
 
 func asError(err error, target **Error) bool {
-	e, ok := err.(*Error)
-	if ok {
-		*target = e
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 func TestAuthFailureIsAnError(t *testing.T) {
 	c, _ := newFake(t)
 	c.token = "wrong"
 	_, err := c.GetInstallationScript(context.Background(), uuid)
-	pe, ok := err.(*Error)
-	if !ok || pe.Status != http.StatusForbidden {
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Status != http.StatusForbidden {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -250,8 +247,11 @@ func TestValidateSftpCredentials(t *testing.T) {
 	ctx := context.Background()
 	if _, err := c.ValidateSftpCredentials(ctx, remote.SftpAuthRequest{User: "u", Pass: "p"}); err == nil {
 		t.Fatal("a Panel that rejects everything must fail the login")
-	} else if pe, ok := err.(*Error); !ok || pe.Status != http.StatusForbidden {
-		t.Fatalf("err = %v", err)
+	} else {
+		var pe *Error
+		if !errors.As(err, &pe) || pe.Status != http.StatusForbidden {
+			t.Fatalf("err = %v", err)
+		}
 	}
 	fp.SftpAuth = func(req map[string]any) (map[string]any, bool) {
 		if req["username"] != "u" {
