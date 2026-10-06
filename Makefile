@@ -5,9 +5,12 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REGISTRY ?= ghcr.io/claiyc/pelican-k8s
 IMAGES := shim agent gateway operator
 CRD_DIR := charts/pelican-k8s/crds
+# Linters the whole tree passes; the others in .golangci.yml gate changed code.
+LINT_GATE := errcheck,govet,ineffassign,staticcheck,unused,misspell,unconvert,errorlint
+LINT_BASE ?= origin/master
 LDFLAGS := -s -w -X github.com/Claiyc/pelican-k8s/internal/version.Version=$(VERSION)
 
-.PHONY: help generate build test lint vet fmt tidy images push
+.PHONY: help generate build test lint lint-all vet fmt tidy images push
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -25,9 +28,14 @@ test: ## Run unit tests
 vet: ## Run go vet
 	$(GO) vet ./...
 
-lint: ## Run golangci-lint (installs it with the repo toolchain if missing)
+lint: ## Run golangci-lint: the whole tree on LINT_GATE, code changed since LINT_BASE on every linter
 	@command -v golangci-lint >/dev/null || $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-	golangci-lint run ./...
+	golangci-lint run --enable-only $(LINT_GATE) ./...
+	golangci-lint run --new-from-merge-base $(LINT_BASE) ./...
+
+lint-all: ## List every finding of every linter, existing code included
+	@command -v golangci-lint >/dev/null || $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 ./...
 
 fmt: ## gofmt all sources
 	gofmt -s -w $$(git ls-files '*.go')

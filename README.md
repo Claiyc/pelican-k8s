@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml)
 [![CodeQL](https://github.com/Claiyc/pelican-k8s/actions/workflows/codeql.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/security/code-scanning)
+[![Coverage](https://codecov.io/gh/Claiyc/pelican-k8s/graph/badge.svg)](https://codecov.io/gh/Claiyc/pelican-k8s)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Claiyc_pelican-k8s&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Claiyc_pelican-k8s)
+[![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=Claiyc_pelican-k8s&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=Claiyc_pelican-k8s)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Claiyc/pelican-k8s/badge)](https://scorecard.dev/viewer/?uri=github.com/Claiyc/pelican-k8s)
 [![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
 [![Commits since release](https://img.shields.io/github/commits-since/Claiyc/pelican-k8s/latest/master?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/commits/master)

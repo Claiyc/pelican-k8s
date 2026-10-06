@@ -4,10 +4,22 @@ run:
   build-tags: [spike, e2e]
 linters:
   default: standard
+  # The Makefile's LINT_GATE names the linters the whole tree is held to; the
+  # rest gate changed code (`make lint`) and report their findings on the
+  # existing code to code scanning.
   enable:
     - misspell
     - unconvert
     - errorlint
+    - bodyclose
+    - contextcheck
+    - dupl
+    - gocognit
+    - gocritic
+    - gocyclo
+    - gosec
+    - nilerr
+    - revive
   settings:
     errcheck:
       # Closing readers/sockets and best-effort writes to logs and ring buffers.
@@ -25,6 +37,9 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - (*github.com/Claiyc/pelican-k8s/internal/shim/ringbuf.Buffer).Write
+    gosec:
+      # Unchecked errors are errcheck's, with the exclusions above.
+      excludes: [G104]
     staticcheck:
       checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
   exclusions:
@@ -34,5 +49,12 @@ linters:
     rules:
       - path: _test\.go
         linters: [errcheck]
+      # Tests and the test harness read fixtures, run commands and walk through
+      # long scenarios on purpose.
+      - path: (_test\.go|^test/)
+        linters: [gosec, gocognit, gocyclo, dupl]
+      # Handlers and interface implementations take parameters they ignore.
+      - linters: [revive]
+        text: "^unused-parameter:"
       - linters: [staticcheck]
         text: "SA1019: .*(scheme.Builder|GetEventRecorderFor)"
