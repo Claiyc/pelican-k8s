@@ -99,7 +99,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		header.Set("Origin", p.OriginForAgent)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
-	agent, _, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
+	agent, resp, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		p.Log.Warn("agent websocket dial failed", "uuid", uuid, "error", err)
 		_ = client.WriteJSON(Message{Event: "daemon error", Args: []string{"could not reach the server agent"}})
@@ -139,80 +142,108 @@ func (s *session) writeAgentRaw(mt int, data []byte) error {
 
 func (s *session) run(ctx context.Context) {
 	done := make(chan struct{}, 2)
-	// agent -> client: pass through.
 	go func() {
 		defer func() { done <- struct{}{} }()
-		for {
-			mt, data, err := s.agent.ReadMessage()
-			if err != nil {
-				var ce *websocket.CloseError
-				if errors.As(err, &ce) {
-					s.clientWriteMu.Lock()
-					_ = s.client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(ce.Code, ce.Text), time.Now().Add(time.Second))
-					s.clientWriteMu.Unlock()
-				}
-				return
-			}
-			s.clientWriteMu.Lock()
-			err = s.client.WriteMessage(mt, data)
-			s.clientWriteMu.Unlock()
-			if err != nil {
-				return
-			}
-		}
+		s.pumpAgentToClient()
 	}()
-	// client -> agent: inspect auth and set state.
 	go func() {
 		defer func() { done <- struct{}{} }()
-		for {
-			mt, data, err := s.client.ReadMessage()
-			if err != nil {
-				s.agentWriteMu.Lock()
-				_ = s.agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-				s.agentWriteMu.Unlock()
-				return
-			}
-			if mt != websocket.TextMessage {
-				continue
-			}
-			var m Message
-			if err := json.Unmarshal(data, &m); err != nil {
-				_ = s.writeAgentRaw(mt, data)
-				continue
-			}
-			switch m.Event {
-			case "auth":
-				claims, raw, err := jwtx.Verify([]byte(strings.Join(m.Args, "")), []byte(s.p.Cfg.NodeToken))
-				if err != nil {
-					_ = s.writeClient(Message{Event: "jwt error", Args: []string{"jwt: " + err.Error()}})
-					continue
-				}
-				if claims.ServerUUID != s.uuid {
-					_ = s.writeClient(Message{Event: "jwt error", Args: []string{"jwt: server uuid mismatch"}})
-					continue
-				}
-				resigned, err := jwtx.Resign(raw, []byte(s.agentToken))
-				if err != nil {
-					_ = s.writeClient(Message{Event: "jwt error", Args: []string{"jwt: re-sign failed"}})
-					continue
-				}
-				s.mu.Lock()
-				s.claims = claims
-				s.mu.Unlock()
-				out, _ := json.Marshal(Message{Event: "auth", Args: []string{string(resigned)}})
-				if err := s.writeAgentRaw(websocket.TextMessage, out); err != nil {
-					return
-				}
-			case "set state":
-				s.setState(ctx, strings.Join(m.Args, ""))
-			default:
-				if err := s.writeAgentRaw(mt, data); err != nil {
-					return
-				}
-			}
-		}
+		s.pumpClientToAgent(ctx)
 	}()
 	<-done
+}
+
+// pumpAgentToClient passes agent frames through to the browser until either
+// side closes.
+func (s *session) pumpAgentToClient() {
+	for {
+		mt, data, err := s.agent.ReadMessage()
+		if err != nil {
+			var ce *websocket.CloseError
+			if errors.As(err, &ce) {
+				s.clientWriteMu.Lock()
+				_ = s.client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(ce.Code, ce.Text), time.Now().Add(time.Second))
+				s.clientWriteMu.Unlock()
+			}
+			return
+		}
+		s.clientWriteMu.Lock()
+		err = s.client.WriteMessage(mt, data)
+		s.clientWriteMu.Unlock()
+		if err != nil {
+			return
+		}
+	}
+}
+
+// pumpClientToAgent forwards browser frames to the agent, inspecting auth and
+// set state, until either side closes.
+func (s *session) pumpClientToAgent(ctx context.Context) {
+	for {
+		mt, data, err := s.client.ReadMessage()
+		if err != nil {
+			s.agentWriteMu.Lock()
+			_ = s.agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			s.agentWriteMu.Unlock()
+			return
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var m Message
+		if err := json.Unmarshal(data, &m); err != nil {
+			_ = s.writeAgentRaw(mt, data)
+			continue
+		}
+		switch m.Event {
+		case "auth":
+			if err := s.handleAuth(m); err != nil {
+				return
+			}
+		case "set state":
+			s.setState(ctx, strings.Join(m.Args, ""))
+		default:
+			if err := s.writeAgentRaw(mt, data); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// handleAuth verifies the Panel-signed JWT of an auth frame, re-signs it with
+// the agent token, remembers its claims for later permission checks and
+// forwards it to the agent. A rejected token is reported to the browser as a
+// "jwt error" and is not an error here; only a failed write to the agent is
+// returned, since that ends the session.
+func (s *session) handleAuth(m Message) error {
+	claims, resigned, rejection := s.verifyAuth(m)
+	if rejection != "" {
+		_ = s.writeClient(Message{Event: "jwt error", Args: []string{rejection}})
+		return nil
+	}
+	s.mu.Lock()
+	s.claims = claims
+	s.mu.Unlock()
+	out, _ := json.Marshal(Message{Event: "auth", Args: []string{string(resigned)}})
+	return s.writeAgentRaw(websocket.TextMessage, out)
+}
+
+// verifyAuth checks the token of an auth frame against the node token and this
+// session's server, and re-signs it with the agent token. A non-empty
+// rejection is the text to report to the browser.
+func (s *session) verifyAuth(m Message) (claims *jwtx.Claims, resigned []byte, rejection string) {
+	claims, raw, err := jwtx.Verify([]byte(strings.Join(m.Args, "")), []byte(s.p.Cfg.NodeToken))
+	if err != nil {
+		return nil, nil, "jwt: " + err.Error()
+	}
+	if claims.ServerUUID != s.uuid {
+		return nil, nil, "jwt: server uuid mismatch"
+	}
+	resigned, err = jwtx.Resign(raw, []byte(s.agentToken))
+	if err != nil {
+		return nil, nil, "jwt: re-sign failed"
+	}
+	return claims, resigned, ""
 }
 
 // setState turns a power request into a spec change after checking the

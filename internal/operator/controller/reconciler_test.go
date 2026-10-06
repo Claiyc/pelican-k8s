@@ -45,6 +45,9 @@ type fakeAgent struct {
 	calls []string
 	state string
 	err   error
+	// getErr and exitErr fail GetServer and ExitState.
+	getErr  error
+	exitErr error
 }
 
 func (f *fakeAgent) record(s string) {
@@ -54,6 +57,9 @@ func (f *fakeAgent) record(s string) {
 }
 func (f *fakeAgent) Healthy(context.Context) bool { return true }
 func (f *fakeAgent) GetServer(ctx context.Context, uuid string) (*agentclient.State, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	st := &agentclient.State{}
 	st.State = f.state
 	if st.State == "" {
@@ -73,7 +79,7 @@ func (f *fakeAgent) Install(ctx context.Context, uuid string, reinstall bool) er
 func (f *fakeAgent) Delete(ctx context.Context, uuid string) error { f.record("delete"); return nil }
 func (f *fakeAgent) ExitState(ctx context.Context, code int32, oom bool) error {
 	f.record(fmt.Sprintf("exit:%d:%v", code, oom))
-	return nil
+	return f.exitErr
 }
 func (f *fakeAgent) Calls() []string {
 	f.mu.Lock()
@@ -889,7 +895,7 @@ func TestApplyServiceUntypedMatchesClusterIP(t *testing.T) {
 }
 
 func TestLimitsRemoved(t *testing.T) {
-	q := func(s string) resource.Quantity { return resource.MustParse(s) }
+	q := resource.MustParse
 	both := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: q("4"), corev1.ResourceMemory: q("2Gi")}}
 	memOnly := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: q("2Gi")}}
 	none := corev1.ResourceRequirements{}

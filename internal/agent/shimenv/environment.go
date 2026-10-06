@@ -412,7 +412,7 @@ func (e *Environment) Stop(ctx context.Context) error {
 		e.SetState(environment.ProcessStoppingState)
 	}
 	if e.IsAttached() && s.Type == remote.ProcessStopCommand {
-		return e.SendCommand(s.Value)
+		return e.SendCommand(s.Value) //nolint:contextcheck // Wings fixes the SendCommand signature, so it cannot take a context
 	}
 	// Not attached: the equivalent of "docker stop" is a SIGTERM to the process.
 	c := e.currentClient()
@@ -432,7 +432,7 @@ func (e *Environment) Stop(ctx context.Context) error {
 
 // WaitForStop implements ProcessEnvironment.
 func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, terminate bool) error {
-	tctx, cancel := context.WithTimeout(context.Background(), duration)
+	tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), duration)
 	defer cancel()
 	go func() {
 		select {

@@ -39,14 +39,16 @@ func main() {
 	}
 	app.SetRestConfig(rc)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
 	logger.Info("pelican-k8s gateway starting", "version", version.Version, "panel", cfg.PanelURL, "namespace", cfg.ServersNamespace)
 	g, err := app.New(ctx, cfg, rc, logger)
 	if err != nil {
+		cancel()
 		logger.Error("gateway setup failed", "error", err)
 		os.Exit(1)
 	}
-	if err := g.Run(ctx); err != nil {
+	err = g.Run(ctx)
+	cancel()
+	if err != nil {
 		logger.Error("gateway exited", "error", err)
 		os.Exit(1)
 	}

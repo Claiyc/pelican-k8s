@@ -90,7 +90,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	defer cancel()
 	for _, s := range m.All() {
 		if s.Environment.State() == environment.ProcessOfflineState {
