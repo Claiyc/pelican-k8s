@@ -448,6 +448,10 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 	}
 
 	if err := e.Stop(tctx); err != nil {
+		// The parent being done also cancels tctx; report that cause.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if terminate && errors.Is(err, context.DeadlineExceeded) {
 			return doTermination("stop")
 		}
@@ -470,6 +474,10 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 		case <-tctx.Done():
 			if terminate {
 				return doTermination("wait")
+			}
+			// The parent being done also cancels tctx; report that cause.
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			return errors.New("environment/shim: timed out waiting for process to stop")
 		case <-exited:
