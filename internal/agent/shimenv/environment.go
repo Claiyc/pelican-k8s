@@ -466,6 +466,10 @@ func (e *Environment) WaitForStop(ctx context.Context, duration time.Duration, t
 			if terminate {
 				return doTermination("wait")
 			}
+			// The parent being done also cancels tctx; report that cause.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return errors.New("environment/shim: timed out waiting for process to stop")
 		case <-exited:
 			return nil
