@@ -51,17 +51,22 @@ func globMatch(pattern, image string) bool {
 	if strings.HasSuffix(pattern, "*") {
 		return strings.HasPrefix(image, strings.TrimSuffix(pattern, "*"))
 	}
-	if !strings.Contains(pattern, ":") && !strings.Contains(pattern, "@") {
-		repo := image
-		if i := strings.LastIndex(repo, "@"); i >= 0 {
-			repo = repo[:i]
-		}
-		if i := strings.LastIndex(repo, ":"); i >= 0 && !strings.Contains(repo[i:], "/") {
-			repo = repo[:i]
-		}
-		return repo == pattern
+	if repoOf(pattern) == pattern && !strings.Contains(pattern, "@") {
+		return repoOf(image) == pattern
 	}
 	return false
+}
+
+// repoOf strips the digest and the tag from an image reference. A colon
+// followed by a "/" belongs to a registry port, not to a tag.
+func repoOf(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndex(ref, ":"); i >= 0 && !strings.Contains(ref[i:], "/") {
+		ref = ref[:i]
+	}
+	return ref
 }
 
 // Resolver resolves image digests and, optionally, the image config from the
