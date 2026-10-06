@@ -86,7 +86,10 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | Pelican Panel | The same workflow compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
-| Static analysis | CodeQL (Go) on pushes, PRs and weekly; golangci-lint in CI | Security → Code scanning, CI job *golangci-lint* |
+| Static analysis | CodeQL (Go, the `security-and-quality` suite) on pushes, PRs and weekly. golangci-lint in CI in two stages (`make lint`): the whole tree must pass the linters in the Makefile's `LINT_GATE`, and code changed since the base branch must pass every linter in `.golangci.yml`. Every finding of every linter on the existing code is uploaded as SARIF and fails nothing (`make lint-all` lists the same locally) | Security → Code scanning, CI job *golangci-lint* |
+| Test coverage | The unit tests and the spike (the agent in-process) each write a coverage profile; the CI job *Coverage and quality reports* uploads both to Codecov, which comments on pull requests with the coverage of the changed lines (target 70 %, reported and not enforced, `codecov.yml`). The kind suites run the images and are not counted | Codecov, coverage badge |
+| Maintainability, duplication, complexity | SonarQube Cloud, analysed from the same CI job with both coverage profiles and every golangci-lint finding, which it lists next to its own issues (`sonar-project.properties`); pull requests from forks and Dependabot run without the token and are skipped | SonarQube Cloud, quality gate badge |
+| Review | CodeRabbit reviews pull requests as an advisory reader (`.coderabbit.yaml`); it skips Dependabot and release PRs and blocks nothing | Pull request comments |
 | Untrusted-input parsers | Native Go fuzzing of the shim protocol, the output ring buffer and the gateway's JWT verification | CI job *Fuzz* |
 | Build inputs | Every GitHub Action is pinned to a commit SHA and every base image to a digest (the trailing comment carries the human-readable version); Dependabot bumps both. `test/supplychain` fails the build if a pin or a least-privilege token scope regresses | `.github/workflows/`, `build/*.Dockerfile` |
 | Dependabot alerts and security updates | Enabled on the repository (GitHub advisory database) | Security → Dependabot |
@@ -116,11 +119,13 @@ fine-grained PAT in `scorecard.yaml` to read classic branch protection rules.
 
 ## Releases
 
-Merge the release PR. Nothing else is manual.
+Mark the release PR ready and merge it. Nothing else is manual.
 
 - **The release PR.** Whenever something was merged since the last release,
   the `Release PR` workflow keeps a `release: X.Y.Z` PR open on the
-  `release/next` branch and rewrites it on every push to master. It runs
+  `release/next` branch and rewrites it on every push to master. The PR is
+  opened as a draft, and rewriting it leaves the draft state alone, so it
+  cannot be merged until a maintainer marks it ready. It runs
   `hack/release-prep.sh`, which writes the `CHANGELOG.md` section from
   GitHub's generated release notes (the PRs merged since the last tag; release
   PRs are left out by `.github/release.yml`) and bumps

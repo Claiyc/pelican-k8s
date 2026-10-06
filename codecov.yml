@@ -1,0 +1,34 @@
+# Codecov: the CI job "Coverage and quality reports" uploads the unit and the
+# spike coverage profiles (docs/development.md, "Dependencies, security and
+# quality").
+codecov:
+  require_ci_to_pass: false
+
+coverage:
+  status:
+    # The total moves with code that only the kind suites exercise, so it is
+    # shown and not enforced.
+    project:
+      default:
+        informational: true
+    # Changed lines are what a pull request can answer for.
+    patch:
+      default:
+        target: 70%
+        informational: true
+
+flags:
+  unit:
+    carryforward: false
+  spike:
+    # The spike needs Docker and the network; a run that lost it keeps the
+    # last known coverage instead of dropping the total.
+    carryforward: true
+
+ignore:
+  - "test/**"
+  - "**/zz_generated.*.go"
+
+comment:
+  layout: "condensed_header, diff, flags, condensed_files"
+  require_changes: true

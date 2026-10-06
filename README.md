@@ -1,11 +1,17 @@
-# pelican-k8s
+<h1 align="center">pelican-k8s</h1>
 
-[![CI](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml)
-[![CodeQL](https://github.com/Claiyc/pelican-k8s/actions/workflows/codeql.yaml/badge.svg)](https://github.com/Claiyc/pelican-k8s/security/code-scanning)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Claiyc/pelican-k8s/badge)](https://scorecard.dev/viewer/?uri=github.com/Claiyc/pelican-k8s)
-[![Release](https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/releases)
-[![Commits since release](https://img.shields.io/github/commits-since/Claiyc/pelican-k8s/latest/master?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/commits/master)
-[![License](https://img.shields.io/github/license/Claiyc/pelican-k8s)](LICENSE)
+<p align="center">
+  <a href="https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/Claiyc/pelican-k8s/actions/workflows/ci.yaml/badge.svg"></a>
+  <a href="https://codecov.io/gh/Claiyc/pelican-k8s"><img alt="Coverage" src="https://codecov.io/gh/Claiyc/pelican-k8s/graph/badge.svg"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=Claiyc_pelican-k8s"><img alt="Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=Claiyc_pelican-k8s&metric=alert_status"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=Claiyc_pelican-k8s"><img alt="Maintainability" src="https://sonarcloud.io/api/project_badges/measure?project=Claiyc_pelican-k8s&metric=sqale_rating"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=Claiyc_pelican-k8s"><img alt="Security Rating" src="https://sonarcloud.io/api/project_badges/measure?project=Claiyc_pelican-k8s&metric=security_rating"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/Claiyc/pelican-k8s"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/Claiyc/pelican-k8s/badge"></a>
+  <br>
+  <a href="https://github.com/Claiyc/pelican-k8s/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Claiyc/pelican-k8s?include_prereleases&sort=semver"></a>
+  <a href="https://github.com/Claiyc/pelican-k8s/commits/master"><img alt="Commits since release" src="https://img.shields.io/github/commits-since/Claiyc/pelican-k8s/latest/master?include_prereleases&sort=semver"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Claiyc/pelican-k8s"></a>
+</p>
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
 
