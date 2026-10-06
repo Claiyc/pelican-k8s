@@ -149,7 +149,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 			g.Log.Error("component failed", "error", runErr)
 		}
 	}
-	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer scancel()
 	_ = panelSrv.Shutdown(sctx)
 	_ = remoteSrv.Shutdown(sctx)

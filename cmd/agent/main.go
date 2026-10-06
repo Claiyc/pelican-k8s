@@ -46,8 +46,9 @@ func main() {
 	log.SetHandler(errorStringHandler{json.New(os.Stdout)})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-	if err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimSocket: *socket, ShimToken: os.Getenv(protocol.TokenEnv), Logger: logger}); err != nil {
+	err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimSocket: *socket, ShimToken: os.Getenv(protocol.TokenEnv), Logger: logger})
+	cancel()
+	if err != nil {
 		logger.Error("agent failed", "error", err)
 		os.Exit(1)
 	}

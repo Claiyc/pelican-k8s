@@ -174,7 +174,7 @@ func (r *Relay) Run(ctx context.Context) error {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return nil //nolint:nilerr // the listener was closed for shutdown, which is not an error
 			}
 			continue
 		}

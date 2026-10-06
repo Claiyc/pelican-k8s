@@ -889,7 +889,7 @@ func TestApplyServiceUntypedMatchesClusterIP(t *testing.T) {
 }
 
 func TestLimitsRemoved(t *testing.T) {
-	q := func(s string) resource.Quantity { return resource.MustParse(s) }
+	q := resource.MustParse
 	both := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: q("4"), corev1.ResourceMemory: q("2Gi")}}
 	memOnly := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: q("2Gi")}}
 	none := corev1.ResourceRequirements{}
