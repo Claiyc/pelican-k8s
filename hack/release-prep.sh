@@ -49,19 +49,28 @@ if [[ -z "$next" ]]; then
   # The largest bump any reason asks for: 0 patch, 1 minor, 2 major.
   bump=0 why="no major or minor label on the PRs merged since v$current"
   raise() { if [[ "$1" -gt "$bump" ]]; then bump=$1 why=$2; fi; }
+  # Reads label names, one per line; $1 says whose labels they are.
+  raise_by_label() {
+    local label
+    while IFS= read -r label; do
+      case $label in
+        major) raise 2 "$1 is labelled major" ;;
+        minor) raise 1 "$1 is labelled minor" ;;
+      esac
+    done
+  }
   # A major or minor label on any PR merged since the last release. The PR
   # number is the last "(#N)" of a squash merge's subject, or "#N" of a merge
   # commit's "Merge pull request #N".
   r=$(repo)
   for pr in $(git log --format=%s "v$current..HEAD" | grep -v '^release: ' |
     sed -nE -e 's/^Merge pull request #([0-9]+).*/\1/p' -e 's/.*\(#([0-9]+)\)$/\1/p' | sort -un); do
-    for label in $(gh api "repos/$r/issues/$pr" --jq '.labels[].name'); do
-      case $label in
-        major) raise 2 "#$pr is labelled major" ;;
-        minor) raise 1 "#$pr is labelled minor" ;;
-      esac
-    done
+    raise_by_label "#$pr" < <(gh api "repos/$r/issues/$pr" --jq '.labels[].name')
   done
+  # So does the open release PR itself (the release-pr workflow's branch), the
+  # quickest way to ask for a bigger release without finding the PR to label.
+  raise_by_label "the release PR" < <(gh pr list --head "${RELEASE_BRANCH:-release/next}" --state open \
+    --json labels,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .labels[].name')
   # Hand-written notes under [Unreleased] can raise it too.
   if grep -qE '^### Removed|BREAKING' <<<"$unreleased"; then
     raise 2 "CHANGELOG.md [Unreleased] has a ### Removed heading or says BREAKING"
