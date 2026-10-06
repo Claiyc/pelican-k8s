@@ -256,7 +256,8 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatal("Run did not return after cancel")
 	}
 	// The listener is closed after shutdown.
-	if _, err := http.Get(base + "/internal/v1/healthz"); err == nil {
+	if res, err := http.Get(base + "/internal/v1/healthz"); err == nil {
+		res.Body.Close()
 		t.Fatal("the HTTP server is still serving")
 	}
 }

@@ -4,24 +4,24 @@ import "testing"
 
 func TestNames(t *testing.T) {
 	const u = "0123456789abcdef"
-	cases := map[string]string{
-		ForUUID(u):                "gs-" + u,
-		PVC(u):                    "gs-" + u,
-		EnvSecret(u):              "gs-" + u + "-env",
-		AgentSecret(u):            "gs-" + u + "-agent",
-		ShimSecret(u):             "gs-" + u + "-shim",
-		StatefulSet(u):            "gs-" + u,
-		Pod(u):                    "gs-" + u + "-0",
-		ExposureService(u):        "gs-" + u,
-		AgentService(u):           "gs-" + u + "-agent",
-		NetworkPolicy(u):          "gs-" + u,
-		InstallConfigMap(u, 3):    "gs-" + u + "-install-3",
-		InstallJob(u, 3):          "gs-" + u + "-install-3",
-		InstallConfigMap(u, 1234): "gs-" + u + "-install-1234",
+	cases := []struct{ got, want string }{
+		{ForUUID(u), "gs-" + u},
+		{PVC(u), "gs-" + u},
+		{EnvSecret(u), "gs-" + u + "-env"},
+		{AgentSecret(u), "gs-" + u + "-agent"},
+		{ShimSecret(u), "gs-" + u + "-shim"},
+		{StatefulSet(u), "gs-" + u},
+		{Pod(u), "gs-" + u + "-0"},
+		{ExposureService(u), "gs-" + u},
+		{AgentService(u), "gs-" + u + "-agent"},
+		{NetworkPolicy(u), "gs-" + u},
+		{InstallConfigMap(u, 3), "gs-" + u + "-install-3"},
+		{InstallJob(u, 3), "gs-" + u + "-install-3"},
+		{InstallConfigMap(u, 1234), "gs-" + u + "-install-1234"},
 	}
-	for got, want := range cases {
-		if got != want {
-			t.Errorf("got %q want %q", got, want)
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("got %q want %q", tc.got, tc.want)
 		}
 	}
 }

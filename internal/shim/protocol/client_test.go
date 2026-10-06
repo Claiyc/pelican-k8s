@@ -418,7 +418,8 @@ func TestAcceptSkipsDeadConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if _, err := Answer(second, NewEncoder(second), token, 2*time.Second); err != nil {
+	secondDec, err := Answer(second, NewEncoder(second), token, 2*time.Second)
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Wait until the newer connection replaced the older one.
@@ -427,19 +428,31 @@ func TestAcceptSkipsDeadConnections(t *testing.T) {
 		ln.mu.Lock()
 		n := len(ln.ready)
 		ln.mu.Unlock()
-		if n == 2 || time.Now().After(deadline) {
+		if n == 2 {
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ready queue length = %d, want 2", n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// Answer the first request on the newer connection only.
+	go func() {
+		var m Message
+		if secondDec.Decode(&m) != nil {
+			return
+		}
+		_ = NewEncoder(second).Encode(&Message{Type: TypeReply, ID: m.ID, OK: true, Status: &Status{PID: 7}})
+	}()
 	c, err := accept(t, ln, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.Done():
-		t.Fatal("Accept returned the replaced connection")
-	default:
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	st, err := c.Status(ctx)
+	if err != nil || st.PID != 7 {
+		t.Fatalf("Accept returned the replaced connection: status %+v, err %v", st, err)
 	}
 	first.Close()
 }

@@ -225,7 +225,6 @@ func TestStopWhileDetachedSignalsTheProcess(t *testing.T) {
 // escalation to SIGKILL once the wait expires.
 func TestWaitForStopEscalates(t *testing.T) {
 	stubborn := []string{"/bin/sh", "-c", `trap '' TERM; echo ready; while true; do sleep 0.05; done`}
-	ctx := context.Background()
 
 	for name, stop := range map[string]remote.ProcessStopConfiguration{
 		"signal stop": {Type: remote.ProcessStopSignal, Value: "SIGTERM"},
@@ -234,11 +233,11 @@ func TestWaitForStopEscalates(t *testing.T) {
 		t.Run(name+" terminates", func(t *testing.T) {
 			e, _, _ := newTestEnv(t, stubborn)
 			e.SetStopConfiguration(stop)
-			if err := e.Start(ctx); err != nil {
+			if err := e.Start(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			waitLogLine(t, e, "ready")
-			if err := e.WaitForStop(ctx, 300*time.Millisecond, true); err != nil {
+			if err := e.WaitForStop(context.Background(), 300*time.Millisecond, true); err != nil {
 				t.Fatal(err)
 			}
 			waitState(t, e, environment.ProcessOfflineState, 5*time.Second)
@@ -251,11 +250,11 @@ func TestWaitForStopEscalates(t *testing.T) {
 	t.Run("without terminate it reports the timeout", func(t *testing.T) {
 		e, _, _ := newTestEnv(t, stubborn)
 		e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"})
-		if err := e.Start(ctx); err != nil {
+		if err := e.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		waitLogLine(t, e, "ready")
-		err := e.WaitForStop(ctx, 300*time.Millisecond, false)
+		err := e.WaitForStop(context.Background(), 300*time.Millisecond, false)
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Fatalf("err = %v", err)
 		}
@@ -267,11 +266,11 @@ func TestWaitForStopEscalates(t *testing.T) {
 	t.Run("parent context cancellation without terminate", func(t *testing.T) {
 		e, _, _ := newTestEnv(t, stubborn)
 		e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"})
-		if err := e.Start(ctx); err != nil {
+		if err := e.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		waitLogLine(t, e, "ready")
-		cctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		cctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 		if err := e.WaitForStop(cctx, time.Minute, false); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v", err)
