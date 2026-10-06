@@ -2,6 +2,7 @@ package shimenv
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,6 +213,21 @@ func TestInjectExit(t *testing.T) {
 	code, oom, _ := e.ExitState()
 	if code != 137 || !oom {
 		t.Fatalf("exit %d %v", code, oom)
+	}
+}
+
+// A code that does not fit Wings' uint32 (a negative one from a signal, or one
+// above the range) is reported as a generic failure instead of wrapping around.
+func TestExitStateClampsOutOfRangeCodes(t *testing.T) {
+	e := &Environment{}
+	for _, tc := range []struct {
+		in   int
+		want uint32
+	}{{0, 0}, {137, 137}, {-1, 1}, {math.MaxUint32 + 1, 1}} {
+		e.lastExit = &protocol.ExitState{Code: tc.in}
+		if got, _, _ := e.ExitState(); got != tc.want {
+			t.Errorf("code %d reported as %d, want %d", tc.in, got, tc.want)
+		}
 	}
 }
 
