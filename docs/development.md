@@ -134,8 +134,10 @@ Mark the release PR ready and merge it. Nothing else is manual.
 - **The version.** A patch release by default. Label a PR `minor` (a new
   feature) or `major` (a breaking change) and the next release is at least
   that; the largest label among the PRs merged since the last release wins,
-  and the release PR says which PR decided it. Labelling a PR after it was
-  merged updates the release PR straight away. Notes written by hand under
+  and the release PR says which PR decided it. The release PR itself can
+  carry the label too, which is the quickest way to ask for a bigger release.
+  Labelling a PR after it was merged, or the release PR, updates the release
+  PR straight away. Notes written by hand under
   `## [Unreleased]` are kept above the generated list and can raise it too:
   `### Added`, `### Changed` or `### Deprecated` make a minor release,
   `### Removed` or the word `BREAKING` a major one.
@@ -153,7 +155,9 @@ Mark the release PR ready and merge it. Nothing else is manual.
   fine-grained PAT or GitHub App token with *Contents* and *Pull requests*
   write access to this repository. Either way the workflow runs `test/docs` on
   the prepared tree before pushing it, and the repository setting *Allow
-  GitHub Actions to create and approve pull requests* must be on.
+  GitHub Actions to create and approve pull requests* must be on. CI, CodeQL
+  and Contract skip the release PR while it is a draft; marking it ready
+  starts them.
 - **By hand.** `hack/release-prep.sh [X.Y.Z]` prepares the same change locally
   (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag releases
   that tag.

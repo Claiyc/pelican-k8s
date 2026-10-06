@@ -7,8 +7,8 @@
 # release: the Release workflow sees a chart version without a tag on master
 # and tags, builds and publishes it.
 #
-# A "minor" or "major" label on a merged PR raises the version; labelling a PR
-# after it was merged refreshes the release PR too.
+# A "minor" or "major" label on a merged PR or on the release PR itself raises
+# the version; labelling either one later refreshes the release PR too.
 name: Release PR
 
 on:
@@ -35,13 +35,15 @@ concurrency:
 jobs:
   release-pr:
     name: Open or update the release PR
-    # Label changes matter only for the version labels on PRs already merged
-    # into the default branch.
+    # Label changes matter only for the version labels, on PRs already merged
+    # into the default branch and on the open release PR itself.
     if: >-
       github.event_name != 'pull_request_target' ||
-      (github.event.pull_request.merged &&
-       github.event.pull_request.base.ref == github.event.repository.default_branch &&
-       contains(fromJSON('["major", "minor"]'), github.event.label.name))
+      (github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       contains(fromJSON('["major", "minor"]'), github.event.label.name) &&
+       (github.event.pull_request.merged ||
+        (github.event.pull_request.head.ref == 'release/next' &&
+         github.event.pull_request.head.repo.full_name == github.repository)))
     runs-on: ubuntu-latest
     permissions:
       contents: write       # push the release/next branch, generate the notes
