@@ -50,10 +50,6 @@ type Config struct {
 	SFTPHostKeySecret string
 	// SFTPKeyOnly disables password authentication for SFTP.
 	SFTPKeyOnly bool
-	// UploadLimitMiB caps browser uploads (must match the agent config and ingress).
-	UploadLimitMiB int64
-	// TrustedProxies are CIDRs whose X-Forwarded-For is honoured.
-	TrustedProxies []string
 	// StateCacheTTL bounds how often an agent is polled for GET /api/servers/:s.
 	StateCacheTTL time.Duration
 	// Timezone is passed to install Jobs as TZ.
@@ -80,11 +76,9 @@ func FromEnv() (*Config, error) {
 		MetalLBPoolNames:  splitList(os.Getenv("PELICAN_GW_METALLB_POOL_NAMES")),
 		SFTPHostKeySecret: envOr("PELICAN_GW_SFTP_HOSTKEY_SECRET", "pelican-gateway-sftp-hostkey"),
 		SFTPKeyOnly:       os.Getenv("PELICAN_GW_SFTP_KEY_ONLY") == "true",
-		TrustedProxies:    splitList(os.Getenv("PELICAN_GW_TRUSTED_PROXIES")),
 		Timezone:          envOr("TZ", "UTC"),
 		ResyncInterval:    15 * time.Minute,
 		StateCacheTTL:     2 * time.Second,
-		UploadLimitMiB:    100,
 	}
 	if v := os.Getenv("PELICAN_GW_RESYNC_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -99,13 +93,6 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("PELICAN_GW_METALLB_MAX_ADDRESSES: %w", err)
 		}
 		c.MetalLBMaxAddresses = n
-	}
-	if v := os.Getenv("PELICAN_GW_UPLOAD_LIMIT_MIB"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("PELICAN_GW_UPLOAD_LIMIT_MIB: %w", err)
-		}
-		c.UploadLimitMiB = n
 	}
 	// Tokens may be supplied through files (mounted Secrets).
 	if c.NodeToken == "" {

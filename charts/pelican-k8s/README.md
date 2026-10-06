@@ -43,7 +43,6 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `gateway.metallb.discoverPools` / `.poolNames` / `.maxAddresses` | `false` / `[]` / `256` | Offer MetalLB `IPAddressPool` addresses from `/api/system/ips` (empty `poolNames` = every pool) |
 | `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` | How agents reach the gateway |
 | `gateway.resyncInterval` | `15m` | Panel/cluster drift check |
-| `gateway.uploadLimitMiB` | `100` | Browser upload limit (match the agent and ingress body limits) |
 | `gateway.extraCA.configMap` / `.key` | `""` / `ca.crt` | ConfigMap with a PEM CA to trust for the Panel's TLS (private CAs, OpenShift router CA) |
 | `gateway.sftp.service.type` / `.port` / `.nodePort` | `NodePort` / `2022` / `30022` | How users reach SFTP |
 | `gateway.sftp.keyOnly` | `false` | Disable SFTP password logins |
@@ -58,7 +57,6 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods and install Jobs |
 | `networkPolicies.enabled` | `true` | Default deny in the servers namespace plus gateway policies |
-| `networkPolicies.ingressNamespaceSelector` | `{}` | Namespace label selector of the ingress controller allowed to reach the gateway |
 | `openshift.enabled` | `false` | SCC bindings, namespace UID ranges and seccomp handling for OpenShift |
 | `openshift.gameSCC` / `openshift.installerSCC` | `restricted-v2` / `anyuid` | SCCs bound to the game and installer ServiceAccounts |
 

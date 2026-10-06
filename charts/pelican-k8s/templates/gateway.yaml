@@ -80,8 +80,6 @@ spec:
             {{- end }}
             - name: PELICAN_GW_RESYNC_INTERVAL
               value: {{ .Values.gateway.resyncInterval | quote }}
-            - name: PELICAN_GW_UPLOAD_LIMIT_MIB
-              value: {{ .Values.gateway.uploadLimitMiB | quote }}
             - name: PELICAN_GW_SFTP_HOSTKEY_SECRET
               value: {{ .Values.gateway.sftp.hostKeySecret | quote }}
             - name: PELICAN_GW_SFTP_KEY_ONLY

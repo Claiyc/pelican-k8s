@@ -23,8 +23,9 @@ Game pods satisfy the `restricted` Pod Security Standard: non-root pinned UID,
 filesystem, no host namespaces, no service account token. Because install
 Jobs need root in the same namespace, the namespace is labelled `baseline` and
 the restricted shape of game pods is enforced by a `ValidatingAdmissionPolicy`
-bound to their ServiceAccount; a second policy limits install pods to the
-server volume, the script ConfigMap and emptyDirs.
+bound to their ServiceAccount; a second policy limits install pods to PVC,
+ConfigMap and emptyDir volumes and forbids host ports, added capabilities and
+privilege escalation.
 
 On OpenShift the same split maps to SCCs (`restricted-v2` for game pods with
 the namespace UID range, `anyuid` for the installer).
@@ -33,18 +34,23 @@ the namespace UID range, `anyuid` for the installer).
 
 - The servers namespace has a default-deny policy for ingress and egress.
 - Each server gets a policy allowing its allocation ports from anywhere, the
-  agent ports from the gateway and operator only, DNS, internet egress minus the
-  cluster, node and LAN ranges you configure in `network.blockedEgressCIDRs`,
-  and the in-cluster allowances of the class.
-- Install Jobs get DNS and internet egress only.
+  agent ports from the gateway and operator only, DNS, the gateway's remote API
+  port, egress to `0.0.0.0/0` except link-local and the ranges in
+  `network.blockedEgressCIDRs` (empty by default: list the pod, service, node
+  and LAN ranges there), and the in-cluster allowances of the class.
+- Install Jobs get DNS and the same internet egress, without the in-cluster
+  allowances.
 - Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster,
   protected by NetworkPolicy and bearer tokens.
 
 ## Blast radius
 
-A compromised game process can read and write its own files, use the pod's
-allowed egress and talk to the shim socket that controls only itself. It cannot
-reach the Panel, other agents, the Kubernetes API or the node token.
+A compromised game process can read and write its own files and use the
+pod's allowed egress, which includes the gateway's remote API port. It shares
+`/pelican/run` and the UID with the shim, so it can also replace the shim
+socket and feed its own agent false process state, console output, stats and
+exit codes. It cannot reach the Panel, other agents, the Kubernetes API or the
+node token.
 
 A compromised agent holds its own Wings token: it can act as its own server
 towards the Panel through the gateway's allow-list (state, activity, install

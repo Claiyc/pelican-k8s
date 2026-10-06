@@ -15,14 +15,14 @@
 | Activity log | ✅ | Per-agent SQLite on the volume, forwarded through the gateway |
 | Suspension, deauthorize | ✅ | |
 | Image change at next start | ✅ | Pod recreate at the next safe point, digest pinned |
-| Live resource changes | ✅ | In-place pod resize; `ResizePending` when deferred |
+| Live resource changes | ✅ | In-place pod resize; `ResizePending` when deferred. Removing a limit (Panel "unlimited") recreates the pod once the process is offline |
 | Disk limit | ⚠️ | Wings soft limit plus the PVC hard limit; PVCs cannot shrink |
 | `/api/system` Docker fields, image prune, docker disk | ⚠️ | Stubbed |
 | Container hostname | ⚠️ | `gs-<uuid>-0`; `/etc/machine-id` is provided |
 | Server transfers | ❌ | One gateway is one node; nothing to transfer to |
 | Panel mounts | ❌ | |
 | `force_outgoing_ip`, swap, `io_weight`, `threads`, OOM-killer disable | ❌ | Not expressible per pod |
-| Console history across a container-level OOM kill | ⚠️ | The whole container restarts; the ring buffer is lost |
+| Docker-specific egg assumptions (Docker network aliases, a hard-coded `172.18.0.1`) | ❌ | Rare; check the egg |
 
 ## Kubernetes and OpenShift
 

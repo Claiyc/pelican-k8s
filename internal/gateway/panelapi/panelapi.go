@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -42,8 +41,6 @@ type Handler struct {
 	WS http.Handler
 	// Diagnostics renders the /api/diagnostics report.
 	Diagnostics func(ctx context.Context) string
-	// ClusterVersion is shown in /api/system.
-	ClusterVersion string
 	// Pools offers the addresses a load balancer can assign, so the Panel's
 	// allocation form does not invite IPs that will never be announced. Nil
 	// disables discovery.
@@ -166,7 +163,7 @@ func (h *Handler) systemInfo(w http.ResponseWriter, r *http.Request) {
 	info := system.Information{
 		Version: h.Cfg.AdvertisedVersion,
 		Docker: system.DockerInformation{
-			Version:    "kubernetes " + h.ClusterVersion,
+			Version:    "kubernetes",
 			Cgroups:    system.DockerCgroups{Driver: "systemd", Version: "2"},
 			Containers: system.DockerContainers{},
 			Storage:    system.DockerStorage{Driver: "csi", Filesystem: "pvc"},
@@ -528,34 +525,6 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.WS.ServeHTTP(w, r)
-}
-
-// ClientIP returns the caller address honouring trusted proxies.
-func ClientIP(r *http.Request, trusted []string) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && isTrusted(host, trusted) {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	return host
-}
-
-func isTrusted(host string, cidrs []string) bool {
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	for _, c := range cidrs {
-		if _, n, err := net.ParseCIDR(c); err == nil && n.Contains(ip) {
-			return true
-		} else if err != nil && c == host {
-			return true
-		}
-	}
-	return false
 }
 
 var _ = client.IgnoreNotFound

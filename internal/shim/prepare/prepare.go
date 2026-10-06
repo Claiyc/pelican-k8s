@@ -50,8 +50,6 @@ func (l Layout) Run() error {
 		"install",
 		"logs",
 		filepath.Join("logs", "install"),
-		"backups",
-		"tmp",
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(l.Data, d), 0o700); err != nil {
