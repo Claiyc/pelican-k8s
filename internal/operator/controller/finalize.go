@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -27,7 +26,7 @@ import (
 var VolumeSnapshotGVK = schema.GroupVersionKind{Group: "snapshot.storage.k8s.io", Version: "v1", Kind: "VolumeSnapshot"}
 
 // finalize implements deletion (ARCHITECTURE.md 8.8).
-func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Result, error) {
+func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 	gs := s.gs
 	if !controllerutil.ContainsFinalizer(gs, v1alpha1.Finalizer) {
 		return ctrl.Result{}, nil
@@ -40,7 +39,7 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 	if name == "" {
 		name = r.DefaultClass
 	}
-	if err := r.Get(ctx, types.NamespacedName{Name: name}, cls); err == nil {
+	if err := r.Get(s.ctx, types.NamespacedName{Name: name}, cls); err == nil {
 		if cls.Spec.Storage.DeletionPolicy != "" {
 			policy = cls.Spec.Storage.DeletionPolicy
 		}
@@ -54,9 +53,9 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 	if s.pod != nil && s.pod.DeletionTimestamp.IsZero() {
 		if ready, ip := agentReady(s.pod); ready {
 			sec := &corev1.Secret{}
-			if err := r.Get(ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.AgentSecret(uuid)}, sec); err == nil {
+			if err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.AgentSecret(uuid)}, sec); err == nil {
 				agent := r.newAgent(fmt.Sprintf("http://%s:%d", ip, render.AgentPort), string(sec.Data["token"]))
-				ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+				ctx, cancel := contextWithTimeout(s, 60*time.Second)
 				if policy == v1alpha1.DeletionDelete {
 					if err := agent.Delete(ctx, uuid); err != nil {
 						r.event(s, corev1.EventTypeWarning, "AgentDeleteFailed", "agent delete failed, continuing: %v", err)
@@ -76,15 +75,15 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentService(uuid)}},
 		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.NetworkPolicy(uuid)}},
 	} {
-		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Delete(s.ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
 	}
 	jobs := &batchv1.JobList{}
-	if err := r.List(ctx, jobs, client.InNamespace(gs.Namespace), client.MatchingLabels{v1alpha1.LabelServerUUID: uuid}); err == nil {
+	if err := r.List(s.ctx, jobs, client.InNamespace(gs.Namespace), client.MatchingLabels{v1alpha1.LabelServerUUID: uuid}); err == nil {
 		bg := metav1.DeletePropagationBackground
 		for i := range jobs.Items {
-			_ = r.Delete(ctx, &jobs.Items[i], &client.DeleteOptions{PropagationPolicy: &bg})
+			_ = r.Delete(s.ctx, &jobs.Items[i], &client.DeleteOptions{PropagationPolicy: &bg})
 		}
 	}
 	if s.pod != nil {
@@ -94,7 +93,7 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 
 	// 3. Apply the deletion policy to the PVC.
 	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.PVC(uuid)}, pvc)
+	err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.PVC(uuid)}, pvc)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
@@ -103,7 +102,7 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 		case v1alpha1.DeletionRetain:
 			patch := client.MergeFrom(pvc.DeepCopy())
 			render.RetainPVC(pvc, s.now)
-			if err := r.Patch(ctx, pvc, patch); err != nil {
+			if err := r.Patch(s.ctx, pvc, patch); err != nil {
 				return ctrl.Result{}, err
 			}
 			r.event(s, corev1.EventTypeNormal, "VolumeRetained", "volume claim %s retained", pvc.Name)
@@ -117,14 +116,14 @@ func (r *GameServerReconciler) finalize(ctx context.Context, s *scope) (ctrl.Res
 			}
 			fallthrough
 		default:
-			if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.Delete(s.ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
 			}
 		}
 	}
 
 	controllerutil.RemoveFinalizer(gs, v1alpha1.Finalizer)
-	if err := r.Update(ctx, gs); err != nil {
+	if err := r.Update(s.ctx, gs); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	return ctrl.Result{}, nil
