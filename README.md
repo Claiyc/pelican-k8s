@@ -14,11 +14,6 @@ sees an ordinary Wings node, every game server becomes a `GameServer` resource
 you can inspect with `kubectl`, and Kubernetes owns scheduling, storage,
 networking and restarts.
 
-> Status: **alpha**. The full Wings feature set used day to day works end to end
-> (power, console, stats, files, uploads, SFTP, installs, crash detection,
-> backups, activity, suspension); the API group is `v1alpha1` and Pelican itself is still in beta. Read
-> [docs/compatibility.md](docs/compatibility.md) before relying on it.
-
 ```
 Panel ──Wings API (node token)──▶ gateway ──spec/status──▶ GameServer CR
                                      │                          │
