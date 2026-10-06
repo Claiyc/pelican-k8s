@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +39,9 @@ type Proxy struct {
 	Log    *slog.Logger
 	// OriginForAgent is sent as Origin when dialing agents (their Panel URL).
 	OriginForAgent string
+
+	// netDial overrides how agents are dialed (tests; the agent port is fixed).
+	netDial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 var powerPermissions = map[string]string{
@@ -94,7 +98,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.OriginForAgent != "" {
 		header.Set("Origin", p.OriginForAgent)
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
 	agent, resp, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
 	if resp != nil {
 		_ = resp.Body.Close()
