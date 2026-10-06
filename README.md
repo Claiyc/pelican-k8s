@@ -7,10 +7,10 @@
 [![Commits since release](https://img.shields.io/github/commits-since/Claiyc/pelican-k8s/latest/master?include_prereleases&sort=semver)](https://github.com/Claiyc/pelican-k8s/commits/master)
 [![License](https://img.shields.io/github/license/Claiyc/pelican-k8s)](LICENSE)
 
-**Run [Pelican Panel](https://pelican.dev) game servers on Kubernetes.**
-pelican-k8s takes the place of the Wings daemon. The Panel and its eggs stay
-unmodified: the Panel sees an ordinary Wings node, and every game server runs
-as a pod that you can inspect with `kubectl`.
+**A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
+pelican-k8s replaces the Wings daemon and presents a whole cluster to the
+Panel as a single node. Game servers run as ordinary pods, with no changes to
+the Panel or the eggs.
 
 ```
 Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
