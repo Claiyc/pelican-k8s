@@ -41,15 +41,6 @@ func recordedEvents(h *harness) []string {
 	}
 }
 
-func hasEvent(events []string, reason string) bool {
-	for _, e := range events {
-		if strings.Contains(e, " "+reason+" ") {
-			return true
-		}
-	}
-	return false
-}
-
 func listSnapshots(h *harness, component string) []unstructured.Unstructured {
 	h.t.Helper()
 	list := &unstructured.UnstructuredList{}
