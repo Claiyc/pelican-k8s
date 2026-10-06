@@ -533,7 +533,7 @@ func TestRecordUsageIgnoresAgentProblems(t *testing.T) {
 	pod, _ := f.st.Pod(ctx, uuid)
 	pod.Status.PodIP = ""
 	_ = f.c.Status().Update(ctx, pod)
-	f.h.recordUsage(uuid)
+	f.h.recordUsage(ctx, uuid)
 	if f.gs().Status.Usage != nil {
 		t.Fatal("no usage without an agent")
 	}
@@ -542,14 +542,14 @@ func TestRecordUsageIgnoresAgentProblems(t *testing.T) {
 	pod.Status.PodIP = "10.0.0.1"
 	_ = f.c.Status().Update(ctx, pod)
 	f.agent.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("garbage")) })
-	f.h.recordUsage(uuid)
+	f.h.recordUsage(ctx, uuid)
 	if f.gs().Status.Usage != nil {
 		t.Fatal("no usage from an unparsable state")
 	}
 
 	// Agent errors.
 	f.agent.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	f.h.recordUsage(uuid)
+	f.h.recordUsage(ctx, uuid)
 	if f.gs().Status.Usage != nil {
 		t.Fatal("no usage from a failing agent")
 	}
