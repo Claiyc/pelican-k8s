@@ -48,10 +48,10 @@ panel_status() { tinker '$x = App\Models\Server::find(1)->retrieveStatus(); echo
 cleanup() {
   local rc=$?
   local phase=${PHASE:-startup}
-  if [ $rc -ne 0 ]; then
+  if [[ $rc -ne 0 ]]; then
     # The step name reaches the nightly drift issue: a failure before the first
     # Panel -> gateway assertion is a cluster problem, not a contract change.
-    [ -n "${GITHUB_ENV:-}" ] && echo "SUITE_PHASE=$phase" >> "$GITHUB_ENV" || true
+    [[ -n "${GITHUB_ENV:-}" ]] && echo "SUITE_PHASE=$phase" >> "$GITHUB_ENV" || true
     log "FAILED in \"$phase\" (rc=$rc): diagnostics"
     # Pods, Services and endpoints first: a Panel call that fails to connect at
     # all is answered here, not by the route table.
@@ -63,9 +63,9 @@ cleanup() {
     kubectl -n pelican-system logs deploy/pelican-k8s-operator --tail=80 2>/dev/null || true
     for p in $(kubectl -n pelican-servers get pods -o name 2>/dev/null); do kubectl -n pelican-servers logs "$p" --all-containers --tail=60 2>/dev/null || true; done
   fi
-  [ -n "${PF_PIDS:-}" ] && kill $PF_PIDS 2>/dev/null || true
+  [[ -n "${PF_PIDS:-}" ]] && kill $PF_PIDS 2>/dev/null || true
   pkill -f "port-forward svc/pelican-k8s-gateway" 2>/dev/null || true
-  if [ "${KEEP:-0}" != 1 ]; then "$KIND" delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
+  if [[ "${KEEP:-0}" != 1 ]]; then "$KIND" delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
   exit $rc
 }
 trap cleanup EXIT
@@ -85,7 +85,7 @@ docker pull -q "$GAME_IMAGE" >/dev/null && "$KIND" load docker-image --name "$CL
 log "Pelican Panel (chart, SQLite)"
 kubectl create namespace pelican
 PANEL_SET=(--set panel.url=http://pelican-panel.pelican.svc --set database.connection=sqlite --set persistence.enabled=true)
-[ -n "$PANEL_IMAGE" ] && PANEL_SET+=(--set "image.repository=${PANEL_IMAGE%%:*}" --set "image.tag=${PANEL_IMAGE##*:}")
+[[ -n "$PANEL_IMAGE" ]] && PANEL_SET+=(--set "image.repository=${PANEL_IMAGE%%:*}" --set "image.tag=${PANEL_IMAGE##*:}")
 helm install pelican-panel charts/pelican-panel -n pelican "${PANEL_SET[@]}" --wait --timeout 10m >/dev/null
 kubectl -n pelican rollout status deploy/pelican-panel --timeout=5m
 until kubectl -n pelican exec deploy/pelican-panel -- curl -sf -o /dev/null http://localhost/up; do sleep 5; done
@@ -99,7 +99,7 @@ panel p:node:make --name=k8s --description=contract --fqdn="$GW_FQDN" --public=1
   --daemonBase=/var/lib/pelican/volumes --no-interaction >/dev/null
 TOKEN_ID=$(panel p:node:configuration 1 2>/dev/null | awk '/^token_id:/ {print $2}')
 TOKEN=$(panel p:node:configuration 1 2>/dev/null | awk '/^token:/ {print $2}')
-[ -n "$TOKEN_ID" ] && [ -n "$TOKEN" ]
+[[ -n "$TOKEN_ID" ]] && [[ -n "$TOKEN" ]]
 tinker 'foreach (range(30565, 30567) as $p) { App\Models\Allocation::firstOrCreate(["node_id" => 1, "ip" => "'"$NODE_IP"'", "port" => $p]); } echo App\Models\Allocation::count(), " allocations", PHP_EOL;'
 
 log "pelican-k8s (chart)"
@@ -121,7 +121,7 @@ log "Panel -> gateway: node system information"
 # uses - its own pod's DNS, the Service, the gateway - before asking it.
 for i in $(seq 1 30); do
   kubectl -n pelican exec deploy/pelican-panel -- curl -sf -o /dev/null --max-time 5 "http://$GW_FQDN:$GW_PORT/healthz" && break
-  [ "$i" = 30 ] && { echo "the gateway is not reachable from the Panel pod at $GW_FQDN:$GW_PORT"; exit 1; }
+  [[ "$i" = 30 ]] && { echo "the gateway is not reachable from the Panel pod at $GW_FQDN:$GW_PORT"; exit 1; }
   sleep 2
 done
 panel cache:clear >/dev/null
@@ -134,14 +134,14 @@ echo "$INFO" | grep -q '"version"' || { echo "no version in the node system info
 
 log "create a server through the Panel (start on completion)"
 UUID=$(tinker '$a = App\Models\Allocation::whereNull("server_id")->orderBy("port")->first(); $s = app(App\Services\Servers\ServerCreationService::class)->handle(["name" => "contract", "owner_id" => 1, "egg_id" => 1, "allocation_id" => $a->id, "memory" => 1536, "disk" => 4096, "cpu" => 200, "swap" => 0, "io" => 500, "oom_killer" => true, "image" => "'"$GAME_IMAGE"'", "environment" => ["MINECRAFT_VERSION" => "latest", "SERVER_JARFILE" => "server.jar", "BUILD_NUMBER" => "latest", "USER_AGENT" => "'"$EGG_USER_AGENT"'"], "start_on_completion" => true, "skip_scripts" => false]); echo $s->uuid;')
-echo "server uuid $UUID"; [ ${#UUID} -eq 36 ]
+echo "server uuid $UUID"; [[ ${#UUID} -eq 36 ]]
 for i in $(seq 1 90); do
   r=$(kubectl -n pelican-servers get gameserver "gs-$UUID" -o jsonpath='{.status.phase}/{.status.install.result}/{.status.process.state}' 2>/dev/null || true)
   echo "t=$((i*10))s $r"
   case "$r" in */Succeeded/*) break;; */Failed/*) echo "install failed"; exit 1;; esac
   sleep 10
 done
-[ "$(tinker 'echo App\Models\Server::find(1)->installed_at ? "installed" : "not-installed", PHP_EOL;')" = installed ]
+[[ "$(tinker 'echo App\Models\Server::find(1)->installed_at ? "installed" : "not-installed", PHP_EOL;')" = installed ]]
 
 log "EULA + auto-start (the Paper egg exits until eula.txt is accepted)"
 PF_PIDS=""
@@ -156,9 +156,9 @@ power() {
   local code=000
   for i in $(seq 1 10); do
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"action\":\"$1\"}" "$G/api/servers/$UUID/power" || true)
-    [ "$code" != 000 ] && break; sleep 2
+    [[ "$code" != 000 ]] && break; sleep 2
   done
-  echo "power $1 -> $code"; [ "$code" = "$2" ]
+  echo "power $1 -> $code"; [[ "$code" = "$2" ]]
 }
 curl -sf -o /dev/null -X POST -H "Authorization: Bearer $TOKEN" --data-binary 'eula=true' "$G/api/servers/$UUID/files/write?file=%2Feula.txt"
 
@@ -169,18 +169,18 @@ PELICAN_E2E_GATEWAY=$G PELICAN_E2E_TOKEN=$TOKEN PELICAN_E2E_PANEL_URL=http://pel
 
 log "Panel-side contract: status, backup, suspension, deletion"
 power start 202
-for i in $(seq 1 60); do st=$(panel_status); [ "$st" = running ] && break; sleep 5; done
-echo "panel retrieveStatus=$st"; [ "$st" = running ]
+for i in $(seq 1 60); do st=$(panel_status); [[ "$st" = running ]] && break; sleep 5; done
+echo "panel retrieveStatus=$st"; [[ "$st" = running ]]
 tinker '$s = App\Models\Server::find(1); $s->update(["backup_limit" => 3]); $b = app(App\Services\Backups\InitiateBackupService::class)->setIgnoredFiles([])->handle($s->fresh(), "contract"); echo "backup ", $b->uuid, PHP_EOL;'
-for i in $(seq 1 30); do ok=$(tinker 'echo App\Models\Backup::latest("id")->first()->is_successful ? "ok" : "pending", PHP_EOL;'); [ "$ok" = ok ] && break; sleep 5; done
-echo "backup=$ok"; [ "$ok" = ok ]
+for i in $(seq 1 30); do ok=$(tinker 'echo App\Models\Backup::latest("id")->first()->is_successful ? "ok" : "pending", PHP_EOL;'); [[ "$ok" = ok ]] && break; sleep 5; done
+echo "backup=$ok"; [[ "$ok" = ok ]]
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Suspend); echo "suspended", PHP_EOL;'
-for i in $(seq 1 40); do st=$(panel_status); [ "$st" = offline ] && break; sleep 5; done
-echo "after suspend=$st"; [ "$st" = offline ]
+for i in $(seq 1 40); do st=$(panel_status); [[ "$st" = offline ]] && break; sleep 5; done
+echo "after suspend=$st"; [[ "$st" = offline ]]
 power start 400
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Unsuspend); echo "unsuspended", PHP_EOL;'
 tinker 'app(App\Services\Servers\ServerDeletionService::class)->handle(App\Models\Server::find(1)); echo App\Models\Server::count(), " servers left", PHP_EOL;'
-for i in $(seq 1 30); do n=$(kubectl -n pelican-servers get gameservers,pvc --no-headers 2>/dev/null | wc -l); [ "$n" = 0 ] && break; sleep 5; done
-echo "objects left=$n"; [ "$n" = 0 ]
+for i in $(seq 1 30); do n=$(kubectl -n pelican-servers get gameservers,pvc --no-headers 2>/dev/null | wc -l); [[ "$n" = 0 ]] && break; sleep 5; done
+echo "objects left=$n"; [[ "$n" = 0 ]]
 
 log "PASS: Panel $(tinker 'echo config("app.version"), PHP_EOL;') <-> pelican-k8s $TAG"

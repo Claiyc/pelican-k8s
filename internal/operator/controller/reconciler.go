@@ -115,7 +115,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	s := &scope{ctx: ctx, gs: gs, orig: gs.DeepCopy(), now: metav1.NewTime(r.now()), requeue: requeueSlow}
 
 	if !gs.DeletionTimestamp.IsZero() {
-		return r.finalize(s)
+		return r.finalize(s) //nolint:contextcheck // the scope carries the reconcile context, as for every other step
 	}
 	if !controllerutil.ContainsFinalizer(gs, v1alpha1.Finalizer) {
 		controllerutil.AddFinalizer(gs, v1alpha1.Finalizer)

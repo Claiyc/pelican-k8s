@@ -119,7 +119,7 @@ func chownRecursive(dir string, uid, gid int) error {
 	defer func() { _ = root.Close() }()
 	return fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // best effort: skip unreadable entries
+			return nil //nolint:nilerr // best effort: skip unreadable entries
 		}
 		_ = root.Lchown(path, uid, gid)
 		return nil

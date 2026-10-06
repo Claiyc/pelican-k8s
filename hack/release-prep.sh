@@ -37,7 +37,7 @@ if ! git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
   exit 3
 fi
 # Release PRs only carry this script's edits; they are not changes to release.
-if [ -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]; then
+if [[ -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]]; then
   echo "nothing merged since v$current, nothing to release" >&2
   exit 3
 fi
@@ -45,10 +45,10 @@ fi
 repo() { gh repo view --json nameWithOwner --jq .nameWithOwner; }
 unreleased=$(awk '/^## \[Unreleased\]/ {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md)
 next=${1:-}
-if [ -z "$next" ]; then
+if [[ -z "$next" ]]; then
   # The largest bump any reason asks for: 0 patch, 1 minor, 2 major.
   bump=0 why="no major or minor label on the PRs merged since v$current"
-  raise() { if [ "$1" -gt "$bump" ]; then bump=$1 why=$2; fi; }
+  raise() { if [[ "$1" -gt "$bump" ]]; then bump=$1 why=$2; fi; }
   # A major or minor label on any PR merged since the last release. The PR
   # number is the last "(#N)" of a squash merge's subject, or "#N" of a merge
   # commit's "Merge pull request #N".
@@ -77,11 +77,11 @@ if [ -z "$next" ]; then
   echo "bump: $level release, because $why" >&2
 fi
 [[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: $next" >&2; exit 1; }
-[ "$next" != "$current" ] || { echo "$next is already the chart version" >&2; exit 1; }
+[[ "$next" != "$current" ]] || { echo "$next is already the chart version" >&2; exit 1; }
 
 notes=$(mktemp)
 trap 'rm -f "$notes" "$notes.section"' EXIT
-if [ -n "${RELEASE_NOTES:-}" ]; then
+if [[ -n "${RELEASE_NOTES:-}" ]]; then
   cat "$RELEASE_NOTES" >"$notes"
 else
   gh api "repos/$(repo)/releases/generate-notes" -f tag_name="v$next" -f previous_tag_name="v$current" \

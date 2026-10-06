@@ -322,7 +322,10 @@ func wsCheck(t *testing.T, port int, origin string) {
 		t.Fatal(err)
 	}
 	h := http.Header{"Origin": []string{origin}}
-	c, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://127.0.0.1:%d/api/servers/%s/ws", port, uuid), h)
+	c, resp, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://127.0.0.1:%d/api/servers/%s/ws", port, uuid), h)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,7 +95,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		header.Set("Origin", p.OriginForAgent)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true}
-	agent, _, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
+	agent, resp, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		p.Log.Warn("agent websocket dial failed", "uuid", uuid, "error", err)
 		_ = client.WriteJSON(Message{Event: "daemon error", Args: []string{"could not reach the server agent"}})

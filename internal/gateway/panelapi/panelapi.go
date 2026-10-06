@@ -324,7 +324,7 @@ func (h *Handler) createServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "The data provided in the request could not be validated.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancel()
 	if err := h.Sync.Create(ctx, body.UUID, body.StartOnCompletion); err != nil {
 		h.Log.Error("create server failed", "uuid", body.UUID, "error", err)
@@ -414,7 +414,7 @@ func (h *Handler) deauthorize(w http.ResponseWriter, r *http.Request) {
 			targets = append(targets, gs.Spec.Panel.UUID)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 20*time.Second)
 	defer cancel()
 	for _, uuid := range targets {
 		t, err := h.Agents.Resolve(ctx, uuid)

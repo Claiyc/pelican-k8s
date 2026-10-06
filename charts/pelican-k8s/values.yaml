@@ -83,7 +83,7 @@ operator:
   concurrency: 4
   leaderElect: true
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
+    requests: {cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi}
     limits: {memory: 512Mi}
   logLevel: info
 
