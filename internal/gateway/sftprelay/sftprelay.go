@@ -133,6 +133,9 @@ type Relay struct {
 	Sessions *Sessions
 	KeyOnly  bool
 	Log      *slog.Logger
+
+	// dial overrides how agents are reached (tests; the agent port is fixed).
+	dial func(network, addr string) (net.Conn, error)
 	// TrustedProxyIPs, when the listener sits behind a PROXY-protocol-less LB, is unused; client IPs are the TCP peer.
 }
 
@@ -174,7 +177,7 @@ func (r *Relay) Run(ctx context.Context) error {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return nil //nolint:nilerr // the listener was closed for shutdown, which is not an error
 			}
 			continue
 		}
@@ -275,7 +278,19 @@ func (r *Relay) dialAgent(ctx context.Context, t *agents.Target, user, cred stri
 			return nil
 		},
 	}
-	return ssh.Dial("tcp", t.SFTPAddr(), cfg)
+	if r.dial == nil {
+		return ssh.Dial("tcp", t.SFTPAddr(), cfg)
+	}
+	conn, err := r.dial("tcp", t.SFTPAddr())
+	if err != nil {
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, t.SFTPAddr(), cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // relayChannel forwards requests and bytes between a client session channel

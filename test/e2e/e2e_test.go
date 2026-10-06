@@ -119,7 +119,11 @@ func TestNodeEndpoints(t *testing.T) {
 		t.Fatal("update")
 	}
 	req, _ := http.NewRequest("GET", e.gateway+"/api/system", nil)
-	res, _ := e.http.Do(req)
+	res, err := e.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
 	if res.StatusCode != 401 {
 		t.Fatalf("unauthenticated request returned %d", res.StatusCode)
 	}
@@ -177,7 +181,10 @@ func TestPowerAndWebsocket(t *testing.T) {
 
 	dialer := websocket.Dialer{TLSClientConfig: &tls.Config{InsecureSkipVerify: e.insecure}, HandshakeTimeout: 15 * time.Second}
 	wsURL := strings.Replace(strings.Replace(e.gateway, "https://", "wss://", 1), "http://", "ws://", 1) + "/api/servers/" + e.server + "/ws"
-	c, _, err := dialer.Dial(wsURL, http.Header{"Origin": []string{e.panel}})
+	c, resp, err := dialer.Dial(wsURL, http.Header{"Origin": []string{e.panel}})
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
