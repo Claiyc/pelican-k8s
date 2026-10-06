@@ -56,6 +56,10 @@ type Input struct {
 	SystemNamespace string
 	// EnvSecretExists reports whether the egg variable Secret is present (install Job envFrom).
 	EnvSecretExists bool
+	// NodeNames, when set, are the only nodes the game pod may run on: the
+	// nodes that own the allocation IP under NodePort (externalTrafficPolicy
+	// Local) and HostPort exposure.
+	NodeNames []string
 }
 
 // UUID returns the server UUID.

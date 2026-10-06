@@ -237,6 +237,13 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			PriorityClassName: cls.PriorityClassName,
 		},
 	}
+	if len(in.NodeNames) > 0 {
+		tmpl.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+				MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: in.NodeNames}},
+			}}},
+		}}
+	}
 	for _, s := range cls.ImageResolution.PullSecrets {
 		tmpl.Spec.ImagePullSecrets = append(tmpl.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: s})
 	}

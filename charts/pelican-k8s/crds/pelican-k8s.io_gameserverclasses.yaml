@@ -105,7 +105,12 @@ spec:
                     type: object
                   mode:
                     default: LoadBalancer
-                    description: ExposureMode selects how game ports are exposed.
+                    description: |-
+                      Mode is LoadBalancer, NodePort or HostPort. Under NodePort with
+                      externalTrafficPolicy Local, and under HostPort, the operator schedules
+                      the game pod onto the node whose InternalIP or ExternalIP is the
+                      allocation IP (ExposureReady=False, reason AllocationIPNotOnNode, when a
+                      cluster with more than one node has no such node).
                     enum:
                     - LoadBalancer
                     - NodePort

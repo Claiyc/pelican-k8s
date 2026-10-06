@@ -45,8 +45,8 @@ Volumes never shrink: a smaller Panel `disk_space` sets the `DiskShrinkRefused` 
 
 | Field | Default | Meaning |
 |---|---|---|
-| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md) |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs |
+| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the pod on the node whose InternalIP or ExternalIP is the allocation IP |
+| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the pod is not tied to a node |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |

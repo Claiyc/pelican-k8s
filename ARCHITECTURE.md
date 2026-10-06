@@ -609,7 +609,7 @@ status:
   snapshot: {lastAt: "…", lastName: gs-…-20261006-120000}
   conditions:
     - type: VolumeReady          # PVC bound (and expanded to the requested size)
-    - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange)
+    - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange, AllocationIPNotOnNode)
     - type: AgentReady           # agent container started and ready
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
     - type: Installed            # True once a generation finished; reason Succeeded or Failed
@@ -797,6 +797,7 @@ spec:
     - {name: agent-config, configMap: {name: pelican-agent-config}}
   imagePullSecrets: <class pullSecrets>
   nodeSelector / tolerations / priorityClassName: <class>
+  affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchFields: [{key: metadata.name, operator: In, values: [<nodes owning the allocation IP>]}]}]}}}   # HostPort, NodePort with Local (§9.3)
 ```
 
 **Egg environment.** The game process gets its environment from the agent (`start{env}`, built by
@@ -1092,8 +1093,17 @@ Invariant: **container port = service port = external port = Panel allocation po
 | Mode | How | Client IP | Panel allocations |
 |---|---|---|---|
 | **LoadBalancer** (default) | Service `type: LoadBalancer`; the class's annotations pin the allocation IP and allow IP sharing; `externalTrafficPolicy: Local` | preserved | IP = LB pool IP, any port. Works on any cluster size: the LB follows the pod. Needs a LoadBalancer implementation (cloud, k3s ServiceLB, MetalLB, kube-vip); without one, `ExposureReady` reports it after two minutes |
-| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local` | preserved | IP = node IP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error`. For single-node clusters: with `Local` the allocation IP serves traffic only while the pod runs on that node |
-| **HostPort** | `hostPort` = allocation port on the game container; no Service | preserved | IP = node IP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) and the pod must run on the node owning the IP |
+| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local`; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error` |
+| **HostPort** | `hostPort` = allocation port on the game container; no Service; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) |
+
+**Node placement (NodePort with `Local`, HostPort).** With `externalTrafficPolicy: Local` a NodePort
+delivers traffic only on nodes that run the pod, and a hostPort exists only on the pod's node. The
+operator lists the nodes, takes those whose `InternalIP` or `ExternalIP` addresses include every
+allocation IP (`0.0.0.0` and loopback name no node and are skipped), and sets a required node affinity
+on `metadata.name` for them. A changed match is a pod template change (§7.6). A cluster with one node
+gets no affinity. With more than one node and no match, the pod is not pinned and `ExposureReady=False`
+(`AllocationIPNotOnNode`) names the address; the server keeps running. With
+`externalTrafficPolicy: Cluster` every node forwards the NodePort and the pod is not pinned.
 
 `GET /api/system/ips` offers the addresses the Panel's allocation form shows (§5.2).
 

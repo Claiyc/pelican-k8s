@@ -10,7 +10,7 @@ servers as Kubernetes resources.
 | Kubernetes ≥ 1.33 | 1.35+ recommended. Uses native sidecars, `ValidatingAdmissionPolicy` and in-place pod resize (`pods/resize`) |
 | StorageClass with `allowVolumeExpansion: true` | One RWO PVC per server; Panel disk changes expand it online |
 | Ingress controller or OpenShift Router | For the gateway's HTTP API (Panel calls, websockets, signed uploads/downloads) |
-| A way to expose TCP | SFTP (`NodePort`/`LoadBalancer`) and game ports (`LoadBalancer`, `NodePort` on single nodes, or `HostPort`) |
+| A way to expose TCP | SFTP (`NodePort`/`LoadBalancer`) and game ports (`LoadBalancer`, `NodePort` or `HostPort`) |
 | A Pelican Panel | Any deployment; the `pelican-panel` chart in this repo is one option ([panel.md](panel.md)) |
 | Optional: CSI snapshots | `VolumeSnapshotClass` for `SnapshotThenDelete` and scheduled snapshots |
 
@@ -119,8 +119,8 @@ Set in the class (`defaultClass.spec.exposure.mode`):
 | Mode | Use when | Panel allocations |
 |---|---|---|
 | `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP. `loadBalancer.provider: metallb` fills both in |
-| `NodePort` | no load balancer available and the game's ports are negotiable | IP = node IP, ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
-| `HostPort` | no load balancer available and the game's ports matter | IP = node IP, any port; needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
+| `NodePort` | no load balancer available and the game's ports are negotiable | IP = a node's InternalIP or ExternalIP; the operator runs the pod on that node. Ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
+| `HostPort` | no load balancer available and the game's ports matter | IP = a node's InternalIP or ExternalIP, any port; the operator runs the pod on that node. Needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
 
 `/api/system/ips` (the Panel's allocation IP dropdown) returns
 `gateway.externalIPs`, else the class `exposure.externalIPs`, else the

@@ -125,6 +125,11 @@ func (l LoadBalancerSpec) SharingKey() string {
 
 // ExposureSpec configures how game ports reach players.
 type ExposureSpec struct {
+	// Mode is LoadBalancer, NodePort or HostPort. Under NodePort with
+	// externalTrafficPolicy Local, and under HostPort, the operator schedules
+	// the game pod onto the node whose InternalIP or ExternalIP is the
+	// allocation IP (ExposureReady=False, reason AllocationIPNotOnNode, when a
+	// cluster with more than one node has no such node).
 	// +kubebuilder:default=LoadBalancer
 	Mode ExposureMode `json:"mode,omitempty"`
 	// +kubebuilder:default=Local
