@@ -489,3 +489,57 @@ func TestReconcilePodUpToDateDoesNotRecreate(t *testing.T) {
 		t.Fatalf("AgentReady %+v", c)
 	}
 }
+
+// The resize phase always runs, even when the pod is already due for a
+// recreate for another reason: it owns the ResizePending condition and the
+// in-place resize attempt, and the recreate may stay deferred for a while.
+func TestReconcilePodResizesEvenWhenRecreateIsPending(t *testing.T) {
+	reasons := map[string]func(*scope){
+		"outdated template": func(s *scope) { s.gs.Status.TemplateHash = "something-else" },
+		"restart requested": func(s *scope) { s.gs.Spec.Power.RestartRequest = 1 },
+	}
+	for name, makePending := range reasons {
+		t.Run(name+"/resize applied", func(t *testing.T) {
+			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+			h.agent.state = v1alpha1.ProcessRunning
+			h.updateGS(func(gs *v1alpha1.GameServer) {
+				gs.Spec.Panel.Settings = settingsJSON(4096, 200, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+			})
+			h.s = h.scope(newClass())
+			makePending(h.s)
+			h.events()
+
+			if err := h.r.reconcilePod(h.s); err != nil {
+				t.Fatal(err)
+			}
+			if !hasEvent(h.events(), "Resized") {
+				t.Fatal("the in-place resize must still be attempted")
+			}
+			if c := condition(h.s, v1alpha1.ConditionResizePending); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Applied" {
+				t.Fatalf("ResizePending %+v", c)
+			}
+			if c := condition(h.s, v1alpha1.ConditionRecreatePending); c == nil || c.Status != metav1.ConditionTrue {
+				t.Fatalf("RecreatePending %+v", c)
+			}
+		})
+		t.Run(name+"/limit removal", func(t *testing.T) {
+			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+			h.agent.state = v1alpha1.ProcessRunning
+			h.updateGS(func(gs *v1alpha1.GameServer) {
+				gs.Spec.Panel.Settings = settingsJSON(2048, 0, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
+			})
+			h.s = h.scope(newClass())
+			makePending(h.s)
+
+			if err := h.r.reconcilePod(h.s); err != nil {
+				t.Fatal(err)
+			}
+			if c := condition(h.s, v1alpha1.ConditionResizePending); c == nil || c.Status != metav1.ConditionTrue || c.Reason != "RecreateRequired" {
+				t.Fatalf("ResizePending %+v", c)
+			}
+			if c := condition(h.s, v1alpha1.ConditionRecreatePending); c == nil || c.Reason != "ResizeNeedsRecreate" {
+				t.Fatalf("RecreatePending %+v", c)
+			}
+		})
+	}
+}

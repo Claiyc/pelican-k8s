@@ -710,7 +710,10 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	}
 	r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionFalse, "NodeReady", "")
 
-	recreate := outdated || restartRequested || r.reconcileResize(s, pod)
+	// Always run the resize phase: it owns the ResizePending condition and the
+	// in-place resize, whether or not a recreate is already pending.
+	resizeNeedsRecreate := r.reconcileResize(s, pod)
+	recreate := outdated || restartRequested || resizeNeedsRecreate
 
 	// Agent readiness.
 	ready, ip := agentReady(pod)
