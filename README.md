@@ -16,8 +16,7 @@ networking and restarts.
 
 > Status: **alpha**. The full Wings feature set used day to day works end to end
 > (power, console, stats, files, uploads, SFTP, installs, crash detection,
-> backups, activity, suspension) and has been exercised on a real cluster, but
-> the API group is `v1alpha1` and Pelican itself is still in beta. Read
+> backups, activity, suspension); the API group is `v1alpha1` and Pelican itself is still in beta. Read
 > [docs/compatibility.md](docs/compatibility.md) before relying on it.
 
 ```
@@ -55,7 +54,7 @@ default; single-node clusters can use `NodePort`.
 helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.2 \
   -n pelican --create-namespace \
   --set panel.url=https://panel.example.com \
-  --set ingress.enabled=true --set ingress.host=panel.example.com
+  --set ingress.enabled=true --set 'ingress.hosts[0].host=panel.example.com'
 kubectl -n pelican exec deploy/pelican-panel -- php artisan p:user:make --admin=1 \
   --email=you@example.com --username=admin --password='<password>'
 ```
@@ -103,7 +102,7 @@ The step-by-step guide with all options is in [docs/install.md](docs/install.md)
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
 | [docs/development.md](docs/development.md) | Building, testing (unit, spike, e2e, upstream diffs), the Wings fork and its hooks, release process |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
-| [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Verified Wings ⇄ Panel protocol reference |
+| [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Wings ⇄ Panel protocol reference |
 
 ## Repository layout
 

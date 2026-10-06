@@ -48,7 +48,7 @@ The agent imports `github.com/pelican/wings`. Four opt-in hooks are needed
 [Claiyc/wings](https://github.com/Claiyc/wings) fork, pinned in `go.mod`:
 
 1. `server.WithEnvironmentFactory` / `server.WithInstaller` options on the server manager (Docker stays the default)
-2. `server.ImageAndStopConfigurable` and `server.Attachable` interfaces instead of `*docker.Environment` type assertions
+2. `server.ImageAndStopConfigurable` and `server.Attachable` interfaces for the image, stop configuration and attach calls
 3. `server.Installer` interface with the install lock held by `Server.Install`
 4. package `boot` exposing the activity database initialisation and the cron scheduler that live under `internal/`
 
@@ -95,9 +95,8 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 ### Standing Scorecard findings
 
-**Vulnerabilities.** Six advisories are reported against modules in the
-graph. None of them has a fixed version, and the vulnerable code is not
-linked; `test/supplychain` asserts that.
+**Vulnerabilities.** These advisories have no fixed version, and their
+vulnerable code is not linked; `test/supplychain` asserts that.
 
 | Advisory | Module | Where the vulnerable code lives |
 |---|---|---|
@@ -106,11 +105,9 @@ linked; `test/supplychain` asserts that.
 | GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
 
 `github.com/docker/docker` enters through `internal/agent/installer` →
-`wings/system` → `docker/docker/api/types`. 27 of its packages are linked —
-`api/types/*`, `client`, `errdefs` and two `pkg/parsers` helpers — and
-`docker/docker/daemon` is not among them. `x/crypto/openpgp` is not in the
-build graph at all. This matches `govulncheck`, which finds no vulnerability
-reachable from this code.
+`wings/system` → `docker/docker/api/types`; `docker/docker/daemon` is not
+linked. `x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
+vulnerability reachable from this code.
 
 **Other checks** need settings outside the tree: *Code-Review* counts
 approvals on merged PRs, *CII-Best-Practices* needs a registration at
@@ -153,5 +150,5 @@ Merge the release PR. Nothing else is manual.
   the prepared tree before pushing it, and the repository setting *Allow
   GitHub Actions to create and approve pull requests* must be on.
 - **By hand.** `hack/release-prep.sh [X.Y.Z]` prepares the same change locally
-  (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag still releases
+  (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag releases
   that tag.

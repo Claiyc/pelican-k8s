@@ -893,7 +893,7 @@ A `POST /api/servers` for a server that already has a CR re-syncs it and request
 
 ### 8.2 Install and reinstall
 
-1. **Trigger.** Panel `POST /install` or `/reinstall` (or create). The gateway re-syncs `spec.panel`,
+1. **Trigger.** Panel `POST /install` or `/reinstall` (creation: §8.1). The gateway re-syncs `spec.panel`,
    fetches the install payload, creates ConfigMap `gs-<uuid>-install-<gen+1>` and patches
    `spec.install` (`startOnInstall: false`).
 2. **Operator calls the agent:** `POST /api/servers/:s/install` or `/reinstall`. Wings answers `202` and
@@ -918,7 +918,7 @@ A `POST /api/servers` for a server that already has a CR re-syncs it and request
      ConfigMap → `/mnt/install/install.sh`, shim → `/pelican/bin`, an emptyDir at `/tmp`
    - egg variables and the derived `SERVER_*`/`STARTUP` via `envFrom` the `gs-<uuid>-env` Secret;
      `HOME=/mnt/server`
-   - command: `shim install-run --log /pelican/install/output.log --exit /pelican/install/exit-code --chown <uid>:<uid> -- <entrypoint> /mnt/install/install.sh`;
+   - command: `shim install-run --log /pelican/install/output.log --exit /pelican/install/exit-code --chown <uid>:<uid> --chown-path /mnt/server -- <entrypoint> /mnt/install/install.sh`;
      after the script the shim `chown -R`s `/mnt/server` to the game UID
 5. **Completion.** When `exit-code` appears or the Job fails or times out, the installer writes
    `logs/install/<uuid>.log` in Wings' format, Wings publishes `install completed`, sets `offline` and
@@ -959,7 +959,8 @@ sequenceDiagram
 
 - **`set state` frames** and Panel `POST /power` calls become `spec.power` patches: `start` ⇒
   `{desired: Running, generation++}`, `restart` ⇒ the same (the operator issues `restart` when the
-  process is running), `stop` ⇒ `{desired: Stopped, kill: false}`, `kill` ⇒ `{desired: Stopped, kill: true}`.
+  process is running), `stop` ⇒ `{desired: Stopped, kill: false, generation++}`, `kill` ⇒
+  `{desired: Stopped, kill: true, generation++}`.
   `start` and `restart` first re-sync `spec.panel` from the Panel and are refused for a suspended server.
   The gateway checks the websocket's permissions (§5.5). `send command`, `send logs` and `send stats`
   pass through to the agent.
@@ -1062,7 +1063,7 @@ sequenceDiagram
 - The Ingress must allow:
   - request/read timeouts **≥ 16 min** (Panel compress and decompress calls wait up to 15 min; the
     gateway's own proxy waits up to 20 min for response headers)
-  - long idle timeouts for **websockets** (the gateway allows 2 h idle)
+  - long idle timeouts for **websockets** (the gateway sets no websocket idle limit)
   - request bodies up to the upload limit (100 MiB default)
 - Panel node settings:
 
@@ -1119,7 +1120,7 @@ address. Inside a pod the node or LB IP is not bindable, so:
 ### 10.1 Volumes
 
 - One PVC per server from the class StorageClass (RWO, must support volume expansion).
-- **Size** = `disk_space × (1 + overheadPercent/100)`, or `defaultSizeGiB` when unlimited. The overhead
+- **Size** = `disk_space × (1 + overheadPercent/100)`; `defaultSizeGiB` takes the place of `disk_space` when it is 0 (unlimited). The overhead
   covers logs, the activity database and install output.
 - **Two limits apply:**
   - *soft*: Wings' filesystem accounting (writes through the file API and SFTP, plus the periodic scan
@@ -1213,7 +1214,7 @@ enforce the workload shapes:
 |---|---|---|
 | Game pod | `pelican-game` | `pelican-game-restricted`: `runAsNonRoot`, non-root `runAsUser`, seccomp `RuntimeDefault`, every container with `allowPrivilegeEscalation: false`, all capabilities dropped and none added, not privileged; no host network, PID or IPC; no `hostPort`; `automountServiceAccountToken: false`; only PVC, emptyDir, ephemeral, projected, ConfigMap and Secret volumes |
 | Game pod, HostPort mode | `pelican-game-hostport` | the same policy with host ports allowed |
-| Install Job | `pelican-installer` | only PVC, ConfigMap and emptyDir volumes; no `hostPort`; no added capabilities; no privilege escalation; `automountServiceAccountToken: false` |
+| Install Job | `pelican-installer` | `pelican-installer-baseline`: no host network, PID or IPC; not privileged; no privilege escalation; no added capabilities; no `hostPort`; `automountServiceAccountToken: false`; only PVC, ConfigMap and emptyDir volumes |
 
 - On OpenShift (`openshift.enabled`) the chart binds `openshift.gameSCC` (default `restricted-v2`) to both
   game ServiceAccounts and `openshift.installerSCC` (default `anyuid`) to the installer.
@@ -1256,7 +1257,8 @@ enforce the workload shapes:
   token replay and denylist checks are Wings code in the agent.
 - Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster, protected by
   NetworkPolicy and bearer tokens.
-- Registry credentials: class `pullSecrets` (Secrets in the servers namespace) as `imagePullSecrets`.
+- Registry credentials: class `imageResolution.pullSecrets` (Secrets in the servers namespace) as
+  `imagePullSecrets` of game pods and install Jobs.
 
 ---
 
@@ -1283,7 +1285,7 @@ enforce the workload shapes:
 - a CR the Panel no longer lists gets `Orphaned=True` (`NotOnPanel`) and is never deleted
   automatically; the condition clears when the server reappears
 - a `panelRevision` mismatch updates `spec.panel`. The revision covers the settings without
-  `environment`, so a change of egg variable values alone reaches the CR on the next start, restart or
+  `environment`, so a change of egg variable values alone reaches the `gs-<uuid>-env` Secret on the next start, restart or
   Panel sync
 
 ---
@@ -1307,12 +1309,16 @@ enforce the workload shapes:
 
 ## 15. Observability
 
-- **Gateway, operator and agent logs:** structured JSON on stdout.
+- **Gateway, operator and agent logs:** structured JSON (`kubectl logs`).
 - **Game console:** `kubectl logs gs-<uuid>-0 -c game` (shim tee, plus the shim's own JSON logs) and
   `logs/console/<uuid>.log` on the PVC.
 - **Operator:** controller-runtime metrics on `:8443`; Kubernetes Events on the `GameServer`
-  (`InstallRequested`, `InstallStarted`, `InstallFinished`, `InstallFailed`, `Recreate`, `Resized`,
-  `Power`, `Synced`, `SnapshotCreated`, `DigestLookupFailed`); conditions (§7.2).
+  (install: `InstallRequested`, `InstallStarted`, `InstallFinished`, `InstallFailed`, `InstallRestarted`,
+  `InstallTimeout`, `InstallScriptMissing`; process: `Power`, `Synced`, `Suspended`,
+  `GameContainerTerminated`; pod: `Recreate`, `Resized`, `ForceDelete`, `ClassNotFound`,
+  `DigestLookupFailed`, `EntrypointLookupFailed`; storage: `VolumeExpanded`, `ResizeFailed`, `SnapshotCreated`,
+  `SnapshotFailed`, `InvalidSnapshotSchedule`, `VolumeRetained`; deletion: `AgentDeleteFailed`,
+  `AgentKillFailed`); conditions (§7.2).
 - **Gateway:** `GET /api/diagnostics` (§5.2) and `GET /healthz`.
 - The gateway and the agent expose no metrics endpoint.
 

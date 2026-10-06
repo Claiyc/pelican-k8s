@@ -15,8 +15,9 @@ servers as Kubernetes resources.
 | Optional: CSI snapshots | `VolumeSnapshotClass` for `SnapshotThenDelete` and scheduled snapshots |
 
 Images are published to `ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`
-and the charts to `oci://ghcr.io/claiyc/pelican-k8s/charts/{pelican-k8s,pelican-panel}`,
-both tagged with the release version.
+and the charts to `oci://ghcr.io/claiyc/pelican-k8s/charts/{pelican-k8s,pelican-panel}`.
+The images and the `pelican-k8s` chart carry the release version; `pelican-panel`
+has its own chart version.
 
 ## 2. Create the node in the Panel
 
@@ -246,7 +247,9 @@ application controller restarts.
 
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
-`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the operator's
-Role grants them, `pods/resize`, `volumesnapshots`, `leases` and `nodes`.
+`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the chart's
+Roles and ClusterRoles grant them, `pods/resize`, `volumesnapshots`, `leases`,
+`nodes`, `namespaces` and, with `gateway.metallb.discoverPools`, MetalLB
+`ipaddresspools`.
 Never enable `prune` on the servers namespace: `GameServer` objects are owned
 by the Panel through the gateway, not by Git.

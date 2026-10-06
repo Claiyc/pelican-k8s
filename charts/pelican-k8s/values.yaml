@@ -181,7 +181,8 @@ defaultClass:
 admissionPolicies:
   enabled: true
 
-# NetworkPolicies: default deny in the servers namespace plus gateway/operator policies.
+# NetworkPolicies: default deny and install-Job egress in the servers namespace,
+# plus the gateway's ingress policy.
 networkPolicies:
   enabled: true
 

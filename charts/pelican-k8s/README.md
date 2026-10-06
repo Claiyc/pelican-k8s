@@ -56,7 +56,7 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `agent.*` | see values | Rendered into the agent's Wings `config.yml` (crash detection, SFTP read-only, log count, upload limit, timezone); `agent.extra` is merged verbatim |
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods and install Jobs |
-| `networkPolicies.enabled` | `true` | Default deny in the servers namespace plus gateway policies |
+| `networkPolicies.enabled` | `true` | Default deny and an install-Job egress policy in the servers namespace, plus the gateway's ingress policy |
 | `openshift.enabled` | `false` | SCC bindings, namespace UID ranges and seccomp handling for OpenShift |
 | `openshift.gameSCC` / `openshift.installerSCC` | `restricted-v2` / `anyuid` | SCCs bound to the game and installer ServiceAccounts |
 

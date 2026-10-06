@@ -126,7 +126,7 @@ database:
 ```
 
 Pick a Secret name that the chart does **not** generate itself
-(`<release>-pelican-panel-env`), so a sync can never overwrite it.
+(`<fullname>-env`, e.g. `pelican-panel-env`), so a sync can never overwrite it.
 
 The rest is the usual Argo CD setup: a CNPG `Cluster` in the app namespace, a
 RoleBinding that lets the Argo CD application controller manage the `pelican`
@@ -143,7 +143,7 @@ Three things the image needs that a vanilla `restricted-v2` namespace denies:
 |---|---|---|
 | Image has a fixed `USER www-data` (uid/gid 82) | pod rejected by SCC, or files in `/pelican-data` unwritable | `openshift.scc.enabled=true` (binds `nonroot-v2` to the chart SA) + `podSecurityContext.runAsUser/runAsGroup/fsGroup: 82` |
 | Caddy binds port 80 as a non-root user | `Error: ... listen tcp :80: bind: permission denied`, pod never becomes ready | `podSecurityContext.sysctls: net.ipv4.ip_unprivileged_port_start=0` (a *safe* sysctl) |
-| Route needs a named target port | router returns 503 | the chart always emits `port.targetPort: http` |
+| Route needs a named target port | router returns 503 | the chart emits the named target port `http` (`fastcgi` with `panel.skipCaddy`) |
 
 Prefer `nonroot-v2` over `anyuid` - it is the least privilege that still allows a
 fixed non-root UID.
