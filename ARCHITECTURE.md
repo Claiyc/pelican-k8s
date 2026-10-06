@@ -1395,7 +1395,7 @@ pelican-k8s/
 │   ├── spike/               agent + shim run the Paper egg in Docker
 │   ├── supplychain/         pinned actions and images, token scopes, unreachable advisories
 │   └── upstream/            Wings route table, remote client and ProcessEnvironment against the gateway's lists
-└── .github/workflows/       ci, codeql, contract, release-pr, release, scorecard, spike, upstream
+└── .github/workflows/       ci, codeql, contract, release-pr, release, scorecard, upstream
 ```
 
 - **Go:** 1.27 (`go.mod`).
