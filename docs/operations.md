@@ -79,7 +79,7 @@ Upgrading the Panel is independent; re-run the compatibility checks in
 | `ExposureReady=False` with `Pending` | A `LoadBalancer` Service has no address. Under two minutes this is normal provisioning; after that the message names the likely cause — the cluster has no load balancer implementation. Install one, or switch the class to `NodePort` (ports 30000–32767) or `HostPort` |
 | `ExposureReady=False` with `PortOutOfRange` | The API server refused the allocation port as a NodePort. Move the allocation into the range, widen `--service-node-port-range`, or switch the class to `LoadBalancer` or `HostPort`. The server stays in `Error` and gets no pod until then |
 | `ResizePending=RecreateRequired` | The Panel dropped a CPU or memory limit (set to unlimited). Kubernetes cannot remove a container limit in place, so the pod is recreated once the process is offline |
-| A Proton/Wine server hangs after a restart | Stale `wineserver`/game processes from an earlier start used to survive a stop and wedge the WINEPREFIX; fixed in the shim. `ps` in the game container should show exactly one `wineserver` |
+| A Proton/Wine server hangs after a restart | After a stop the shim kills every process left in the game container, including a `wineserver` that left the process group; `ps` in the game container shows exactly one `wineserver` while the server runs |
 | Server keeps restarting | Wings crash detection: `kubectl logs -c game` shows why the process exits; `detect_clean_exit_as_crash` in `agent.crashDetection` |
 
 Panel-side: `php artisan p:node:list`, `p:node:configuration <id>` (tokens), and

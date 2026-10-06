@@ -16,8 +16,8 @@ KIND_IMAGE=${KIND_IMAGE:-kindest/node:v1.36.4}
 TAG=${TAG:-contract}
 PANEL_IMAGE=${PANEL_IMAGE:-}
 GAME_IMAGE=${GAME_IMAGE:-ghcr.io/pelican-eggs/yolks:java_25}
-# Pinned: the egg is test input, not the contract. Tracking main let an egg
-# change (a new required variable) fail the nightly run as Panel drift (#50).
+# The egg is pinned: it is test input, so only the Panel image varies between
+# runs.
 EGG_URL=${EGG_URL:-https://raw.githubusercontent.com/pelican-eggs/minecraft/9c122fd010ebb003d1990c0e9adbc96ccd6a9b2e/java/paper/egg-paper.yaml}
 # The Paper egg's installer refuses to run without one (PaperMC downloads API policy).
 EGG_USER_AGENT=${EGG_USER_AGENT:-pelican-k8s-contract (https://github.com/Claiyc/pelican-k8s)}

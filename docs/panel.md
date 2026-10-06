@@ -66,9 +66,7 @@ kubectl -n pelican exec deploy/panel-pelican-panel -- \
 
 `database.connection` = `pgsql` | `mysql` | `mariadb` | `sqlite`.
 
-**PostgreSQL works.** Verified end to end on OpenShift with CloudNativePG: all migrations apply,
-the scheduler and queue worker run, and the Filament UI logs in. No MariaDB
-fallback was needed.
+PostgreSQL is supported, including CloudNativePG (section 6).
 
 Every connection detail can come from an existing Secret, which makes a
 CloudNativePG `<cluster>-app` Secret a drop-in (see the worked example in section 6).
@@ -144,7 +142,7 @@ Three things the image needs that a vanilla `restricted-v2` namespace denies:
 | Problem | Symptom | Chart fix |
 |---|---|---|
 | Image has a fixed `USER www-data` (uid/gid 82) | pod rejected by SCC, or files in `/pelican-data` unwritable | `openshift.scc.enabled=true` (binds `nonroot-v2` to the chart SA) + `podSecurityContext.runAsUser/runAsGroup/fsGroup: 82` |
-| Caddy binds port 80 as a non-root user | `Error: ... listen tcp :80: bind: permission denied`, pod never becomes ready | `podSecurityContext.sysctls: net.ipv4.ip_unprivileged_port_start=0` (a *safe* sysctl - Docker sets it implicitly, Kubernetes does not). Adding `NET_BIND_SERVICE` does **not** help: Kubernetes cannot grant ambient capabilities, and `allowPrivilegeEscalation: false` disables file capabilities. |
+| Caddy binds port 80 as a non-root user | `Error: ... listen tcp :80: bind: permission denied`, pod never becomes ready | `podSecurityContext.sysctls: net.ipv4.ip_unprivileged_port_start=0` (a *safe* sysctl) |
 | Route needs a named target port | router returns 503 | the chart always emits `port.targetPort: http` |
 
 Prefer `nonroot-v2` over `anyuid` - it is the least privilege that still allows a
@@ -317,49 +315,10 @@ treat the UI field as read-only.
 
 ---
 
-## 8. Connecting a node later
+## 8. Connecting the node
 
-The Panel is only half of Pelican: servers run on **nodes**. Today that means a
-Wings daemon; in this repo it will eventually mean the
-gateway/operator/agent described in [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
-and [`wings-panel-contract.md`](wings-panel-contract.md).
-
-Either way the Panel side is the same:
-
-1. In the Panel UI, **Admin -> Nodes -> Create Node**. Give it the FQDN the Panel
-   will reach the daemon on, the port (default 8080), and whether it uses TLS.
-2. The Panel generates a node configuration (`Configuration` tab, or
-   `php artisan p:node:configuration <id>`) containing `uuid`, `token_id` and
-   `token` - these are encrypted with `APP_KEY`, which is why APP_KEY stability
-   matters.
-3. Hand that configuration to the daemon. The daemon calls back to
-   `APP_URL/api/remote/...`, so `panel.url` must be reachable **from the node**,
-   not only from your browser. In the example above that is
-   `https://pelican.apps.example.com` via the Route.
-4. Allocations (IP + ports) are created per node in the Panel and must match what
-   the node can actually bind.
-
-If the node lives inside the same cluster, it can reach the Panel at
-`http://pelican-panel.pelican.svc` - but keep `APP_URL` on the public URL, since
-the Panel uses it for links and assets. Point the node at the Route instead, or
-add the in-cluster hostname to `panel.trustedProxies` handling as needed.
-
----
-
-## 9. Verified behaviour (2026-09-16, single-node OpenShift)
-
-| Check | Result |
-|---|---|
-| `helm lint` (default + 3 CI value sets) | pass |
-| `helm template` + `oc apply --dry-run=server` | pass for all three value sets |
-| Chart install on OpenShift 4.22 / k8s 1.35 | `pelican-panel` release `deployed`, pod `1/1 Running`, SCC `nonroot-v2` |
-| PostgreSQL 18 (CNPG) migrations | all migrations applied, `users`/`jobs`/`sessions` tables present |
-| Scheduler | `supercronic` runs `p:schedule:process`, `health:schedule-check-heartbeat`, `health:check` every minute |
-| Queue worker | `queue:work` process running in the pod |
-| `GET https://pelican.apps.example.com/up` | `200` |
-| `GET http://pelican.apps.example.com/` | `302` to https (Route `insecureEdgeTerminationPolicy: Redirect`) |
-| `GET https://pelican.apps.example.com/` | `302` -> `/login`, `200`, cookies `Secure` (HTTPS correctly detected behind the router) |
-| Rendered asset URLs | all `https://pelican.apps.example.com/...` |
-| Admin creation | `p:user:make` created `admin` / `admin@example.com`, row present in the `users` table |
-| Web login | full Filament/Livewire `authenticate` call returned `redirect: https://pelican.apps.example.com`, follow-up request rendered the authenticated **Servers** dashboard |
-| Pod restart | `rollout restart` came back healthy; `/pelican-data` (uid 82, `drwxrwsr-x`) retained `.env`, `storage/`, `caddy/` |
+The Panel manages game servers through a node. With pelican-k8s the node is
+the gateway; [install.md](install.md) covers creating it in the Panel and
+installing the backend. The node's `token_id` and `token` are encrypted with
+`APP_KEY`, so `APP_KEY` must stay stable (section 4). The gateway calls the
+Panel at its `gateway.panelURL`, which must be reachable from the gateway pod.

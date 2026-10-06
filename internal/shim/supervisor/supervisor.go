@@ -422,10 +422,9 @@ func (s *Supervisor) readOutput(ptmx *os.File) {
 }
 
 // reapAll collects every exited child. Only the supervised process is handed
-// to waitLoop; orphans are dropped here. Forwarding them all filled the channel
-// while no process ran (nothing drains it then), which stopped the reaper and
-// left every later orphan a zombie, and a stale entry could be taken for the
-// exit of a later process that reused the pid.
+// to waitLoop; orphans are reaped and dropped here. childExit therefore never
+// fills while no process runs (nothing drains it then), and never holds an
+// entry that a later process reusing the pid could be mistaken for.
 func (s *Supervisor) reapAll() {
 	s.spawnMu.Lock()
 	defer s.spawnMu.Unlock()

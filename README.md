@@ -36,7 +36,7 @@ Panel ──Wings API (node token)──▶ gateway ──spec/status──▶ G
 | **agent** | [Wings](https://github.com/pelican/wings) imported as a Go module, running as a native sidecar with exactly one server: stock router, websocket, SFTP server, filesystem, egg config parser, crash detection, backups |
 | **shim** | Static binary injected as the game container's entrypoint: PTY, stdin, signals, exit codes, cgroup stats, output ring buffer |
 
-The design is documented in depth in [ARCHITECTURE.md](ARCHITECTURE.md); the
+[ARCHITECTURE.md](ARCHITECTURE.md) describes how the system works; the
 Wings/Panel protocol the gateway reproduces is in
 [docs/wings-panel-contract.md](docs/wings-panel-contract.md).
 
@@ -99,10 +99,10 @@ The step-by-step guide with all options is in [docs/install.md](docs/install.md)
 | [docs/panel.md](docs/panel.md) | Deploying the Panel with the `pelican-panel` chart |
 | [docs/classes.md](docs/classes.md) | `GameServerClass` reference: storage, exposure, networking, resources, security, installs |
 | [docs/operations.md](docs/operations.md) | Day-2: inspecting servers, upgrades, backups and snapshots, troubleshooting |
-| [docs/compatibility.md](docs/compatibility.md) | Wings feature parity, known limitations, deviations from the architecture document |
+| [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and known limitations |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
 | [docs/development.md](docs/development.md) | Building, testing (unit, spike, e2e, upstream diffs), the Wings fork and its hooks, release process |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The design |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
 | [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Verified Wings ⇄ Panel protocol reference |
 
 ## Repository layout
@@ -116,7 +116,7 @@ internal/operator/     reconciler, object rendering, resource mapping, image res
 internal/shim/         supervisor, protocol, cgroup stats, prepare/probe/install-run helpers
 charts/pelican-k8s/    the backend chart      charts/pelican-panel/  the Panel chart
 test/fakepanel/        in-memory Panel remote API for tests
-test/spike/            M0 spike: agent + shim run the Paper egg in Docker without Kubernetes
+test/spike/            agent + shim run the Paper egg in Docker without Kubernetes
 test/e2e/              end-to-end suite against a deployed gateway
 test/upstream/         route/remote-client/interface diffs against the pinned Wings module
 hack/                  developer scripts (dev-push.sh builds, pushes and rolls a dev release)
@@ -124,14 +124,13 @@ hack/                  developer scripts (dev-push.sh builds, pushes and rolls a
 
 ## How it relates to Wings
 
-Wings is used as an **unmodified dependency**: the agent imports
-`github.com/pelican/wings` and registers a shim-backed process environment and
-a Job-backed installer through four small opt-in hooks. Until those hooks are
-merged upstream they live on the `pelican-k8s-hooks` branch of the
-[Claiyc/wings](https://github.com/Claiyc/wings) fork, referenced from `go.mod`
-with a `replace` directive. `test/upstream` diffs the pinned Wings route table,
+The agent imports `github.com/pelican/wings` as a Go module and registers a
+shim-backed process environment and a Job-backed installer through four small
+opt-in hooks. The hooks live on the `pelican-k8s-hooks` branch of the
+[Claiyc/wings](https://github.com/Claiyc/wings) fork, which `go.mod` pins with
+a `replace` directive. `test/upstream` diffs the pinned Wings route table,
 remote client and `ProcessEnvironment` interface on every CI run, and a nightly
-workflow does the same against Wings `main`.
+workflow does the same against the tip of the hooks branch.
 
 ## Contributing
 
@@ -140,5 +139,5 @@ Security issues: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[Apache License 2.0](LICENSE). Wings (MIT) is used unmodified as a dependency
-(see [NOTICE](NOTICE)); the Panel (AGPL-3.0) is used unmodified as a separate service.
+[Apache License 2.0](LICENSE). Wings (MIT) is a dependency (see
+[NOTICE](NOTICE)); the Panel (AGPL-3.0) is used unmodified as a separate service.

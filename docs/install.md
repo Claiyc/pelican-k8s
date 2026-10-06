@@ -108,12 +108,11 @@ port is below the NodePort range — Minecraft 25565, ARK 7777 and 27015, Valhei
 2456, Rust 28015, Palworld 8211 — so the mode decides whether your allocations
 can use the port the game's own documentation tells players to use.
 
-`LoadBalancer` is the default because it imposes no port constraint and needs no
-configuration on the clusters most people start from: k3s ships ServiceLB, and
-every managed cloud provides one. On a cluster with **no** load balancer
-implementation (kind, bare kubeadm, single-node OpenShift) a game Service waits
-for an address that never arrives; after two minutes `ExposureReady` says so and
-names the alternatives. Install MetalLB ([below](#metallb)) or pick another mode.
+`LoadBalancer`, the default, works with any port and with the load balancer
+of k3s (ServiceLB) or a managed cloud. On a cluster with **no** load balancer
+implementation (kind, bare kubeadm, single-node OpenShift) a game Service gets
+no address; after two minutes `ExposureReady` says so and names the
+alternatives. Install MetalLB ([below](#metallb)) or pick another mode.
 
 Set in the class (`defaultClass.spec.exposure.mode`):
 
@@ -151,18 +150,12 @@ gateway:
 
 With `discoverPools`, the gateway lists MetalLB's `IPAddressPool` objects and
 returns their addresses from `/api/system/ips`, so the Panel's allocation form
-only offers addresses MetalLB will announce. It reads the pools with an
-uncached client, because the CRD may not be installed; a missing CRD or missing
-RBAC is logged once and falls back to the other sources. The chart adds the
-`metallb.io/ipaddresspools` read permission only when `discoverPools` is set.
+offers only addresses MetalLB announces. Without the MetalLB CRD or the read
+permission (the chart grants it only with `discoverPools`), the gateway logs
+it once and uses the other sources.
 
-Because the Service is pinned to the allocation IP, the address a player sees in
-the Panel is by construction the address MetalLB announces — the Panel needs no
-extra plumbing to learn it.
-
-Several servers can share one address: `sharingAnnotation` (set by the provider)
-makes MetalLB accept it as long as the ports do not overlap, which the Panel
-already guarantees per allocation IP.
+Several servers can share one address: `sharingAnnotation` (set by the
+provider) lets MetalLB put Services with different ports on one IP.
 
 ## 4. Verify
 
@@ -245,16 +238,11 @@ spec:
     syncOptions: [CreateNamespace=false]
 ```
 
-Leave `ServerSideApply=true` off. Nothing in the charts needs it (the CRDs are
-about 20 KB each), and on OpenShift it makes the Application fragile: Argo CD
-diffs server-side-applied resources against an API schema it caches when the
-application controller starts. After a node reboot the controller can come up
-before the aggregated `route.openshift.io` API is served, the cached schema
-then has no `Route`, and every Application that contains a Route stays
-`Unknown` with `ComparisonError: unable to resolve parseableType for
-GroupVersionKind: route.openshift.io/v1, Kind=Route` until the controller is
-restarted. Server-side diff (`ServerSideDiff=true`) goes through the same
-schema and does not avoid it; the default client-side diff does.
+Use the default client-side apply and diff. With `ServerSideApply=true` or
+`ServerSideDiff=true` on OpenShift, an Application containing a Route can stay
+`Unknown` (`ComparisonError: unable to resolve parseableType for
+GroupVersionKind: route.openshift.io/v1, Kind=Route`) until the Argo CD
+application controller restarts.
 
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,

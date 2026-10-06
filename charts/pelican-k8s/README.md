@@ -33,12 +33,14 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `serversNamespace.name` | `pelican-servers` | Namespace holding `GameServer` objects and game pods |
 | `serversNamespace.create` | `true` | Create the namespace (kept on uninstall) |
 | `serversNamespace.podSecurityLevel` | `baseline` | Pod Security Admission level (`privileged` for HostPort exposure) |
+| `gateway.replicas` / `operator.replicas` | `1` / `1` | Replica counts (the operator runs with leader election) |
 | `gateway.panelURL` | required | Panel base URL, also the accepted websocket `Origin` |
 | `gateway.nodeTokenID` / `gateway.nodeToken` | required unless `existingSecret` | Node credentials from the Panel (`token_id` / `token`) |
 | `gateway.existingSecret` | `""` | Secret with keys `token_id` and `token` instead of the values above |
 | `gateway.advertisedVersion` | `1.0.0` | Wings version reported in `User-Agent` and `/api/system` |
 | `gateway.allowedOrigins` | `[]` | Extra websocket origins |
-| `gateway.externalIPs` | `[]` | Addresses returned by `/api/system/ips` (falls back to the class `exposure.externalIPs`, then node addresses) |
+| `gateway.externalIPs` | `[]` | Addresses returned by `/api/system/ips` (falls back to the class `exposure.externalIPs`, then the MetalLB pools with `gateway.metallb.discoverPools`, then node addresses) |
+| `gateway.metallb.discoverPools` / `.poolNames` / `.maxAddresses` | `false` / `[]` / `256` | Offer MetalLB `IPAddressPool` addresses from `/api/system/ips` (empty `poolNames` = every pool) |
 | `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` | How agents reach the gateway |
 | `gateway.resyncInterval` | `15m` | Panel/cluster drift check |
 | `gateway.uploadLimitMiB` | `100` | Browser upload limit (match the agent and ingress body limits) |
@@ -56,6 +58,7 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods and install Jobs |
 | `networkPolicies.enabled` | `true` | Default deny in the servers namespace plus gateway policies |
+| `networkPolicies.ingressNamespaceSelector` | `{}` | Namespace label selector of the ingress controller allowed to reach the gateway |
 | `openshift.enabled` | `false` | SCC bindings, namespace UID ranges and seccomp handling for OpenShift |
 | `openshift.gameSCC` / `openshift.installerSCC` | `restricted-v2` / `anyuid` | SCCs bound to the game and installer ServiceAccounts |
 

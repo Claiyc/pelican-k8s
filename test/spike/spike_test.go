@@ -1,7 +1,7 @@
 //go:build spike
 
-// Package spike is milestone M0 from ARCHITECTURE.md: the agent (Wings as a
-// library) and the shim run the Paper egg without Kubernetes. The shim runs in
+// Package spike runs the agent (Wings as a library) and the shim with the
+// Paper egg without Kubernetes. The shim runs in
 // a Docker yolk container, the agent runs in-process against the fake Panel.
 //
 //	go test -tags spike -run TestSpike ./test/spike -v -timeout 20m
