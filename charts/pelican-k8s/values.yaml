@@ -45,7 +45,6 @@ gateway:
   # How agents reach the gateway's remote API (in-cluster).
   remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
-  uploadLimitMiB: 100
   # Extra CA certificate for the Panel's TLS (private CAs, OpenShift router CA):
   # a ConfigMap in the release namespace whose key holds a PEM bundle.
   extraCA:
@@ -133,8 +132,16 @@ defaultClass:
       inClusterEgress:
         gameServers: true
         additional: []
-      # Cluster pod/service CIDRs and LAN ranges game pods must not reach.
-      blockedEgressCIDRs: []
+      # IPv4 ranges excluded from the internet egress of game pods and install
+      # Jobs: the private and shared ranges, which cover the usual pod,
+      # service, node and LAN ranges. Add any other range game pods must not
+      # reach. Link-local is always blocked. DNS, the gateway remote API and
+      # inClusterEgress are separate allow rules and keep working.
+      blockedEgressCIDRs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
       # Node CIDRs allowed to reach the agent port (kubelet probes on CNIs
       # that do not implicitly allow host traffic).
       nodeCIDRs: []
@@ -182,11 +189,10 @@ defaultClass:
 admissionPolicies:
   enabled: true
 
-# NetworkPolicies: default deny in the servers namespace plus gateway/operator policies.
+# NetworkPolicies: default deny and install-Job egress in the servers namespace,
+# plus the gateway's ingress policy.
 networkPolicies:
   enabled: true
-  # Namespace label selector of the ingress controller allowed to reach the gateway.
-  ingressNamespaceSelector: {}
 
 # OpenShift specifics: SCC role bindings for the pinned-UID game pods and the
 # root install Jobs, and namespace UID range handling.

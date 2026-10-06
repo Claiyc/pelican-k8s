@@ -9,7 +9,7 @@ make generate         # deepcopy + CRDs after editing api/v1alpha1 (commit the o
 make images           # docker build of the four images (build/*.Dockerfile)
 ```
 
-Go 1.26+ is required (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
+Go 1.27 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
 
 ## Tests
 
@@ -20,7 +20,7 @@ Go 1.26+ is required (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/ar
 | Docs | `go test ./test/docs/` | nothing. Fails when a documented `helm install --version` or an example's `targetRevision` names a version the tree does not release, so bumping a chart has to bump the docs in the same change |
 | Supply chain | `go test ./test/supplychain/` | nothing. Asserts every action is SHA-pinned with a version comment, every base image digest-pinned, and that no workflow grants a write token above the job that needs it |
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
-| Spike (M0) | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart |
+| Spike | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart. CI runs it on every PR and push to master |
 | Contract (kind) | `hack/e2e-kind.sh` | Docker, kind, helm, kubectl (or `KUBECTL=oc`), internet. Throwaway kind cluster with the **real Pelican Panel** (our chart, SQLite) and pelican-k8s built from the working tree: node registration, egg import and server creation through the Panel's own services, install Job, auto-start, the e2e suite below, then Panel-side status, backup, suspension and deletion. CI runs it on every PR (`Contract` workflow) and nightly against `ghcr.io/pelican/panel:latest`, opening an `upstream` issue on failure. `PANEL_IMAGE=... hack/e2e-kind.sh` tests another Panel version, `KEEP=1` keeps the cluster |
 | e2e | `go test -tags e2e ./test/e2e -v` | a deployed gateway and one server. Set `PELICAN_E2E_GATEWAY`, `PELICAN_E2E_TOKEN`, `PELICAN_E2E_PANEL_URL`, `PELICAN_E2E_SERVER` (and `PELICAN_E2E_SFTP`, `_SFTP_USER`, `_SFTP_PASSWORD`, `_INSECURE=true`) |
 
@@ -48,26 +48,23 @@ The agent imports `github.com/pelican/wings`. Four opt-in hooks are needed
 [Claiyc/wings](https://github.com/Claiyc/wings) fork, pinned in `go.mod`:
 
 1. `server.WithEnvironmentFactory` / `server.WithInstaller` options on the server manager (Docker stays the default)
-2. `server.ImageAndStopConfigurable` and `server.Attachable` interfaces instead of `*docker.Environment` type assertions
+2. `server.ImageAndStopConfigurable` and `server.Attachable` interfaces for the image, stop configuration and attach calls
 3. `server.Installer` interface with the install lock held by `Server.Install`
 4. package `boot` exposing the activity database initialisation and the cron scheduler that live under `internal/`
 
-Bumping Wings: rebase the branch on the new upstream tag, push, update the
-`replace` line, run `go test ./test/upstream/ ./...` and the spike, then the
-e2e suite. Each hook is meant to be submitted upstream as an independent PR;
-nothing is pushed upstream from this repository automatically.
-
-The fork is the dependency for as long as any hook is unmerged, and it is what
-the nightly *Upstream drift* workflow checks. If all four land upstream, the
-fork and the `replace` go away together: point `go.mod` and that workflow at
-`github.com/pelican/wings` and delete the branch.
+Bumping Wings: bring `pelican-k8s-hooks` up to date with upstream, push, point
+the `replace` line at the new tip
+(`go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@<commit> && go mod tidy`),
+run `go test ./test/upstream/ ./...` and the spike, and update the upstream
+basis in `docs/wings-panel-contract.md`. The *Upstream drift* workflow tests
+the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 ## Code map
 
 | Package | Role |
 |---|---|
-| `internal/shim/supervisor` | PTY process supervisor and socket server (PID 1) |
-| `internal/shim/protocol` | JSON-lines protocol and client |
+| `internal/shim/supervisor` | PTY process supervisor (PID 1); connects to the agent's socket and serves it |
+| `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
 | `internal/shim/cgroup` | cgroup v2 and `/proc/net/dev` sampling |
 | `internal/shim/prepare` | PVC layout, entrypoint probe, install-run |
 | `internal/agent/app` | Wings boot sequence without Docker |
@@ -98,14 +95,8 @@ fork and the `replace` go away together: point `go.mod` and that workflow at
 
 ### Standing Scorecard findings
 
-Scorecard's score cannot reach 10 here, and two of the findings are worth
-explaining rather than re-investigating.
-
-**Vulnerabilities (4/10).** Six advisories are reported against modules in the
-graph. **None of the six has a fixed version**, so no dependency bump can clear
-them; what keeps them harmless is that the vulnerable code is never linked.
-`test/supplychain` asserts exactly that, so a new import cannot change it
-unnoticed.
+**Vulnerabilities.** These advisories have no fixed version, and their
+vulnerable code is not linked; `test/supplychain` asserts that.
 
 | Advisory | Module | Where the vulnerable code lives |
 |---|---|---|
@@ -114,18 +105,14 @@ unnoticed.
 | GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
 
 `github.com/docker/docker` enters through `internal/agent/installer` →
-`wings/system` → `docker/docker/api/types`. 27 of its packages are linked —
-`api/types/*`, `client`, `errdefs` and two `pkg/parsers` helpers — and
-`docker/docker/daemon` is not among them. `x/crypto/openpgp` is not in the
-build graph at all. This matches `govulncheck`, which finds no vulnerability
-reachable from this code.
+`wings/system` → `docker/docker/api/types`; `docker/docker/daemon` is not
+linked. `x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
+vulnerability reachable from this code.
 
-**Everything else** needs an action outside the tree: *Code-Review* wants
-approvals on merged PRs, *CII-Best-Practices* wants the project registered at
-bestpractices.coreinfrastructure.org, *Branch-Protection* errors out because
-the default `GITHUB_TOKEN` cannot read classic branch protection rules (it
-needs a fine-grained PAT in `scorecard.yaml`), *Signed-Releases* waits on a
-first release, and *Maintained* clears once the repository is 90 days old.
+**Other checks** need settings outside the tree: *Code-Review* counts
+approvals on merged PRs, *CII-Best-Practices* needs a registration at
+bestpractices.coreinfrastructure.org, and *Branch-Protection* needs a
+fine-grained PAT in `scorecard.yaml` to read classic branch protection rules.
 
 ## Releases
 
@@ -163,5 +150,5 @@ Merge the release PR. Nothing else is manual.
   the prepared tree before pushing it, and the repository setting *Allow
   GitHub Actions to create and approve pull requests* must be on.
 - **By hand.** `hack/release-prep.sh [X.Y.Z]` prepares the same change locally
-  (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag still releases
+  (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag releases
   that tag.

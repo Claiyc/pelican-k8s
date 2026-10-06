@@ -6,10 +6,12 @@ package sftprelay
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -32,47 +34,93 @@ import (
 
 var validUsername = regexp.MustCompile(`^(?i)(.+)\.([a-z0-9]{8})$`)
 
-// Sessions records relayed logins so the remote API can answer the agent's
-// own /sftp/auth call with the Panel's response.
+// Sessions issues and verifies the credential the relay presents to the
+// agent's Wings SFTP server as the SSH password. The credential carries the
+// Panel's answer for the login (server, user, permissions), the SSH username
+// and an expiry, sealed with an HMAC key derived from the node token. Every
+// gateway replica derives the same key, so whichever replica receives the
+// agent's /sftp/auth call can verify the credential without shared state.
 type Sessions struct {
-	mu   sync.Mutex
-	byID map[string]sessionRecord
+	key []byte
+	ttl time.Duration
+	now func() time.Time
 }
 
-type sessionRecord struct {
-	username string
-	resp     *remote.SftpAuthResponse
-	expires  time.Time
+// sessionPrefix versions the credential format and the key derivation.
+const sessionPrefix = "pks1."
+
+// sessionTTL bounds how long a credential is accepted. The relay dials the
+// agent right after the client authenticated, so this only has to cover the
+// agent's SSH handshake.
+const sessionTTL = 2 * time.Minute
+
+type sessionClaims struct {
+	Username    string   `json:"n"`
+	Server      string   `json:"s"`
+	User        string   `json:"u"`
+	Permissions []string `json:"p"`
+	Expires     int64    `json:"e"`
+	Nonce       string   `json:"r"`
 }
 
-// NewSessions returns an empty session store.
-func NewSessions() *Sessions { return &Sessions{byID: map[string]sessionRecord{}} }
+// NewSessions derives the credential key from the node token.
+func NewSessions(nodeToken string) *Sessions {
+	m := hmac.New(sha256.New, []byte(nodeToken))
+	m.Write([]byte("pelican-k8s sftp session credential v1"))
+	return &Sessions{key: m.Sum(nil), ttl: sessionTTL, now: time.Now}
+}
 
-// Issue creates a one-time credential for the login.
+func (s *Sessions) mac(payload string) []byte {
+	m := hmac.New(sha256.New, s.key)
+	m.Write([]byte(sessionPrefix))
+	m.Write([]byte(payload))
+	return m.Sum(nil)
+}
+
+// Issue creates the credential for a login the Panel accepted.
 func (s *Sessions) Issue(username string, resp *remote.SftpAuthResponse) string {
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	cred := hex.EncodeToString(b)
-	s.mu.Lock()
-	s.byID[cred] = sessionRecord{username: username, resp: resp, expires: time.Now().Add(2 * time.Minute)}
-	for k, v := range s.byID {
-		if time.Now().After(v.expires) {
-			delete(s.byID, k)
-		}
-	}
-	s.mu.Unlock()
-	return cred
+	nonce := make([]byte, 12)
+	_, _ = rand.Read(nonce)
+	b, _ := json.Marshal(sessionClaims{
+		Username:    username,
+		Server:      resp.Server,
+		User:        resp.User,
+		Permissions: resp.Permissions,
+		Expires:     s.now().Add(s.ttl).Unix(),
+		Nonce:       base64.RawURLEncoding.EncodeToString(nonce),
+	})
+	payload := base64.RawURLEncoding.EncodeToString(b)
+	return sessionPrefix + payload + "." + base64.RawURLEncoding.EncodeToString(s.mac(payload))
 }
 
-// Lookup implements remoteapi.SftpSessions.
+// Lookup implements remoteapi.SftpSessions: it returns the Panel's answer
+// sealed in the credential when the MAC verifies, the credential has not
+// expired and it was issued for this SSH username.
 func (s *Sessions) Lookup(username, password string) (*remote.SftpAuthResponse, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.byID[password]
-	if !ok || time.Now().After(rec.expires) || subtle.ConstantTimeCompare([]byte(rec.username), []byte(username)) != 1 {
+	rest, ok := strings.CutPrefix(password, sessionPrefix)
+	if !ok {
 		return nil, false
 	}
-	return rec.resp, true
+	payload, sig, ok := strings.Cut(rest, ".")
+	if !ok {
+		return nil, false
+	}
+	got, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil || !hmac.Equal(got, s.mac(payload)) {
+		return nil, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, false
+	}
+	var c sessionClaims
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, false
+	}
+	if !s.now().Before(time.Unix(c.Expires, 0)) || c.Username != username || c.Server == "" {
+		return nil, false
+	}
+	return &remote.SftpAuthResponse{Server: c.Server, User: c.User, Permissions: c.Permissions}, true
 }
 
 // Relay is the SFTP relay server.
@@ -203,7 +251,7 @@ func (r *Relay) handle(ctx context.Context, nconn net.Conn, conf *ssh.ServerConf
 }
 
 // dialAgent opens the SSH connection to the agent's Wings SFTP server using
-// the one-time session credential, pinning the agent host key on first use.
+// the session credential, pinning the agent host key on first use.
 func (r *Relay) dialAgent(ctx context.Context, t *agents.Target, user, cred string) (*ssh.Client, error) {
 	gs, err := r.Store.Get(ctx, t.UUID)
 	if err != nil {

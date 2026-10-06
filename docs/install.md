@@ -10,13 +10,14 @@ servers as Kubernetes resources.
 | Kubernetes ≥ 1.33 | 1.35+ recommended. Uses native sidecars, `ValidatingAdmissionPolicy` and in-place pod resize (`pods/resize`) |
 | StorageClass with `allowVolumeExpansion: true` | One RWO PVC per server; Panel disk changes expand it online |
 | Ingress controller or OpenShift Router | For the gateway's HTTP API (Panel calls, websockets, signed uploads/downloads) |
-| A way to expose TCP | SFTP (`NodePort`/`LoadBalancer`) and game ports (`LoadBalancer`, `NodePort` on single nodes, or `HostPort`) |
+| A way to expose TCP | SFTP (`NodePort`/`LoadBalancer`) and game ports (`LoadBalancer`, `NodePort` or `HostPort`) |
 | A Pelican Panel | Any deployment; the `pelican-panel` chart in this repo is one option ([panel.md](panel.md)) |
 | Optional: CSI snapshots | `VolumeSnapshotClass` for `SnapshotThenDelete` and scheduled snapshots |
 
 Images are published to `ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`
-and the charts to `oci://ghcr.io/claiyc/pelican-k8s/charts/{pelican-k8s,pelican-panel}`,
-both tagged with the release version.
+and the charts to `oci://ghcr.io/claiyc/pelican-k8s/charts/{pelican-k8s,pelican-panel}`.
+The images and the `pelican-k8s` chart carry the release version; `pelican-panel`
+has its own chart version.
 
 ## 2. Create the node in the Panel
 
@@ -76,7 +77,7 @@ The Panel and browsers hold long connections through the gateway:
 
 - request/read timeout of at least **16 minutes** (Panel compress/decompress calls wait up to 15)
 - websocket support with long idle timeouts (console sessions last hours)
-- request bodies up to the upload limit (100 MiB by default)
+- request bodies up to the upload limit (`agent.uploadLimitMiB`, 100 MiB by default)
 
 ingress-nginx example annotations:
 
@@ -108,20 +109,19 @@ port is below the NodePort range — Minecraft 25565, ARK 7777 and 27015, Valhei
 2456, Rust 28015, Palworld 8211 — so the mode decides whether your allocations
 can use the port the game's own documentation tells players to use.
 
-`LoadBalancer` is the default because it imposes no port constraint and needs no
-configuration on the clusters most people start from: k3s ships ServiceLB, and
-every managed cloud provides one. On a cluster with **no** load balancer
-implementation (kind, bare kubeadm, single-node OpenShift) a game Service waits
-for an address that never arrives; after two minutes `ExposureReady` says so and
-names the alternatives. Install MetalLB ([below](#metallb)) or pick another mode.
+`LoadBalancer`, the default, works with any port and with the load balancer
+of k3s (ServiceLB) or a managed cloud. On a cluster with **no** load balancer
+implementation (kind, bare kubeadm, single-node OpenShift) a game Service gets
+no address; after two minutes `ExposureReady` says so and names the
+alternatives. Install MetalLB ([below](#metallb)) or pick another mode.
 
 Set in the class (`defaultClass.spec.exposure.mode`):
 
 | Mode | Use when | Panel allocations |
 |---|---|---|
 | `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP. `loadBalancer.provider: metallb` fills both in |
-| `NodePort` | no load balancer available and the game's ports are negotiable | IP = node IP, ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
-| `HostPort` | no load balancer available and the game's ports matter | IP = node IP, any port; needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
+| `NodePort` | no load balancer available and the game's ports are negotiable | IP = a node's InternalIP or ExternalIP; the operator runs the pod on that node. Ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
+| `HostPort` | no load balancer available and the game's ports matter | IP = a node's InternalIP or ExternalIP, any port; the operator runs the pod on that node. Needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
 
 `/api/system/ips` (the Panel's allocation IP dropdown) returns
 `gateway.externalIPs`, else the class `exposure.externalIPs`, else the
@@ -151,18 +151,12 @@ gateway:
 
 With `discoverPools`, the gateway lists MetalLB's `IPAddressPool` objects and
 returns their addresses from `/api/system/ips`, so the Panel's allocation form
-only offers addresses MetalLB will announce. It reads the pools with an
-uncached client, because the CRD may not be installed; a missing CRD or missing
-RBAC is logged once and falls back to the other sources. The chart adds the
-`metallb.io/ipaddresspools` read permission only when `discoverPools` is set.
+offers only addresses MetalLB announces. Without the MetalLB CRD or the read
+permission (the chart grants it only with `discoverPools`), the gateway logs
+it once and uses the other sources.
 
-Because the Service is pinned to the allocation IP, the address a player sees in
-the Panel is by construction the address MetalLB announces — the Panel needs no
-extra plumbing to learn it.
-
-Several servers can share one address: `sharingAnnotation` (set by the provider)
-makes MetalLB accept it as long as the ports do not overlap, which the Panel
-already guarantees per allocation IP.
+Several servers can share one address: `sharingAnnotation` (set by the
+provider) lets MetalLB put Services with different ports on one IP.
 
 ## 4. Verify
 
@@ -245,20 +239,17 @@ spec:
     syncOptions: [CreateNamespace=false]
 ```
 
-Leave `ServerSideApply=true` off. Nothing in the charts needs it (the CRDs are
-about 20 KB each), and on OpenShift it makes the Application fragile: Argo CD
-diffs server-side-applied resources against an API schema it caches when the
-application controller starts. After a node reboot the controller can come up
-before the aggregated `route.openshift.io` API is served, the cached schema
-then has no `Route`, and every Application that contains a Route stays
-`Unknown` with `ComparisonError: unable to resolve parseableType for
-GroupVersionKind: route.openshift.io/v1, Kind=Route` until the controller is
-restarted. Server-side diff (`ServerSideDiff=true`) goes through the same
-schema and does not avoid it; the default client-side diff does.
+Use the default client-side apply and diff. With `ServerSideApply=true` or
+`ServerSideDiff=true` on OpenShift, an Application containing a Route can stay
+`Unknown` (`ComparisonError: unable to resolve parseableType for
+GroupVersionKind: route.openshift.io/v1, Kind=Route`) until the Argo CD
+application controller restarts.
 
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
-`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the operator's
-Role grants them, `pods/resize`, `volumesnapshots`, `leases` and `nodes`.
+`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the chart's
+Roles and ClusterRoles grant them, `pods/resize`, `volumesnapshots`, `leases`,
+`nodes`, `namespaces` and, with `gateway.metallb.discoverPools`, MetalLB
+`ipaddresspools`.
 Never enable `prune` on the servers namespace: `GameServer` objects are owned
 by the Panel through the gateway, not by Git.

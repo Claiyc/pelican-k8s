@@ -35,7 +35,7 @@ spec:
 | `scratch.storageClassName` | `storageClassName` | Class of the ephemeral scratch volume |
 | `scratch.sizeGiB` | 0 = PVC size | An archive can be as large as the server |
 | `deletionPolicy` | `Delete` | `Delete`, `Retain` (PVC orphaned and labelled `pelican-k8s.io/orphaned-at`) or `SnapshotThenDelete` |
-| `volumeSnapshotClassName` | | Required for `SnapshotThenDelete` and `snapshotSchedule` |
+| `volumeSnapshotClassName` | cluster default | `VolumeSnapshotClass` for `SnapshotThenDelete` and `snapshotSchedule` |
 | `snapshotSchedule` | | Cron expression for crash-consistent `VolumeSnapshot`s per server |
 | `snapshotRetain` | 7 | Scheduled snapshots kept per server |
 
@@ -45,8 +45,8 @@ Volumes never shrink: a smaller Panel `disk_space` sets the `DiskShrinkRefused` 
 
 | Field | Default | Meaning |
 |---|---|---|
-| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md) |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs |
+| `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the pod on the node whose InternalIP or ExternalIP is the allocation IP |
+| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the pod is not tied to a node |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |
@@ -61,7 +61,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | true | Create the per-server NetworkPolicy |
-| `blockedEgressCIDRs` | [] | Pod CIDR, service CIDR, node and LAN ranges game pods must not reach (link-local is always blocked) |
+| `blockedEgressCIDRs` | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` | IPv4 ranges excluded from game pods' internet egress; the defaults cover the usual pod, service, node and LAN ranges. Link-local is always blocked; `[]` blocks only link-local. DNS, the gateway remote API and `inClusterEgress` are separate allow rules and reach these ranges regardless. The chart's `install-jobs` policy uses the default class's list |
 | `nodeCIDRs` | [] | Node addresses admitted on the agent port for kubelet probes on CNIs without implicit host access |
 | `inClusterEgress.gameServers` | true | Game pods may reach other game pods (proxies such as Velocity) |
 | `inClusterEgress.additional` | [] | `{cidr, ports}` allowances (in-cluster S3, databases) |
@@ -70,7 +70,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `memoryOverheadPercent` | 5 | Memory limit = Panel `memory_limit` × (1 + overhead); request = `memory_limit` |
+| `memoryOverheadPercent` | 5 | Memory limit = Panel `memory_limit` × (1 + overhead/100) |
 | `cpuRequestPercentOfLimit` | 25 | CPU request as a share of the limit (overcommit) |
 | `memoryRequestPercentOfLimit` | 100 | Share of `memory_limit` reserved. 100 guarantees it; lower overcommits (memory is incompressible, so an over-full node evicts rather than throttles) |
 | `unlimitedMemoryMiB` | 4096 | Used when `memory_limit` is 0; the agent also reports it as `SERVER_MEMORY` |
@@ -94,7 +94,7 @@ Panel `swap`, `io_weight`, `threads` and OOM-killer disable are not expressible 
 | Field | Default | Meaning |
 |---|---|---|
 | `serviceAccountName` | `pelican-installer` | Job ServiceAccount |
-| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job gets `max(server, these)` like Wings' `installer_limits` |
+| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job limits are `max(server, these)` like Wings' `installer_limits`; the CPU value applies only when the server has a CPU limit. Requests equal the server's |
 | `strictExitCode` | false | Wings ignores script exit codes; `true` fails the install on non-zero |
 | `activeDeadlineSeconds` | 3600 | Job time limit |
 | `prepareTimeoutSeconds` | 600 | How long to wait for the agent to hold the install lock before failing |
@@ -115,13 +115,14 @@ image's original `ENTRYPOINT`+`CMD`:
 | Field | Default | Meaning |
 |---|---|---|
 | `entrypointOverrides` | yolks, steamcmd and games images → `["/bin/bash", "/entrypoint.sh"]` | Glob on the image reference → argv; exact match wins, then the longest pattern |
-| `registryLookup` | false | Resolve the image config from the registry (needs egress and `pullSecrets`) |
-| `pullSecrets` | [] | Registry credentials in the servers namespace |
-| `pinDigest` | true | Resolve the tag to a digest at every pod creation (Wings' pull-on-start); `~image` (never pull) disables it |
+| `registryLookup` | false | Resolve the image config from the registry with the operator's registry credentials (needs operator egress to the registry) |
+| `pullSecrets` | [] | `imagePullSecrets` of game pods and install Jobs (Secrets in the servers namespace) |
+| `pinDigest` | true | Resolve the tag to a digest (operator's registry credentials) when the pod is created; the pod keeps that digest until it is recreated. `~image` (Wings' never pull) disables it |
 
 Without an override or registry lookup, an init container running the egg
-image itself checks for the yolk convention (`/entrypoint.sh` run by bash) and
-fails the pod with a clear message otherwise.
+image itself checks for the yolk convention (`/entrypoint.sh`, run by
+`/bin/bash`, or `/bin/sh` when the image has no bash) and fails the pod with a
+clear message otherwise.
 
 ## Other fields
 
@@ -130,13 +131,13 @@ fails the pod with a clear message otherwise.
 | `images.shim` / `images.agent` / `images.pullPolicy` | chart | pelican-k8s images injected into game pods |
 | `serviceAccountName` | `pelican-game` | Game pod ServiceAccount (`-hostport` suffix added in HostPort mode) |
 | `agentConfigMap` | `pelican-agent-config` | Agent `config.yml` |
-| `suspendScalesToZero` | false | Delete the pod of a suspended server |
+| `suspendScalesToZero` | false | Scale a suspended server's StatefulSet to 0 replicas |
 | `terminationGracePeriodSeconds` | 660 | Must exceed Wings' 10-minute stop wait |
-| `nodeSelector` / `tolerations` / `priorityClassName` | | Applied to game pods and install Jobs |
+| `nodeSelector` / `tolerations` / `priorityClassName` | | Applied to game pods; install Jobs get `nodeSelector` and `tolerations` |
 
 ## Multiple classes
 
 Create more classes (`kubectl apply`) and point servers at them by editing
 `spec.className` on the `GameServer` (the gateway only sets it on creation).
-Typical uses: a class per storage tier, a `HostPort` class for a few legacy
+Typical uses: a class per storage tier, a `HostPort` class for a few fixed
 ports, or a class with `snapshotSchedule` for production servers.

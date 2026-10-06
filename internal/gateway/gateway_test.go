@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gbrlsnchs/jwt/v3"
+	"github.com/pelican/wings/remote"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -135,7 +136,7 @@ func newHarness(t *testing.T) *harness {
 	res := agents.NewResolver(st, cfg.StateCacheTTL)
 	// Route "pod IP" lookups to the fake agent: pods are created with the agent's host as IP.
 	sy := &serversync.Syncer{Store: st, Panel: pc, Timezone: "UTC", Log: slog.Default()}
-	sessions := sftprelay.NewSessions()
+	sessions := sftprelay.NewSessions(nodeToken)
 	ph := &panelapi.Handler{Cfg: cfg, Store: st, Agents: res, Sync: sy, Log: slog.Default()}
 	ph.WS = &wsproxy.Proxy{Cfg: cfg, Store: st, Agents: res, Sync: sy, Log: slog.Default()}
 	rh := &remoteapi.Handler{Store: st, Panel: pc, Sync: sy, Agents: res, Sftp: sessions, Log: slog.Default()}
@@ -497,6 +498,18 @@ func TestRemoteAPI(t *testing.T) {
 	// SFTP auth answered from relay sessions only.
 	if code, _ := h.remoteCall("POST", "/api/remote/sftp/auth", `{"username":"admin.1a2b3c4d","password":"nope"}`, bearer); code != 403 {
 		t.Fatal("sftp auth without session accepted")
+	}
+	// A credential issued by any replica (its own Sessions, same node token) is
+	// answered here; one for another server is refused.
+	other := sftprelay.NewSessions(nodeToken)
+	cred := other.Issue("admin.1a2b3c4d", &remote.SftpAuthResponse{Server: uuid, User: "u-1", Permissions: []string{"file.read"}})
+	code, body = h.remoteCall("POST", "/api/remote/sftp/auth", `{"username":"admin.1a2b3c4d","password":"`+cred+`"}`, bearer)
+	if code != 200 || !strings.Contains(body, `"server":"`+uuid+`"`) || !strings.Contains(body, `"file.read"`) {
+		t.Fatalf("sftp auth with another replica's credential: %d %s", code, body)
+	}
+	foreign := other.Issue("admin.1a2b3c4d", &remote.SftpAuthResponse{Server: "00000000-0000-4000-8000-000000000000", User: "u-1"})
+	if code, _ := h.remoteCall("POST", "/api/remote/sftp/auth", `{"username":"admin.1a2b3c4d","password":"`+foreign+`"}`, bearer); code != 403 {
+		t.Fatal("sftp credential for another server accepted")
 	}
 }
 

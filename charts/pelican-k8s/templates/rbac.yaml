@@ -21,10 +21,7 @@ rules:
     resources: [configmaps, secrets]
     verbs: [get, list, watch, create, update, patch]
   - apiGroups: [""]
-    resources: [pods, services]
-    verbs: [get, list, watch]
-  - apiGroups: [discovery.k8s.io]
-    resources: [endpointslices]
+    resources: [pods]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75,7 +72,7 @@ rules:
   {{- if .Values.gateway.metallb.discoverPools }}
   - apiGroups: [metallb.io]
     resources: [ipaddresspools]
-    verbs: [get, list, watch]
+    verbs: [get, list]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

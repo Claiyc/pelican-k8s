@@ -251,6 +251,13 @@ func TestCreatesOwnedResources(t *testing.T) {
 	if !h.get(&sec, names.AgentSecret(uuid)) || len(sec.Data["token"]) == 0 && len(sec.StringData["token"]) == 0 {
 		t.Fatal("agent secret missing")
 	}
+	var shim corev1.Secret
+	if !h.get(&shim, names.ShimSecret(uuid)) || len(shim.Data[render.ShimTokenKey]) == 0 && len(shim.StringData[render.ShimTokenKey]) == 0 || len(shim.OwnerReferences) != 1 {
+		t.Fatal("shim secret missing")
+	}
+	if string(shim.Data[render.ShimTokenKey])+shim.StringData[render.ShimTokenKey] == string(sec.Data["token"])+sec.StringData["token"] {
+		t.Fatal("the shim token must differ from the agent token")
+	}
 	var pvc corev1.PersistentVolumeClaim
 	if !h.get(&pvc, names.PVC(uuid)) || pvc.Spec.Resources.Requests.Storage().Value() != 5632*1024*1024 || *pvc.Spec.StorageClassName != "main" {
 		t.Fatalf("pvc %+v", pvc.Spec)

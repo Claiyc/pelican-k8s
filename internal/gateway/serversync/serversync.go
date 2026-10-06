@@ -82,7 +82,7 @@ func (s *Syncer) Create(ctx context.Context, uuid string, startOnCompletion bool
 	gs.Spec.Install = v1alpha1.InstallSpec{Generation: 1, ScriptConfigMap: names.InstallConfigMap(uuid, 1), Image: script.ContainerImage, Entrypoint: script.Entrypoint, StartOnInstall: startOnCompletion}
 	if err := s.Store.Client.Create(ctx, gs); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			// Re-create after a failed earlier attempt: treat as sync + reinstall request.
+			// The CR exists: sync it and request a new install generation.
 			s.Log.Warn("server already exists, syncing instead", "uuid", uuid)
 			if err := s.Sync(ctx, uuid); err != nil {
 				return err

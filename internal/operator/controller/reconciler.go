@@ -258,17 +258,29 @@ func (r *GameServerReconciler) resolveUID(s *scope) (int64, error) {
 	return n, nil
 }
 
+// ensureAgentSecret creates the agent's Wings token Secret and the shim
+// socket token Secret once; their values never change afterwards.
 func (r *GameServerReconciler) ensureAgentSecret(s *scope) error {
+	if err := r.ensureSecret(s, names.AgentSecret(s.in.UUID()), func() *corev1.Secret {
+		return render.AgentSecret(s.in, randomHex(8), randomHex(32))
+	}); err != nil {
+		return err
+	}
+	return r.ensureSecret(s, names.ShimSecret(s.in.UUID()), func() *corev1.Secret {
+		return render.ShimSecret(s.in, randomHex(32))
+	})
+}
+
+func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {
 	sec := &corev1.Secret{}
-	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.AgentSecret(s.in.UUID())}, sec)
+	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: name}, sec)
 	if err == nil {
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
-	id, token := randomHex(8), randomHex(32)
-	desired := render.AgentSecret(s.in, id, token)
+	desired := build()
 	if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
 		return err
 	}
@@ -335,6 +347,17 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	if err := r.applyService(s, agentSvc); err != nil {
 		return err
 	}
+	// NodePort (externalTrafficPolicy Local) and HostPort serve the allocation
+	// IP only from the node that owns it: pin the pod there.
+	pinProblem := ""
+	s.in.NodeNames = nil
+	if s.settings.HasAllocation() && pinsToAllocationNode(s.class.Spec.Exposure) {
+		nodes := &corev1.NodeList{}
+		if err := r.List(s.ctx, nodes); err != nil {
+			return err
+		}
+		s.in.NodeNames, pinProblem = allocationNodes(nodes.Items, s.settings.IPs(), s.class.Spec.Exposure.Mode)
+	}
 	exposure := render.ExposureService(s.in)
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureService(s.in.UUID())}
 	if exposure == nil {
@@ -346,7 +369,11 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		}
 		s.gs.Status.Endpoints = nil
 		if s.class.Spec.Exposure.Mode == v1alpha1.ExposureHostPort && s.settings.HasAllocation() {
-			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "HostPort", "")
+			if pinProblem != "" {
+				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, reasonAllocationIPNotOnNode, pinProblem)
+			} else {
+				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "HostPort", "")
+			}
 			s.gs.Status.Endpoints = endpointsFor(s.class.Spec.Exposure.ExternalIPs, s.settings)
 		} else {
 			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "NoAllocation", "server has no allocation")
@@ -390,6 +417,10 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		}
 	}
 	s.gs.Status.Endpoints = endpointsFor(ips, s.settings)
+	if pinProblem != "" {
+		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, reasonAllocationIPNotOnNode, pinProblem)
+		return nil
+	}
 	r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
 	return nil
 }

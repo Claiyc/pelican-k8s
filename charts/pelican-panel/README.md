@@ -22,9 +22,9 @@ One container, started by `/entrypoint.sh` and supervised by `supervisord`:
 | `supercronic` | the Laravel scheduler (`artisan schedule:run` every minute) |
 
 **There is no separate worker or scheduler Deployment** - the upstream image runs
-both in the same pod. That is also why `replicaCount` must stay `1` unless you
-move cache/session/queue to Redis and set `panel.skipMigrations=true` (the chart
-refuses other combinations).
+both in the same pod. `replicaCount` above `1` requires `panel.skipMigrations=true` and neither
+`panel.cacheStore` nor `panel.sessionDriver` set to `file`; the chart refuses
+other combinations.
 
 Before `supervisord` starts, the entrypoint:
 
@@ -84,8 +84,7 @@ The same applies to the bundled MariaDB passwords (`mariadb.auth.existingSecret`
 
 `database.connection` accepts `pgsql`, `mysql`, `mariadb` and `sqlite` - all four
 are offered by the upstream installer and all four ship a Laravel connection in
-`config/database.php`. **PostgreSQL works**: migrations, the queue, the scheduler
-and the Filament UI were verified against PostgreSQL 18 (CloudNativePG).
+`config/database.php`. PostgreSQL is supported, including CloudNativePG.
 
 Host/port/database/username can each be read from an existing Secret, which is
 what makes the CloudNativePG `<cluster>-app` Secret a drop-in:
@@ -144,14 +143,11 @@ login form posts to `http://` and the session cookie loses its `Secure` flag.
   `restricted-v2` SCC forbids. Enable `openshift.scc.enabled=true` (binds
   `nonroot-v2` to the chart's ServiceAccount) and keep
   `podSecurityContext.runAsUser/runAsGroup/fsGroup: 82`.
-* Caddy binds port 80 as a non-root user. Docker silently sets
-  `net.ipv4.ip_unprivileged_port_start=0`; Kubernetes does not, so the chart sets
-  that (safe, namespaced) sysctl in `podSecurityContext`. Adding
-  `NET_BIND_SERVICE` instead does **not** work: Kubernetes cannot set ambient
-  capabilities, and `allowPrivilegeEscalation: false` disables file capabilities.
-* Use `route.enabled=true` with `termination: edge`. The chart always points the
-  Route at the Service's **named** port (`http`) - a numeric `targetPort` makes
-  the OpenShift router answer 503.
+* Caddy binds port 80 as a non-root user, so the chart sets the safe, namespaced
+  sysctl `net.ipv4.ip_unprivileged_port_start=0` in `podSecurityContext`.
+* Use `route.enabled=true` with `termination: edge`. The chart points the Route
+  at the Service's **named** port (`http`, or `fastcgi` with `panel.skipCaddy`);
+  the OpenShift router answers 503 for a numeric `targetPort`.
 
 ## Values
 
@@ -346,7 +342,7 @@ All three hit `GET /up` on the `http` port and are skipped when
 | `probes.liveness.timeoutSeconds` | `5` | |
 | `probes.liveness.failureThreshold` | `6` | |
 
-## Gotchas discovered while deploying this
+## Gotchas
 
 * **`TRUSTED_PROXIES=*` kills Caddy.** See above; use CIDRs.
 * **Caddy cannot bind :80 under Kubernetes without the sysctl.** See above.

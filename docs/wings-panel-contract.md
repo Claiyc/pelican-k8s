@@ -4,11 +4,11 @@ Companion to [`../ARCHITECTURE.md`](../ARCHITECTURE.md). This is the protocol su
 **gateway** and **agent** must reproduce so an unmodified Pelican Panel treats them as a normal
 Wings node.
 
-**Source basis** (read from source on 2026-09-15 unless marked *[inferred]*):
+**Source basis** (read from source at these commits; *[inferred]* marks what was not):
 
 | Repo | Commit | Notes |
 |---|---|---|
-| `github.com/pelican/wings` (formerly `pelican-dev/wings`) | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
+| `github.com/pelican/wings` | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
 | `github.com/pelican/panel` | `6ba5264` (2026-09-14) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still in beta
@@ -362,7 +362,7 @@ What the Docker implementation does, which a replacement must emulate:
 
 ---
 
-## 8. Wings `config.yml` keys used by the design
+## 8. Wings `config.yml` keys
 
 - Top level: `token_id`, `token` (also `WINGS_TOKEN_ID`/`WINGS_TOKEN` env or `file://`), `remote`,
   `ignore_panel_config_updates`, `allowed_origins`, `allowed_mounts`.

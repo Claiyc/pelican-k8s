@@ -1,7 +1,7 @@
 //go:build spike
 
-// Package spike is milestone M0 from ARCHITECTURE.md: the agent (Wings as a
-// library) and the shim run the Paper egg without Kubernetes. The shim runs in
+// Package spike runs the agent (Wings as a library) and the shim with the
+// Paper egg without Kubernetes. The shim runs in
 // a Docker yolk container, the agent runs in-process against the fake Panel.
 //
 //	go test -tags spike -run TestSpike ./test/spike -v -timeout 20m
@@ -133,7 +133,7 @@ func TestSpike(t *testing.T) {
 
 	// --- game container with the shim as PID 1 ---
 	run(t, "docker", "run", "-d", "--name", ctrName, "-u", fmt.Sprintf("%d:%d", uid, gid), "-m", "1400m",
-		"-v", volume+":/home/container", "-v", shared+":/pelican", "-e", "HOME=/home/container", "--tmpfs", "/tmp:rw,exec,size=100m",
+		"-v", volume+":/home/container", "-v", shared+":/pelican", "-e", "HOME=/home/container", "-e", "PELICAN_SHIM_TOKEN=spike-shim-token", "--tmpfs", "/tmp:rw,exec,size=100m",
 		gameImg, "/pelican/bin/shim", "run", "--socket", "/pelican/run/shim.sock", "--", "/bin/bash", "/entrypoint.sh")
 	defer func() {
 		if t.Failed() {
@@ -185,7 +185,7 @@ docker:
 	ready := make(chan struct{})
 	agentErr := make(chan error, 1)
 	go func() {
-		agentErr <- app.Run(ctx, app.Options{ConfigPath: cfgPath, ShimSocket: filepath.Join(shared, "run", "shim.sock"), Logger: slog.Default(), Ready: ready})
+		agentErr <- app.Run(ctx, app.Options{ConfigPath: cfgPath, ShimSocket: filepath.Join(shared, "run", "shim.sock"), ShimToken: "spike-shim-token", Logger: slog.Default(), Ready: ready})
 	}()
 	select {
 	case <-ready:

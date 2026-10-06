@@ -22,14 +22,9 @@ jobs:
           go-version-file: go.mod
       - name: Point the replace at the tip of the hooks branch
         run: |
-          # The four hooks (ARCHITECTURE.md 6.3) live on pelican-k8s-hooks in the
-          # Claiyc/wings fork, which is rebased onto upstream whenever Wings is
-          # bumped (docs/development.md). That branch is what the agent compiles
-          # against, so it is what this workflow checks. Upstream main is not
-          # usable while the hooks are unmerged: package boot only exists on the
-          # branch, so a replace pointing at main neither tidies nor builds.
-          # Once the hooks land upstream, drop the fork and point this (and the
-          # replace in go.mod) at github.com/pelican/wings@main.
+          # The agent compiles against the pelican-k8s-hooks branch of the
+          # Claiyc/wings fork, which carries the four hooks (ARCHITECTURE.md
+          # 6.3) on top of upstream, so this checks the tip of that branch.
           go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@pelican-k8s-hooks
           go mod tidy
       - name: Report a pin that is behind the branch

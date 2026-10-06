@@ -1,6 +1,6 @@
 // Package upstream guards the gateway against Wings changes: it parses the
 // pinned Wings module's router and remote client and fails when a route or
-// remote-API call appears that the gateway does not handle (ARCHITECTURE.md 18).
+// remote-API call appears that the gateway does not handle (ARCHITECTURE.md 17).
 package upstream
 
 import (

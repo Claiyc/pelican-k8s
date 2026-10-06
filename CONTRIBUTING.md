@@ -6,8 +6,8 @@ and a PID 1 shim), so a few conventions keep it manageable.
 
 ## Before you start
 
-- Read [ARCHITECTURE.md](ARCHITECTURE.md). Most design questions are answered
-  there, including what is deliberately out of scope.
+- Read [ARCHITECTURE.md](ARCHITECTURE.md). It describes how the system works
+  and what it does not do.
 - For anything touching the Panel or Wings protocol, check
   [docs/wings-panel-contract.md](docs/wings-panel-contract.md) first; the
   gateway must keep behaving like Wings.
@@ -35,7 +35,11 @@ handlers and the shim all have unit tests to extend.
 - `go vet`, `golangci-lint`, `helm lint` and the unit tests run in CI; keep them green.
 - Do not modify vendored upstream behaviour: Wings changes go to the fork
   branch as opt-in hooks (see docs/development.md) and are proposed upstream.
-- Update the docs when behaviour or values change.
+- Update the docs in the same PR when behaviour or values change. The docs
+  describe the system as it is on master: no history, no "previously", no
+  deviations from another document. ARCHITECTURE.md is changed to match the
+  code, never annotated elsewhere. History belongs in commits and the
+  changelog.
 
 ## Commit messages
 

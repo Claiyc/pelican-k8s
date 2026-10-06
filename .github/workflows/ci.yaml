@@ -95,6 +95,25 @@ jobs:
           path: "**/testdata/fuzz/**"
           if-no-files-found: ignore
 
+  spike:
+    name: Spike (agent + shim in Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The agent and the shim run the Paper egg in a yolk container against
+      # the fake Panel (test/spike). The test skips without Docker, which
+      # counts as a failure here.
+      - name: Run the spike
+        run: |
+          set -o pipefail
+          go test -tags spike -count=1 -v -timeout 25m ./test/spike | tee spike.out
+          ! grep -q -- '--- SKIP' spike.out
+
   helm:
     name: Helm charts
     runs-on: ubuntu-latest

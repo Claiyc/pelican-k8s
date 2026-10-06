@@ -203,6 +203,48 @@ func TestStatefulSetTemplate(t *testing.T) {
 	}
 }
 
+// The agent listens on the shim socket; the game container mounts its
+// directory read-only so the game process cannot replace the socket, and both
+// containers get the shim token, the game container nothing of the agent's.
+func TestShimSocketIsolation(t *testing.T) {
+	spec := StatefulSet(testInput(t, nil)).Spec.Template.Spec
+	agent, game := spec.InitContainers[2], spec.Containers[0]
+	runMount := func(c corev1.Container) *corev1.VolumeMount {
+		for i := range c.VolumeMounts {
+			if c.VolumeMounts[i].MountPath == "/pelican/run" {
+				return &c.VolumeMounts[i]
+			}
+		}
+		return nil
+	}
+	if m := runMount(game); m == nil || !m.ReadOnly || m.SubPath != "run" {
+		t.Fatalf("game /pelican/run mount %+v", m)
+	}
+	if m := runMount(agent); m == nil || m.ReadOnly || m.SubPath != "run" {
+		t.Fatalf("agent /pelican/run mount %+v", m)
+	}
+	shimToken := func(c corev1.Container) bool {
+		for _, e := range c.Env {
+			if e.Name == "PELICAN_SHIM_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil &&
+				e.ValueFrom.SecretKeyRef.Name == "gs-"+uuid+"-shim" && e.ValueFrom.SecretKeyRef.Key == ShimTokenKey {
+				return true
+			}
+		}
+		return false
+	}
+	if !shimToken(agent) || !shimToken(game) {
+		t.Fatalf("shim token env: agent %+v game %+v", agent.Env, game.Env)
+	}
+	for _, e := range game.Env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "gs-"+uuid+"-shim" {
+			t.Fatalf("game container references secret %q", e.ValueFrom.SecretKeyRef.Name)
+		}
+	}
+	if sec := ShimSecret(testInput(t, nil), "tok"); sec.Name != "gs-"+uuid+"-shim" || sec.StringData[ShimTokenKey] != "tok" {
+		t.Fatalf("shim secret %+v", sec)
+	}
+}
+
 func TestHostPortAndArgv(t *testing.T) {
 	in := testInput(t, func(i *Input) {
 		i.Class.Spec.Exposure.Mode = v1alpha1.ExposureHostPort

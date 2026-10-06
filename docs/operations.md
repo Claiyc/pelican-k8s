@@ -24,7 +24,7 @@ Status fields worth knowing:
 | `spec.power.desired` | gateway | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`, a crash leaves `Running` |
 | `status.power.observedGeneration` | operator | Last `spec.power.generation` acted on |
 | `status.install.*` | both | Requested/prepared generation, Job name, result |
-| `status.conditions` | operator | `VolumeReady`, `ExposureReady`, `AgentReady`, `InstallPrepared`, `Installed`, `ResizePending`, `RecreatePending`, `NodeLost`, `Orphaned`, `DiskShrinkRefused` |
+| `status.conditions` | operator (`Orphaned`: gateway) | `VolumeReady`, `ExposureReady`, `AgentReady`, `InstallPrepared`, `Installed`, `ResizePending`, `RecreatePending`, `NodeLost`, `Orphaned`, `DiskShrinkRefused` |
 
 `kubectl edit` is legitimate for `spec.power` (for example set `desired: Running`
 and bump `generation` to start a server without the Panel, or bump
@@ -70,17 +70,18 @@ Upgrading the Panel is independent; re-run the compatibility checks in
 | Symptom | Check |
 |---|---|
 | Node shows an exception in the Panel | `curl -H "Authorization: Bearer <token>" https://wings.../api/system`; the Panel caches system info for 6 minutes (`php artisan cache:clear`) |
-| `AgentReady=False` for long | `kubectl describe pod`: image pulls, the `probe-entrypoint` init container (unknown egg image layout), agent logs (`cannot reach gateway` → NetworkPolicy/DNS) |
+| `AgentReady=False` for long | `kubectl describe pod`: image pulls, the `probe-entrypoint` init container (unknown egg image layout), agent logs (`failed to load server configuration from gateway, retrying` → NetworkPolicy/DNS) |
 | Install stuck in `InstallPrepared=False` | the agent must reach the gateway's remote API; `prepareTimeoutSeconds` fails it eventually |
 | Install Job never gets a pod | `kubectl describe job`: admission policy or SCC rejection message |
 | Console shows nothing | websocket goes browser → ingress → gateway → agent; check ingress websocket support and `gateway.allowedOrigins` |
 | `server pod unavailable` (503) | the game pod is not running or the agent sidecar has not started |
 | Players cannot connect | `kubectl get svc gs-<uuid>`; NodePort mode needs allocation ports in the NodePort range; check `ExposureReady` |
 | `ExposureReady=False` with `Pending` | A `LoadBalancer` Service has no address. Under two minutes this is normal provisioning; after that the message names the likely cause — the cluster has no load balancer implementation. Install one, or switch the class to `NodePort` (ports 30000–32767) or `HostPort` |
+| `ExposureReady=False` with `AllocationIPNotOnNode` | `NodePort` (`externalTrafficPolicy: Local`) or `HostPort` on a cluster with more than one node, and no node has the allocation IP as its InternalIP or ExternalIP, so the pod cannot be placed where that address receives traffic. Use a node address for the allocation, give the receiving node that address as ExternalIP (k3s `--node-external-ip`), or switch the class to `LoadBalancer` |
 | `ExposureReady=False` with `PortOutOfRange` | The API server refused the allocation port as a NodePort. Move the allocation into the range, widen `--service-node-port-range`, or switch the class to `LoadBalancer` or `HostPort`. The server stays in `Error` and gets no pod until then |
-| `ResizePending=RecreateRequired` | The Panel dropped a CPU or memory limit (set to unlimited). Kubernetes cannot remove a container limit in place, so the pod is recreated once the process is offline |
-| A Proton/Wine server hangs after a restart | Stale `wineserver`/game processes from an earlier start used to survive a stop and wedge the WINEPREFIX; fixed in the shim. `ps` in the game container should show exactly one `wineserver` |
-| Server keeps restarting | Wings crash detection: `kubectl logs -c game` shows why the process exits; `detect_clean_exit_as_crash` in `agent.crashDetection` |
+| `ResizePending=RecreateRequired` | The Panel set the CPU limit to unlimited and the class has `unlimitedCpuPercent: 0`. Kubernetes cannot remove a container limit in place, so the pod is recreated once the process is offline |
+| A Proton/Wine server hangs after a restart | After a stop the shim kills every process left in the game container, including a `wineserver` that left the process group; `ps` in the game container shows exactly one `wineserver` while the server runs |
+| Server keeps restarting | Wings crash detection: `kubectl logs -c game` shows why the process exits; `agent.crashDetection.detectCleanExitAsCrash` (Wings' `detect_clean_exit_as_crash`) |
 
 Panel-side: `php artisan p:node:list`, `p:node:configuration <id>` (tokens), and
 `storage/logs/laravel.log` in the Panel pod.
