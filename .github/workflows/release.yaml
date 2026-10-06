@@ -120,8 +120,10 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           v="$VERSION"
           owner="${OWNER,,}"   # OCI repository names must be lowercase
           helm package charts/pelican-k8s --version "$v" --app-version "$v" -d dist
