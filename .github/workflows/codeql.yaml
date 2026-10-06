@@ -3,7 +3,9 @@ name: CodeQL
 on:
   push:
     branches: [master, main]
+  # A draft release PR runs nothing; see ci.yaml.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: "33 5 * * 1"
 
@@ -13,6 +15,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze Go
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read

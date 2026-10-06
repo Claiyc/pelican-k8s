@@ -7,7 +7,9 @@ name: Contract
 on:
   push:
     branches: [master, main]
+  # A draft release PR runs nothing; see ci.yaml.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: "52 4 * * *"
   workflow_dispatch:
@@ -22,6 +24,7 @@ permissions:
 jobs:
   kind:
     name: Panel ${{ (github.event_name == 'schedule' && 'latest') || (inputs.panel_image || 'pinned') }} on kind
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
