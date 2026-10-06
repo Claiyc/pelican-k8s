@@ -6,8 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-06
+
 ### Fixed
 - The contract suite (`hack/e2e-kind.sh`) creates its Paper server again (#50). The Paper egg, imported from `pelican-eggs/minecraft` `main`, gained a required `USER_AGENT` variable for the PaperMC downloads API, so the Panel's variable validation rejected the server before it ever reached the gateway, and the nightly run reported it as Panel drift. The suite now imports the egg at a pinned commit (`EGG_URL` still overrides it) and passes `USER_AGENT` (`EGG_USER_AGENT`). A failing `tinker` call now prints the Panel's exception instead of exiting silently.
+
+### What's Changed
+* contract: pin the Paper egg and pass its new USER_AGENT variable by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/51
+* docs: add a commits-since-latest-release badge to the README by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/52
+* ci: release by merging a generated release PR by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/53
+* ci: pick the release version from minor/major PR labels by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/55
+* build(deps): bump sigs.k8s.io/controller-runtime from 0.25.1 to 0.25.2 in the kubernetes group by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/56
+* deps: bump Wings to upstream 9fb682f (GHSA-8m75-v66f-m43j) by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/57
+* Describe the current system in the docs; fix the documented limitations by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/58
 
 ## [1.0.1] - 2026-10-02
 
@@ -82,7 +93,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v0.1.1...v1.0.0
 [0.1.1]: https://github.com/Claiyc/pelican-k8s/releases/tag/v0.1.1
