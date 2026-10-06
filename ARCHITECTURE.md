@@ -178,8 +178,7 @@ for agents) and `:2022` (SFTP).
 7. Keep CRs in line with the Panel (resync, §13) and send the Panel's once-per-boot server reset (§8.9).
 
 Wings' token denylist, one-time token store and boot cutoff run inside each agent for its own server.
-The gateway's per-replica state is the live websocket and SSH connections, the state cache and the
-SFTP session credentials (§5.6, §14).
+The gateway's per-replica state is the live websocket and SSH connections and the state cache (§14).
 
 ### 5.2 Route handling
 
@@ -273,10 +272,10 @@ sequenceDiagram
   C->>G: auth user "alice.1a2b3c4d" + password/key
   G->>P: POST /api/remote/sftp/auth {type, username, password, ip, ...}
   P-->>G: {user, server, permissions}
-  G->>G: create a session credential for (server, user)
+  G->>G: seal a session credential (username, server, user, permissions, expiry)
   G->>A: SSH connect as "alice.1a2b3c4d", password = session credential
   A->>G: POST /api/remote/sftp/auth (agent's remote API = gateway)
-  G-->>A: {user, server, permissions} from the recorded session
+  G-->>A: {user, server, permissions} from the verified credential
   C->>G: session channel requests ("sftp" subsystem)
   G->>A: same requests
   C-->>A: SFTP packets relayed as opaque bytes
@@ -287,8 +286,11 @@ sequenceDiagram
   SSH client toward the agent's **Wings SFTP server**. Permission checks, denylist file rules, disk quota
   and SFTP activity logging are Wings code.
 - Usernames must have the form `<name>.<8-character server id>`, and the server must have a
-  `GameServer`. The session credential is 24 random bytes, valid for 2 minutes, held in the memory of
-  the replica that created it.
+  `GameServer`. The session credential carries the SSH username, the Panel's answer (server, user,
+  permissions), a random nonce and an expiry 2 minutes ahead, sealed with HMAC-SHA256 under a key
+  derived from the node token. Any gateway replica verifies it without shared state, so the agent's
+  `/sftp/auth` call may reach any replica; the agent cannot forge or alter one, and the gateway
+  answers only credentials for the calling agent's own server.
 - The agent's host key is pinned on first connection (SHA256 fingerprint in
   `status.agent.sftpHostKey`). The gateway's own host key is an ED25519 key in Secret
   `pelican-gateway-sftp-hostkey` (key `id_ed25519`), generated on first start.
@@ -311,7 +313,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `POST /servers/{uuid}/install` | Record `status.install.result`, `finishedAt` and `reportedGeneration`; forward to the Panel; on success with `spec.install.startOnInstall`, start the server |
 | `POST /activity` | Forward rows whose `server` is the caller; drop the rest. A `422` from the Panel drops the batch |
 | `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls); a result post removes the entry; unknown backups get `404` |
-| `POST /sftp/auth` | Answer from the gateway's SFTP session credentials (§5.6); never forwarded |
+| `POST /sftp/auth` | Verify the SFTP session credential (§5.6) and answer with the Panel response sealed in it when it is for the caller's server; never forwarded |
 | transfers, anything else | `404`, logged as a warning |
 
 `test/upstream` diffs Wings' remote client calls against the list the gateway serves (§17).
@@ -1272,7 +1274,7 @@ enforce the workload shapes:
 | Local backups | Scratch volume | — |
 | S3 backups | S3 and the Panel database | — |
 | Revocation, one-time tokens, boot cutoff | **Agent** (Wings, per server) | — |
-| Live websocket and SFTP connections, SFTP session credentials | The gateway replica that accepted them | — |
+| Live websocket and SFTP connections | The gateway replica that accepted them | — |
 
 **Drift handling:** the gateway resyncs at start and every `gateway.resyncInterval` (default 15 min):
 - it lists the node's servers via `GET /api/remote/servers` and fetches each server's configuration
@@ -1290,7 +1292,7 @@ enforce the workload shapes:
 | Component | Replicas |
 |---|---|
 | Panel | 1 (web, queue worker and scheduler in the upstream image) |
-| Gateway | 1 (`gateway.replicas`). Websocket and SSH connections are per replica and drop on a rollout. SFTP session credentials are held by the replica that authenticated the client, while the agent's `/sftp/auth` call goes through the gateway Service, so with more than one replica SFTP logins fail when that call reaches another replica |
+| Gateway | 1 (`gateway.replicas`); any number works. Websocket and SSH connections are per replica and drop on a rollout. SFTP session credentials are verifiable by every replica (§5.6) |
 | Operator | 1, with leader election |
 | Game servers | 1 pod each (StatefulSet). On a **NotReady node** the pod stays `Terminating` and the StatefulSet does not replace it. With `failover.forceDeleteAfter` set, the operator sets `NodeLost` and force-deletes the pod after that duration, so it reschedules and the RWO volume reattaches; this is safe only when the storage layer fences the old node or the node is confirmed down |
 
