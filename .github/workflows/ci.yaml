@@ -195,6 +195,30 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: echo "enabled=$([ -n "$SONAR_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      # SonarQube Cloud files every imported gocognit finding as a Bug, and one
+      # open Bug holds the reliability rating at C. It is a complexity measure:
+      # go:S3776 reports the same functions as maintainability issues, and the
+      # lint job still gates changed code on gocognit and sends it to code
+      # scanning. (sonar.issue.ignore.multicriteria does not reach imported
+      # external issues, so the findings are dropped from the report instead.)
+      - name: Leave gocognit out of the SonarQube report
+        if: steps.sonar.outputs.enabled == 'true' && hashFiles('golangci-lint.xml') != ''
+        run: |
+          python3 -I - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          tree = ET.parse("golangci-lint.xml")
+          dropped = 0
+          for f in list(tree.getroot()):
+              for e in list(f):
+                  if e.get("source") == "gocognit":
+                      f.remove(e)
+                      dropped += 1
+              if len(f) == 0:
+                  tree.getroot().remove(f)
+          tree.write("golangci-lint.xml", encoding="UTF-8", xml_declaration=True)
+          print(f"left {dropped} gocognit findings out of the SonarQube report")
+          PY
       - name: SonarQube Cloud analysis
         if: steps.sonar.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
