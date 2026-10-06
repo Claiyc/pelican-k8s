@@ -159,7 +159,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 	go func() {
 		<-ctx.Done()
-		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer scancel()
 		_ = srv.Shutdown(sctx)
 		for _, s := range manager.All() {
