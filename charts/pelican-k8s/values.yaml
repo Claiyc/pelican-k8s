@@ -132,8 +132,16 @@ defaultClass:
       inClusterEgress:
         gameServers: true
         additional: []
-      # Cluster pod/service CIDRs and LAN ranges game pods must not reach.
-      blockedEgressCIDRs: []
+      # IPv4 ranges excluded from the internet egress of game pods and install
+      # Jobs: the private and shared ranges, which cover the usual pod,
+      # service, node and LAN ranges. Add any other range game pods must not
+      # reach. Link-local is always blocked. DNS, the gateway remote API and
+      # inClusterEgress are separate allow rules and keep working.
+      blockedEgressCIDRs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
       # Node CIDRs allowed to reach the agent port (kubelet probes on CNIs
       # that do not implicitly allow host traffic).
       nodeCIDRs: []

@@ -653,7 +653,7 @@ spec:
     externalIPs: []               # offered to the Panel by /api/system/ips
   network:
     enabled: true                 # per-server NetworkPolicy
-    blockedEgressCIDRs: []        # pod, service, node and LAN ranges game pods must not reach
+    blockedEgressCIDRs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]   # excluded from internet egress
     nodeCIDRs: []                 # node addresses admitted on the agent port (kubelet probes)
     inClusterEgress:
       gameServers: true           # game pods may reach other game pods (proxies such as Velocity)
@@ -1237,9 +1237,12 @@ enforce the workload shapes:
   - ingress on the agent ports (8080, 2022) from pelican-k8s pods in the system namespace, and from
     `network.nodeCIDRs` on 8080 for kubelet probes on CNIs without implicit host access
   - egress: DNS (53 and 5353, TCP and UDP) to any namespace; TCP 8081 to pelican-k8s pods in the system
-    namespace (remote API); `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (empty by
-    default: list the pod, service, node and LAN ranges there); with `inClusterEgress.gameServers`, all
-    ports of other game pods; `inClusterEgress.additional` CIDR/port pairs
+    namespace (remote API); `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (by
+    default the private and shared ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
+    `100.64.0.0/10`, covering the usual pod, service, node and LAN ranges); with
+    `inClusterEgress.gameServers`, all ports of other game pods; `inClusterEgress.additional` CIDR/port
+    pairs. Rules are additive, so DNS, the remote API and the in-cluster rules reach their
+    destinations inside the blocked ranges
 - **Install Jobs** (chart policy `install-jobs`): DNS and `0.0.0.0/0` except link-local and the default
   class's `blockedEgressCIDRs`.
 - **System namespace:** the gateway accepts 8080 and 2022 from anywhere and 8081 from the servers

@@ -149,11 +149,25 @@ type InClusterEgressSpec struct {
 	Additional  []EgressRule `json:"additional,omitempty"`
 }
 
+// DefaultBlockedEgressCIDRs is NetworkSpec.BlockedEgressCIDRs when unset; it
+// matches the field's CRD default.
+var DefaultBlockedEgressCIDRs = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
+
+// LinkLocalCIDR is excluded from game pod and install Job egress in every class.
+const LinkLocalCIDR = "169.254.0.0/16"
+
 // NetworkSpec configures NetworkPolicies.
 type NetworkSpec struct {
 	InClusterEgress InClusterEgressSpec `json:"inClusterEgress,omitempty"`
-	// BlockedEgressCIDRs are excluded from the default 0.0.0.0/0 egress of game pods
-	// (pod CIDR, service CIDR, node and LAN ranges). Link-local is always blocked.
+	// BlockedEgressCIDRs are IPv4 ranges excluded from the 0.0.0.0/0 egress rule
+	// of game pods. Unset means the private and shared ranges (10.0.0.0/8,
+	// 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the usual pod,
+	// service, node and LAN ranges; an explicit empty list blocks only
+	// link-local, which is always blocked. The DNS, remote API and
+	// inClusterEgress rules are separate allow rules and still reach
+	// destinations in these ranges; allow further private destinations with
+	// inClusterEgress.additional.
+	// +kubebuilder:default={"10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"}
 	BlockedEgressCIDRs []string `json:"blockedEgressCIDRs,omitempty"`
 	// NodeCIDRs are admitted on the agent HTTP port for kubelet probes and hooks.
 	NodeCIDRs []string `json:"nodeCIDRs,omitempty"`

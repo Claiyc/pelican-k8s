@@ -36,8 +36,10 @@ the namespace UID range, `anyuid` for the installer).
 - Each server gets a policy allowing its allocation ports from anywhere, the
   agent ports from the gateway and operator only, DNS, the gateway's remote API
   port, egress to `0.0.0.0/0` except link-local and the ranges in
-  `network.blockedEgressCIDRs` (empty by default: list the pod, service, node
-  and LAN ranges there), and the in-cluster allowances of the class.
+  `network.blockedEgressCIDRs` (by default the private and shared ranges
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10`, which
+  cover the usual pod, service, node and LAN ranges), and the in-cluster
+  allowances of the class.
 - Install Jobs get DNS and the same internet egress, without the in-cluster
   allowances.
 - Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster,

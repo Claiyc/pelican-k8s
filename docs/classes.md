@@ -61,7 +61,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | true | Create the per-server NetworkPolicy |
-| `blockedEgressCIDRs` | [] | Pod CIDR, service CIDR, node and LAN ranges game pods must not reach (link-local is always blocked) |
+| `blockedEgressCIDRs` | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` | IPv4 ranges excluded from game pods' internet egress; the defaults cover the usual pod, service, node and LAN ranges. Link-local is always blocked; `[]` blocks only link-local. DNS, the gateway remote API and `inClusterEgress` are separate allow rules and reach these ranges regardless. The chart's `install-jobs` policy uses the default class's list |
 | `nodeCIDRs` | [] | Node addresses admitted on the agent port for kubelet probes on CNIs without implicit host access |
 | `inClusterEgress.gameServers` | true | Game pods may reach other game pods (proxies such as Velocity) |
 | `inClusterEgress.additional` | [] | `{cidr, ports}` allowances (in-cluster S3, databases) |
