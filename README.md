@@ -93,7 +93,7 @@ The step-by-step guide with all options is in [docs/install.md](docs/install.md)
 | [docs/panel.md](docs/panel.md) | Deploying the Panel with the `pelican-panel` chart |
 | [docs/classes.md](docs/classes.md) | `GameServerClass` reference: storage, exposure, networking, resources, security, installs |
 | [docs/operations.md](docs/operations.md) | Day-2: inspecting servers, upgrades, backups and snapshots, troubleshooting |
-| [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and known limitations |
+| [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and tested platforms |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
 | [docs/development.md](docs/development.md) | Building, testing (unit, spike, e2e, upstream diffs), the Wings fork and its hooks, release process |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |

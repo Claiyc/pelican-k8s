@@ -1,4 +1,4 @@
-# Compatibility and limitations
+# Compatibility
 
 ## Wings feature parity
 

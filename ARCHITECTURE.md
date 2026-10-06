@@ -1358,7 +1358,7 @@ enforce the workload shapes:
 
 ---
 
-## 16. Limitations
+## 16. Feature coverage and upstream edge cases
 
 [`docs/compatibility.md`](docs/compatibility.md) lists the Wings features and their status.
 
