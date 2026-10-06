@@ -14,42 +14,40 @@
 </p>
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
-It replaces the Docker-based Wings daemon with a gateway, an operator and a
-per-pod agent. The Panel and the eggs stay completely unmodified: the Panel
-sees an ordinary Wings node, every game server becomes a `GameServer` resource
-you can inspect with `kubectl`, and Kubernetes owns scheduling, storage,
-networking and restarts.
+
+pelican-k8s presents a whole cluster to the Panel as a single Wings node.
+Each game server becomes a `GameServer` custom resource, which an operator
+reconciles into an ordinary pod with Wings embedded as a library. The Panel,
+the eggs and the Wings core logic stay unmodified.
 
 ```
-Panel ──Wings API (node token)──▶ gateway ──spec/status──▶ GameServer CR
-                                     │                          │
-                                     │ proxied data path        │ operator reconciles
-                                     ▼                          ▼
-                              agent sidecar ◀── unix socket ──▶ shim (PID 1) ─▶ egg image entrypoint
-                              (Wings as a library)               game container
+Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
+                        │                           │
+                        │ proxied data path         │ operator reconciles
+                        ▼                           ▼
+                      agent ◀──── unix socket ───▶ shim ──▶ egg entrypoint
+              (Wings as a library)    (PID 1 of the game container)
 ```
 
-| Component | What it is |
+| Component | What it does |
 |---|---|
-| **gateway** | Presents itself to the Panel as one Wings node. Turns Panel calls into `GameServer` spec changes, proxies console, files, uploads and SFTP to the right agent, re-signs browser JWTs with per-agent tokens |
-| **operator** | The only reconciler. One `GameServer` becomes a StatefulSet (1 pod), PVC, Services, NetworkPolicy and install Jobs; it drives the agent (power, sync, install) until the process matches the spec |
-| **agent** | [Wings](https://github.com/pelican/wings) imported as a Go module, running as a native sidecar with exactly one server: stock router, websocket, SFTP server, filesystem, egg config parser, crash detection, backups |
-| **shim** | Static binary injected as the game container's entrypoint: PTY, stdin, signals, exit codes, cgroup stats, output ring buffer |
+| **gateway** | Looks like one Wings node to the Panel. Turns Panel calls into `GameServer` changes and proxies console, files and SFTP to the right pod |
+| **operator** | Reconciles each `GameServer` into a StatefulSet, PVC, Services, NetworkPolicy and install Jobs |
+| **agent** | [Wings](https://github.com/pelican/wings) as a Go library, running as a sidecar for exactly one server |
+| **shim** | Entrypoint of the game container: PTY, signals, exit codes, stats and the console buffer |
 
-[ARCHITECTURE.md](ARCHITECTURE.md) describes how the system works; the
-Wings/Panel protocol the gateway reproduces is in
-[docs/wings-panel-contract.md](docs/wings-panel-contract.md).
+[ARCHITECTURE.md](ARCHITECTURE.md) describes how the system works.
 
 ## Quick start
 
-Prerequisites: Kubernetes ≥ 1.33 (1.35 recommended: in-place pod resize,
-native sidecars and `ValidatingAdmissionPolicy` are used), a StorageClass that
-supports volume expansion, Helm 3, and a way to expose two things: the
-gateway's HTTP API (Ingress or OpenShift Route with long timeouts) and its SFTP
-port (NodePort or LoadBalancer). Game ports use `LoadBalancer` Services by
-default; `NodePort` and `HostPort` work without a load balancer.
+You need Kubernetes ≥ 1.33, Helm 3, a StorageClass with volume expansion and
+a way to expose the gateway: an Ingress or Route for its API, a `NodePort` or
+`LoadBalancer` for SFTP. Game ports use `LoadBalancer` Services here;
+`NodePort` and `HostPort` work without a load balancer.
+[docs/install.md](docs/install.md) is the full guide with every option.
 
-**1. Deploy the Panel** (skip if you already run one; any Pelican Panel works):
+**1. Deploy the Panel.** Skip this if you already run one
+([docs/panel.md](docs/panel.md) has the details).
 
 ```bash
 helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.2 \
@@ -60,15 +58,17 @@ kubectl -n pelican exec deploy/pelican-panel -- php artisan p:user:make --admin=
   --email=you@example.com --username=admin --password='<password>'
 ```
 
-See [docs/panel.md](docs/panel.md) for databases, TLS and OpenShift notes.
+**2. Create the node in the Panel** under Admin → Nodes → Create, then copy
+`token_id` and `token` from its *Configuration* tab.
 
-**2. Create the node in the Panel** (Admin → Nodes → Create): FQDN
-`wings.example.com`, scheme `https`, behind proxy `yes`, daemon port `8080`,
-daemon connect port `443`, SFTP port `30022` (or your LoadBalancer port). Open
-the node's *Configuration* tab and copy `token_id` and `token`.
+| Field | Value |
+|---|---|
+| FQDN | `wings.example.com` |
+| Communicate over SSL, behind proxy | yes |
+| Daemon port, daemon connect port | `8080`, `443` |
+| SFTP port | `30022`, or your LoadBalancer port |
 
-**3. Install pelican-k8s** from the OCI chart (or from `charts/pelican-k8s`
-in a checkout):
+**3. Install pelican-k8s.**
 
 ```bash
 helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --version 1.0.2 \
@@ -80,16 +80,13 @@ helm install pelican-k8s oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-k8s --v
   --set defaultClass.spec.exposure.mode=LoadBalancer
 ```
 
-**4. Add allocations and create a server in the Panel** as you would with
-Wings. Watch it come up:
+**4. Add allocations to the node and create a server in the Panel** as you
+would with Wings, and watch it come up.
 
 ```bash
 kubectl -n pelican-servers get gameservers
-kubectl -n pelican-servers get pods,pvc,svc,jobs
 kubectl -n pelican-servers describe gameserver gs-<uuid>   # conditions and events
 ```
-
-The step-by-step guide with all options is in [docs/install.md](docs/install.md).
 
 ## Documentation
 
@@ -101,36 +98,18 @@ The step-by-step guide with all options is in [docs/install.md](docs/install.md)
 | [docs/operations.md](docs/operations.md) | Day-2: inspecting servers, upgrades, backups and snapshots, troubleshooting |
 | [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and tested platforms |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
-| [docs/development.md](docs/development.md) | Building, testing (unit, spike, e2e, upstream diffs), the Wings fork and its hooks, release process |
+| [docs/development.md](docs/development.md) | Building, testing, the code map, the Wings fork and its hooks, release process |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
 | [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Wings ⇄ Panel protocol reference |
 
-## Repository layout
-
-```
-api/v1alpha1/          GameServer and GameServerClass types (CRDs generated into charts/pelican-k8s/crds)
-cmd/{agent,gateway,operator,shim}
-internal/agent/        Wings-as-a-library boot, shim environment, Job installer, internal routes
-internal/gateway/      Panel-facing API, agent-facing remote API, websocket proxy, SFTP relay, spec sync
-internal/operator/     reconciler, object rendering, resource mapping, image resolution
-internal/shim/         supervisor, protocol, cgroup stats, prepare/probe/install-run helpers
-charts/pelican-k8s/    the backend chart      charts/pelican-panel/  the Panel chart
-test/fakepanel/        in-memory Panel remote API for tests
-test/spike/            agent + shim run the Paper egg in Docker without Kubernetes
-test/e2e/              end-to-end suite against a deployed gateway
-test/upstream/         route/remote-client/interface diffs against the pinned Wings module
-hack/                  developer scripts (dev-push.sh builds, pushes and rolls a dev release)
-```
-
 ## How it relates to Wings
 
-The agent imports `github.com/pelican/wings` as a Go module and registers a
-shim-backed process environment and a Job-backed installer through four small
-opt-in hooks. The hooks live on the `pelican-k8s-hooks` branch of the
-[Claiyc/wings](https://github.com/Claiyc/wings) fork, which `go.mod` pins with
-a `replace` directive. `test/upstream` diffs the pinned Wings route table,
-remote client and `ProcessEnvironment` interface on every CI run, and a nightly
-workflow does the same against the tip of the hooks branch.
+The agent imports [Wings](https://github.com/pelican/wings) as a Go module and
+plugs into it through a few opt-in hooks, kept on a branch of the
+[Claiyc/wings](https://github.com/Claiyc/wings) fork. CI checks compatibility
+with the pinned Wings on every run and with the tip of that branch every
+night. [docs/development.md](docs/development.md#wings-as-a-dependency) has
+the details.
 
 ## Contributing
 
