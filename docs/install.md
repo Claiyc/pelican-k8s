@@ -76,7 +76,7 @@ The Panel and browsers hold long connections through the gateway:
 
 - request/read timeout of at least **16 minutes** (Panel compress/decompress calls wait up to 15)
 - websocket support with long idle timeouts (console sessions last hours)
-- request bodies up to the upload limit (100 MiB by default)
+- request bodies up to the upload limit (`agent.uploadLimitMiB`, 100 MiB by default)
 
 ingress-nginx example annotations:
 
