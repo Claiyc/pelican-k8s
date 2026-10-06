@@ -200,7 +200,7 @@ func (h *Handler) installResult(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.PatchStatus(r.Context(), uuid, status); err != nil {
 		h.Log.Warn("install result status patch failed", "uuid", uuid, "error", err)
 	}
-	fctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
 	if err := h.Panel.SetInstallationStatus(fctx, uuid, req.Successful, req.Reinstall); err != nil {
 		h.Log.Warn("forwarding install result to panel failed", "uuid", uuid, "error", err)
@@ -239,18 +239,18 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// Forward with a detached context: the agent's own client timeout must not
 	// cancel the Panel call halfway.
-	fctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
 	if err := h.Panel.PushServerStateChange(fctx, uuid, sc.PrevState, sc.NewState); err != nil {
 		h.Log.Warn("forwarding container status to panel failed", "uuid", uuid, "error", err)
 	}
-	go h.recordUsage(uuid)
+	go h.recordUsage(context.WithoutCancel(r.Context()), uuid)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // recordUsage samples the agent's utilization into status.usage (throttled by the caller pattern).
-func (h *Handler) recordUsage(uuid string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (h *Handler) recordUsage(parent context.Context, uuid string) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	t, err := h.Agents.Resolve(ctx, uuid)
 	if err != nil {

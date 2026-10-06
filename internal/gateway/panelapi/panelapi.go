@@ -245,15 +245,15 @@ func (h *Handler) utilization(w http.ResponseWriter, r *http.Request) {
 	nodes := &corev1.NodeList{}
 	if err := h.Store.Client.List(r.Context(), nodes); err == nil {
 		for _, n := range nodes.Items {
-			u.MemoryTotal += uint64(n.Status.Allocatable.Memory().Value())
-			u.DiskTotal += uint64(n.Status.Allocatable.StorageEphemeral().Value())
+			u.MemoryTotal += nonNegative(n.Status.Allocatable.Memory().Value())
+			u.DiskTotal += nonNegative(n.Status.Allocatable.StorageEphemeral().Value())
 		}
 	}
 	if list, err := h.Store.List(r.Context()); err == nil {
 		for _, gs := range list {
 			if gs.Status.Usage != nil {
-				u.MemoryUsed += uint64(gs.Status.Usage.MemoryBytes)
-				u.DiskUsed += uint64(gs.Status.Usage.DiskBytes)
+				u.MemoryUsed += nonNegative(gs.Status.Usage.MemoryBytes)
+				u.DiskUsed += nonNegative(gs.Status.Usage.DiskBytes)
 			}
 		}
 	}
