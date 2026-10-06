@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -107,12 +108,20 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 	return code, nil
 }
 
-func chownRecursive(root string, uid, gid int) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// chownRecursive hands root and everything below it to uid:gid. The walk is
+// scoped to root, so an install script that swaps a directory for a symlink
+// cannot send the chown outside it.
+func chownRecursive(dir string, uid, gid int) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // best effort: skip unreadable entries
 		}
-		_ = os.Lchown(path, uid, gid)
+		_ = root.Lchown(path, uid, gid)
 		return nil
 	})
 }
