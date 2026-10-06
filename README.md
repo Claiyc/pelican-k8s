@@ -9,9 +9,9 @@
 
 **A Kubernetes-native backend for [Pelican Panel](https://pelican.dev).**
 pelican-k8s presents a whole cluster to the Panel as a single Wings node.
-Each game server becomes a `GameServer` resource, which an operator runs as an
-ordinary pod with Wings embedded as a library. The Panel and the eggs stay
-unmodified.
+Each game server becomes a `GameServer` custom resource, which an operator
+runs as an ordinary pod with Wings embedded as a library. The Panel and the
+eggs stay unmodified.
 
 ```
 Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
