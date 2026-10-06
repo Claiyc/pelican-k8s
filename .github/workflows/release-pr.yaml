@@ -2,7 +2,8 @@
 # On every push to master it runs hack/release-prep.sh on a fresh copy of
 # master, which writes the CHANGELOG.md section from GitHub's generated release
 # notes, and force-pushes the result to the release/next branch, so the PR
-# always shows exactly what the next release would be. Merging it is the
+# always shows exactly what the next release would be. The PR is opened as a
+# draft and stays one until a maintainer marks it ready. Merging it is the
 # release: the Release workflow sees a chart version without a tag on master
 # and tags, builds and publishes it.
 #
@@ -114,5 +115,7 @@ jobs:
           if [ -n "$n" ]; then
             gh pr edit "$n" --title "release: $VERSION" --body-file "$RUNNER_TEMP/body.md" --add-label release
           else
-            gh pr create --base "$BASE" --head "$BRANCH" --title "release: $VERSION" --body-file "$RUNNER_TEMP/body.md" --label release
+            # A draft cannot be merged by accident; later updates leave the
+            # draft state as the maintainer set it.
+            gh pr create --draft --base "$BASE" --head "$BRANCH" --title "release: $VERSION" --body-file "$RUNNER_TEMP/body.md" --label release
           fi
