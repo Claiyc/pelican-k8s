@@ -706,57 +706,14 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 
 	// Node loss fencing.
 	if !pod.DeletionTimestamp.IsZero() {
-		if fd := s.class.Spec.Failover.ForceDeleteAfter; fd != nil && fd.Duration > 0 && pod.Spec.NodeName != "" {
-			node := &corev1.Node{}
-			if err := r.Get(s.ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node); err == nil && !nodeReady(node) {
-				r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionTrue, "NodeNotReady", "pod is terminating on a NotReady node")
-				if s.now.Sub(pod.DeletionTimestamp.Time) > fd.Duration {
-					r.event(s, corev1.EventTypeWarning, "ForceDelete", "force-deleting pod stuck on NotReady node %s", pod.Spec.NodeName)
-					grace := int64(0)
-					if err := r.Delete(s.ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
-						return err
-					}
-				}
-			}
-		}
-		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Terminating", "pod is terminating")
-		s.requeue = requeueFast
-		return nil
+		return r.reconcileTerminating(s, pod)
 	}
 	r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionFalse, "NodeReady", "")
 
-	// In-place resize of the game container.
-	resizeRecreate := false
-	if i := render.GameContainerIndex(&pod.Spec); i >= 0 {
-		want := render.GameResources(s.settings.Build, s.class.Spec.Resources)
-		have := pod.Spec.Containers[i].Resources
-		if !resourcesEqual(want, have) {
-			// Kubernetes refuses to remove a container limit in place, so a
-			// Panel change to "unlimited" can only land on a fresh pod.
-			// Attempting the resize would fail on every reconcile forever.
-			if removed := limitsRemoved(want, have); len(removed) > 0 {
-				resizeRecreate = true
-				r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "RecreateRequired",
-					fmt.Sprintf("removing the %s limit needs a new pod; it is applied once the process is offline", strings.Join(removed, " and ")))
-				r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate",
-					"resources cannot be applied in place; the pod is recreated once the process is offline")
-			} else {
-				resized := pod.DeepCopy()
-				resized.Spec.Containers[i].Resources = want
-				if err := r.SubResource("resize").Update(s.ctx, resized); err != nil {
-					r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "ResizeFailed", truncate(err.Error()))
-				} else {
-					r.event(s, corev1.EventTypeNormal, "Resized", "applied in-place resource change")
-					r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
-				}
-			}
-		} else if deferred := resizeDeferred(pod); deferred != "" {
-			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, deferred, "in-place resize is pending; it is applied at the next pod recreate")
-		} else {
-			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
-		}
-	}
-	recreate := outdated || restartRequested || resizeRecreate
+	// Always run the resize phase: it owns the ResizePending condition and the
+	// in-place resize, whether or not a recreate is already pending.
+	resizeNeedsRecreate := r.reconcileResize(s, pod)
+	recreate := outdated || restartRequested || resizeNeedsRecreate
 
 	// Agent readiness.
 	ready, ip := agentReady(pod)
@@ -767,13 +724,7 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 		// gates it) can be recreated without losing a running process.
 		if recreate && !gameContainerStarted(pod) {
 			r.event(s, corev1.EventTypeNormal, "Recreate", "deleting outdated pod before the game container started")
-			if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-			if restartRequested {
-				s.gs.Status.Power.ObservedRestartRequest = s.gs.Spec.Power.RestartRequest
-			}
-			s.pod = nil
+			return r.deletePodForRecreate(s, pod, restartRequested)
 		}
 		return nil
 	}
@@ -784,35 +735,118 @@ func (r *GameServerReconciler) reconcilePod(s *scope) error {
 	s.agent = r.newAgent("http://"+ip+":"+strconv.Itoa(render.AgentPort), token)
 	r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionTrue, "Ready", "")
 
-	// Relay a game container termination (e.g. OOM) to the agent.
-	if key, code, oom := lastTermination(pod); key != "" && s.gs.Status.Agent.RelayedExit != key {
-		if err := s.agent.ExitState(s.ctx, code, oom); err != nil {
-			return fmt.Errorf("relay exit state: %w", err)
-		}
-		s.gs.Status.Agent.RelayedExit = key
-		s.gs.Status.Process.LastExit = &v1alpha1.ExitStatus{Code: code, OOMKilled: oom, At: s.now}
-		r.event(s, corev1.EventTypeWarning, "GameContainerTerminated", "game container terminated (code %d, oomKilled=%v); relayed to the agent", code, oom)
+	if err := r.relayTermination(s, pod); err != nil {
+		return err
 	}
-
-	// Deferred recreate once the process is offline.
 	if recreate {
-		state, err := s.agent.GetServer(s.ctx, s.in.UUID())
-		if err != nil {
-			return err
-		}
-		if state.State == v1alpha1.ProcessOffline {
-			r.event(s, corev1.EventTypeNormal, "Recreate", "deleting pod to apply the new template")
-			if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return err
+		return r.recreateWhenOffline(s, pod, restartRequested)
+	}
+	return nil
+}
+
+// reconcileTerminating fences a terminating pod: when its node is NotReady for
+// longer than the class allows, the pod is force-deleted.
+func (r *GameServerReconciler) reconcileTerminating(s *scope, pod *corev1.Pod) error {
+	if fd := s.class.Spec.Failover.ForceDeleteAfter; fd != nil && fd.Duration > 0 && pod.Spec.NodeName != "" {
+		node := &corev1.Node{}
+		if err := r.Get(s.ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node); err == nil && !nodeReady(node) {
+			r.setCondition(s, v1alpha1.ConditionNodeLost, metav1.ConditionTrue, "NodeNotReady", "pod is terminating on a NotReady node")
+			if s.now.Sub(pod.DeletionTimestamp.Time) > fd.Duration {
+				r.event(s, corev1.EventTypeWarning, "ForceDelete", "force-deleting pod stuck on NotReady node %s", pod.Spec.NodeName)
+				grace := int64(0)
+				if err := r.Delete(s.ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
 			}
-			if restartRequested {
-				s.gs.Status.Power.ObservedRestartRequest = s.gs.Spec.Power.RestartRequest
-			}
-			s.pod = nil
-			s.agent = nil
-			s.requeue = requeueFast
 		}
 	}
+	r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Terminating", "pod is terminating")
+	s.requeue = requeueFast
+	return nil
+}
+
+// reconcileResize applies an in-place resource change to the game container and
+// reports whether the change can only land on a fresh pod.
+func (r *GameServerReconciler) reconcileResize(s *scope, pod *corev1.Pod) (recreate bool) {
+	i := render.GameContainerIndex(&pod.Spec)
+	if i < 0 {
+		return false
+	}
+	want := render.GameResources(s.settings.Build, s.class.Spec.Resources)
+	have := pod.Spec.Containers[i].Resources
+	if resourcesEqual(want, have) {
+		if deferred := resizeDeferred(pod); deferred != "" {
+			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, deferred, "in-place resize is pending; it is applied at the next pod recreate")
+		} else {
+			r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
+		}
+		return false
+	}
+	// Kubernetes refuses to remove a container limit in place, so a
+	// Panel change to "unlimited" can only land on a fresh pod.
+	// Attempting the resize would fail on every reconcile forever.
+	if removed := limitsRemoved(want, have); len(removed) > 0 {
+		r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "RecreateRequired",
+			fmt.Sprintf("removing the %s limit needs a new pod; it is applied once the process is offline", strings.Join(removed, " and ")))
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate",
+			"resources cannot be applied in place; the pod is recreated once the process is offline")
+		return true
+	}
+	resized := pod.DeepCopy()
+	resized.Spec.Containers[i].Resources = want
+	if err := r.SubResource("resize").Update(s.ctx, resized); err != nil {
+		r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionTrue, "ResizeFailed", truncate(err.Error()))
+	} else {
+		r.event(s, corev1.EventTypeNormal, "Resized", "applied in-place resource change")
+		r.setCondition(s, v1alpha1.ConditionResizePending, metav1.ConditionFalse, "Applied", "")
+	}
+	return false
+}
+
+// relayTermination relays a game container termination (e.g. OOM) to the agent.
+func (r *GameServerReconciler) relayTermination(s *scope, pod *corev1.Pod) error {
+	key, code, oom := lastTermination(pod)
+	if key == "" || s.gs.Status.Agent.RelayedExit == key {
+		return nil
+	}
+	if err := s.agent.ExitState(s.ctx, code, oom); err != nil {
+		return fmt.Errorf("relay exit state: %w", err)
+	}
+	s.gs.Status.Agent.RelayedExit = key
+	s.gs.Status.Process.LastExit = &v1alpha1.ExitStatus{Code: code, OOMKilled: oom, At: s.now}
+	r.event(s, corev1.EventTypeWarning, "GameContainerTerminated", "game container terminated (code %d, oomKilled=%v); relayed to the agent", code, oom)
+	return nil
+}
+
+// recreateWhenOffline deletes the pod to apply a pending recreate once the
+// process is offline.
+func (r *GameServerReconciler) recreateWhenOffline(s *scope, pod *corev1.Pod, restartRequested bool) error {
+	state, err := s.agent.GetServer(s.ctx, s.in.UUID())
+	if err != nil {
+		return err
+	}
+	if state.State != v1alpha1.ProcessOffline {
+		return nil
+	}
+	r.event(s, corev1.EventTypeNormal, "Recreate", "deleting pod to apply the new template")
+	if err := r.deletePodForRecreate(s, pod, restartRequested); err != nil {
+		return err
+	}
+	s.agent = nil
+	s.requeue = requeueFast
+	return nil
+}
+
+// deletePodForRecreate deletes the pod, acknowledges a pending restart request
+// and forgets the pod so the rest of the reconcile creates its replacement.
+func (r *GameServerReconciler) deletePodForRecreate(s *scope, pod *corev1.Pod, restartRequested bool) error {
+	if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	if restartRequested {
+		s.gs.Status.Power.ObservedRestartRequest = s.gs.Spec.Power.RestartRequest
+	}
+	s.pod = nil
 	return nil
 }
 
