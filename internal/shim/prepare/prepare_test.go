@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -26,8 +27,26 @@ func TestChownRecursive(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(server, "link")); err != nil {
 		t.Fatal(err)
 	}
+	// A sentinel outside the directory with another owner than the one requested,
+	// so a walk that followed the link would change it. Only a privileged test
+	// run can give it a distinct owner.
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	otherUID := os.Getuid() + 1
+	distinct := os.Lchown(sentinel, otherUID, os.Getgid()) == nil
 	if err := chownRecursive(server, os.Getuid(), os.Getgid()); err != nil {
 		t.Fatal(err)
+	}
+	if distinct {
+		st, err := os.Lstat(sentinel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uid := int(st.Sys().(*syscall.Stat_t).Uid); uid != otherUID {
+			t.Fatalf("the walk followed the link: sentinel owner is %d, want %d", uid, otherUID)
+		}
 	}
 	if err := chownRecursive(filepath.Join(dir, "missing"), os.Getuid(), os.Getgid()); err == nil {
 		t.Fatal("expected an error for a missing directory")
