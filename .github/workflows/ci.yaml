@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [master, main]
+  # The generated release PR (release-pr.yaml) is rewritten on every push to
+  # master and adds nothing master's own run has not checked, so it runs
+  # nothing while it is a draft; marking it ready starts the checks.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -11,6 +15,7 @@ permissions:
 jobs:
   go:
     name: Build and test
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +57,7 @@ jobs:
 
   lint:
     name: golangci-lint
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,6 +103,7 @@ jobs:
 
   fuzz:
     name: Fuzz
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,6 +133,7 @@ jobs:
 
   spike:
     name: Spike (agent + shim in Docker)
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -203,6 +211,7 @@ jobs:
 
   helm:
     name: Helm charts
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
