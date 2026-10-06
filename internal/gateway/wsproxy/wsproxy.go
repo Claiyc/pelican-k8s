@@ -234,7 +234,8 @@ func (s *session) handleAuth(m Message) error {
 func (s *session) verifyAuth(m Message) (claims *jwtx.Claims, resigned []byte, rejection string) {
 	claims, raw, err := jwtx.Verify([]byte(strings.Join(m.Args, "")), []byte(s.p.Cfg.NodeToken))
 	if err != nil {
-		return nil, nil, "jwt: " + err.Error()
+		// Verify's errors already start with "jwt: ", as Wings' do.
+		return nil, nil, err.Error()
 	}
 	if claims.ServerUUID != s.uuid {
 		return nil, nil, "jwt: server uuid mismatch"

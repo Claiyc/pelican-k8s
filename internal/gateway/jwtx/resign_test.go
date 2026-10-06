@@ -69,3 +69,34 @@ func TestVerifyAndResign(t *testing.T) {
 		t.Fatal("expired token accepted")
 	}
 }
+
+// Wings sends its JWT errors to the browser as they are, and the library's
+// already start with "jwt: ", so Verify must not add the prefix again.
+func TestVerifyErrorsCarryOneJWTPrefix(t *testing.T) {
+	node := []byte("node-token")
+	now := time.Now()
+	signed := func(key []byte, exp time.Time) []byte {
+		tok, err := jwt.Sign(testClaims{Payload: jwt.Payload{ExpirationTime: jwt.NumericDate(exp)}}, jwt.NewHS256(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	tests := []struct {
+		name  string
+		token []byte
+		want  string
+	}{
+		{"wrong key", signed([]byte("other"), now.Add(time.Minute)), "jwt: HMAC verification failed"},
+		{"garbage", []byte("not-a-jwt"), "jwt: malformed token"},
+		{"expired", signed(node, now.Add(-time.Minute)), "jwt: token expired"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := Verify(tt.token, node)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("Verify error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

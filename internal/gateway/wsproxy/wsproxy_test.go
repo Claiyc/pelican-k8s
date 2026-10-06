@@ -106,7 +106,7 @@ func TestHandleAuthRejectsWithJWTError(t *testing.T) {
 	}{
 		{"bad signature", signToken(t, "other-key", testUUID, future), "jwt: ", true},
 		{"garbage", "not-a-jwt", "jwt: ", true},
-		{"expired", signToken(t, testNodeToken, testUUID, time.Now().Add(-time.Minute)), "jwt: ", true},
+		{"expired", signToken(t, testNodeToken, testUUID, time.Now().Add(-time.Minute)), "jwt: token expired", false},
 		{"uuid mismatch", signToken(t, testNodeToken, "99999999-2222-3333-4444-555555555555", future), "jwt: server uuid mismatch", false},
 	}
 	for _, tt := range tests {
@@ -121,6 +121,11 @@ func TestHandleAuthRejectsWithJWTError(t *testing.T) {
 			}
 			if (tt.prefixOnly && !strings.HasPrefix(m.Args[0], tt.want)) || (!tt.prefixOnly && m.Args[0] != tt.want) {
 				t.Fatalf("browser got %q, want %q", m.Args[0], tt.want)
+			}
+			// Wings sends its JWT errors as they are; the text must not carry the
+			// "jwt: " prefix twice.
+			if strings.Contains(m.Args[0], "jwt: jwt:") {
+				t.Fatalf("browser got %q with a doubled prefix", m.Args[0])
 			}
 			expectNothing(t, agent)
 			if s.claims != nil {
