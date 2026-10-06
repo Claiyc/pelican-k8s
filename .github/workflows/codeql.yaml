@@ -15,7 +15,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze Go
-    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read

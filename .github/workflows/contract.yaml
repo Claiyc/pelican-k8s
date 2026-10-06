@@ -24,7 +24,7 @@ permissions:
 jobs:
   kind:
     name: Panel ${{ (github.event_name == 'schedule' && 'latest') || (inputs.panel_image || 'pinned') }} on kind
-    if: github.event.pull_request.draft != true || github.head_ref != 'release/next'
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
