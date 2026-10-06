@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -241,7 +242,11 @@ func (e *Environment) ExitState() (uint32, bool, error) {
 	if e.lastExit == nil {
 		return 1, false, nil
 	}
-	return uint32(e.lastExit.Code), e.lastExit.OOMKilled, nil
+	code := e.lastExit.Code
+	if code < 0 || code > math.MaxUint32 {
+		code = 1
+	}
+	return uint32(code), e.lastExit.OOMKilled, nil
 }
 
 // InjectExit records an exit observed by the operator (e.g. an OOM kill of the
