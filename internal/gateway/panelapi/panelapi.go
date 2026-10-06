@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,7 +17,6 @@ import (
 	"github.com/pelican/wings/system"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -526,6 +524,3 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 	h.WS.ServeHTTP(w, r)
 }
-
-var _ = client.IgnoreNotFound
-var _ = fmt.Sprintf
