@@ -139,9 +139,13 @@ Merge the release PR. Nothing else is manual.
   PRs are left out by `.github/release.yml`) and bumps
   `charts/pelican-k8s/Chart.yaml` and the pinned install commands that
   `test/docs` checks.
-- **The version.** A patch release by default. Notes written by hand under
-  `## [Unreleased]` are kept above the generated list, and their headings raise
-  it: `### Added`, `### Changed` or `### Deprecated` make a minor release,
+- **The version.** A patch release by default. Label a PR `minor` (a new
+  feature) or `major` (a breaking change) and the next release is at least
+  that; the largest label among the PRs merged since the last release wins,
+  and the release PR says which PR decided it. Labelling a PR after it was
+  merged updates the release PR straight away. Notes written by hand under
+  `## [Unreleased]` are kept above the generated list and can raise it too:
+  `### Added`, `### Changed` or `### Deprecated` make a minor release,
   `### Removed` or the word `BREAKING` a major one.
 - **Merging it.** The `Release` workflow sees a chart version on master with
   no tag. It checks that the chart's `version`, `appVersion` and the
