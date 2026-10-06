@@ -492,7 +492,7 @@ func (h *Handler) signedProxy(scope string) http.HandlerFunc {
 		token := r.URL.Query().Get("token")
 		claims, raw, err := jwtx.Verify([]byte(token), []byte(h.Cfg.NodeToken))
 		if err != nil {
-			writeError(w, http.StatusForbidden, "jwt: "+err.Error())
+			writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
 		if claims.ServerUUID == "" || !strings.Contains(" "+claims.Scope+" ", " "+scope+" ") {

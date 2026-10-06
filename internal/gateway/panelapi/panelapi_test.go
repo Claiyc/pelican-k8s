@@ -769,8 +769,16 @@ func TestSignedProxyRejections(t *testing.T) {
 		{"no pod", signToken(t, nodeToken, fileClaims("file-download", exp)), 503},
 	}
 	for _, tt := range tests {
-		if code, _, _ := f.do("GET", "/download/file?token="+tt.token, "", ""); code != tt.code {
+		code, body, _ := f.do("GET", "/download/file?token="+tt.token, "", "")
+		if code != tt.code {
 			t.Errorf("%s: %d, want %d", tt.name, code, tt.code)
+		}
+		// The library's errors already start with "jwt: "; it must not be doubled.
+		if strings.Contains(body, "jwt: jwt:") {
+			t.Errorf("%s: body %q has a doubled jwt prefix", tt.name, body)
+		}
+		if tt.name == "expired" && !strings.Contains(body, "jwt: token expired") {
+			t.Errorf("%s: body %q, want the expiry error", tt.name, body)
 		}
 	}
 	if code, _, _ := f.do("GET", "/download/file", "", ""); code != 403 {

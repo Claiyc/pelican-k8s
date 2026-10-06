@@ -31,7 +31,9 @@ func Verify(token []byte, key []byte) (*Claims, json.RawMessage, error) {
 	var raw json.RawMessage
 	_, err := jwt.Verify(token, jwt.NewHS256(key), &raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("jwt: %w", err)
+		// The library's errors already start with "jwt: " ("jwt: malformed
+		// token"), and Wings sends them to the browser as they are.
+		return nil, nil, err
 	}
 	var c Claims
 	if err := json.Unmarshal(raw, &c); err != nil {
