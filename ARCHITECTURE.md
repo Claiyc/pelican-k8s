@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Kubernetes** | ≥ 1.33, single- or multi-node (1.35+ recommended: in-place pod resize, native sidecars, `ValidatingAdmissionPolicy`) |
+| **Kubernetes** | ≥ 1.33, single- or multi-node (1.35+ recommended for in-place pod resize) |
 | **API group** | `pelican-k8s.io/v1alpha1` |
 | **Upstream basis** | Pelican Wings `9fb682f`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
 
@@ -17,7 +17,7 @@ unmodified.**
 | Component | Kind | Role |
 |---|---|---|
 | **Gateway** | Deployment | Presents itself to the Panel as one Wings node and holds the node token. Turns Panel intents into `GameServer` spec changes, records observed process state in the status, and proxies data-path traffic (files, console, SFTP, backups) to the right agent |
-| **Operator** | Deployment (controller) | The only reconciler. Turns one `GameServer` into a StatefulSet (1 replica), PVC, Services, NetworkPolicy and install Jobs, and drives the agent (power, config sync, install, delete) until the process matches the spec |
+| **Operator** | Deployment (controller) | The only reconciler. Turns one `GameServer` into a StatefulSet (1 replica), PVC, Services, NetworkPolicy, agent token Secret and install Jobs, and drives the agent (power, config sync, install, delete) until the process matches the spec |
 | **Agent** | Native sidecar container in every game pod | Wings as a Go library with one server. Runs Wings' router, websocket, SFTP server, filesystem, config parsers, crash detection and backup code, and drives the game process through the shim |
 | **Shim** | Static binary, the game container's entrypoint | Supervises the egg's process inside the unmodified egg image: PTY and stdin, signals, exit codes, cgroup stats |
 
@@ -43,8 +43,8 @@ storage, networking and restarts (operator).
    log, suspension. [`docs/compatibility.md`](docs/compatibility.md) has the feature table.
 4. **Restricted game pods.** Game pods run as a pinned non-root UID with no host access, all
    capabilities dropped and the `RuntimeDefault` seccomp profile. Install Jobs run as root in the same
-   namespace, so the namespace is labelled `baseline` and the game pod shape is enforced by a
-   `ValidatingAdmissionPolicy` bound to their ServiceAccount (§12.2).
+   namespace, so the namespace is labelled `baseline` and the game pod shape is enforced by
+   `ValidatingAdmissionPolicy`s that match pods in the servers namespace by ServiceAccount (§12.2).
 5. **Wings as a dependency.** The agent imports Wings as a Go module; four opt-in hooks on a fork
    branch plug in the shim and the Job installer (§6.3).
 
@@ -100,12 +100,12 @@ flowchart LR
   end
 
   B -- "HTTPS / WSS (Ingress or Route)" --> GW
-  S -- "SSH :2022" --> GW
+  S -- "SSH (Service port 2022)" --> GW
   PANEL -- "Wings API (node token)" --> GW
   GW -- "Remote API (node token)" --> PANEL
   B -- "Panel UI" --> PANEL
 
-  GW -- "Wings API + WS + SFTP (per-agent token)" --> AG
+  GW -- "Wings API + WS (per-agent token), SFTP (session credential)" --> AG
   AG -- "Wings remote API (per-agent token)" --> GW
   OP -- "Wings API: power, sync, install, delete (per-agent token)" --> AG
   GW -- "spec (intents), status.process (facts)" --> CR
@@ -144,7 +144,7 @@ All servers live in the one servers namespace.
      and on the agent's Wings API alike. Nothing else issues power, sync or install calls.
    - `spec.power.desired` takes the place of Wings' `states.json`: `Running` on `start`/`restart`,
      `Stopped` when the process reaches `offline` through `stopping` (power `stop`/`kill`, the stop
-     command typed into the console, suspension). A crash leaves it at `Running`, so Wings' crash handler
+     command typed into the console, suspension, a start that fails before the process runs). A crash leaves it at `Running`, so Wings' crash handler
      and pod recreation both restore a running server, and a server stopped from the console stays
      stopped after a node reboot.
 4. **Wings' code, Kubernetes' plumbing.** The agent is a small `main` that imports Wings as a module,
@@ -165,8 +165,9 @@ for agents) and `:2022` (SFTP).
 ### 5.1 Responsibilities
 
 1. Implement the **node-facing Wings HTTP API** toward the Panel (node-token auth, `User-Agent` response header).
-2. Terminate **browser traffic** (websockets, signed download and upload URLs) and **SFTP**, verify it
-   against the node token, and hand it to the right agent under that agent's own token (§5.4).
+2. Terminate **browser traffic** (websockets, signed download and upload URLs), verify it against the
+   node token, and hand it to the right agent under that agent's own token (§5.4). Terminate **SFTP**,
+   authenticate it against the Panel, and relay it to the agent with a per-session credential (§5.6).
 3. Translate **server lifecycle** calls (create, sync, install, power, delete) into `GameServer` **spec**
    changes. The gateway never calls an agent to change state; that is the operator's job (§7.6).
 4. Serve the **Wings remote API** to agents: each agent sees a Panel with exactly one server, and the
@@ -197,7 +198,7 @@ not intercept is forwarded to the agent unchanged. Every `/api/servers/:s*` rout
 | `GET /api/system/ips` | The first non-empty source: `gateway.externalIPs`, the default class's `exposure.externalIPs`, MetalLB `IPAddressPool` addresses (`gateway.metallb.discoverPools`; at most `maxAddresses`, cached for a minute), the nodes' external and internal addresses |
 | `GET /api/system/utilization` | Totals are the summed node allocatable memory and ephemeral storage; usage is the sum of the servers' `status.usage` |
 | `GET /api/servers` | List from CRs plus the state cache |
-| `POST /api/servers` | Server create flow (§8.1); spec only. For an existing CR: sync plus reinstall |
+| `POST /api/servers` | Server create flow (§8.1); spec only. For an existing CR: sync plus a new install generation (not a reinstall) |
 | `POST /api/deauthorize-user` | Forward `{user, servers: [uuid]}` to the agent of each listed server, or of every server when `servers` is empty. Wings in each agent denylists the user and closes that user's websocket and SFTP sessions |
 | `POST /api/transfers`, `DELETE /api/transfers/:s`, `POST`/`DELETE /api/servers/:s/transfer` | `501` |
 | `GET /api/servers/:s` | From the state cache (§5.8). If the agent is unreachable, the last known state is served while the pod exists; `missing` if it does not |
@@ -302,10 +303,11 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 
 | Agent call | Gateway behaviour |
 |---|---|
-| `GET /servers?page=` | One-item list: `{settings, process_configuration}` assembled from `spec.panel` and the `gs-<uuid>-env` Secret (§9.4) |
+| `GET /servers?page=` | One-item list: `{settings, process_configuration}` assembled from `spec.panel` and the `gs-<uuid>-env` Secret (§9.4); `build.memory_limit: 0` becomes the class `unlimitedMemoryMiB` and the default allocation IP becomes `0.0.0.0` |
 | `GET /servers/{uuid}` | Same object; `404` for any other UUID |
 | `POST /servers/reset` | `204`, dropped (the gateway sends the node reset itself, §8.9) |
 | `POST /servers/{uuid}/container/status` | Write `status.process.state`; set `spec.power.desired=Stopped` (and `kill: false`) when `previous_state` is `stopping` and `new_state` is `offline`, unless the pod is terminating; refresh `status.usage`; forward to the Panel |
+| `GET /servers/{uuid}/install` | Install script of `spec.install.generation` from ConfigMap `gs-<uuid>-install-<gen>`, with `spec.install.image` and `entrypoint`; `404` if the ConfigMap is missing |
 | `POST /servers/{uuid}/install/prepared` | Record `status.install.preparedGeneration` and `result: Running`; answer with the generation and `strict_exit_code` (§8.2) |
 | `GET /servers/{uuid}/install/state?generation=` | The Job outcome recorded by the operator, polled by the installer |
 | `POST /servers/{uuid}/install` | Record `status.install.result`, `finishedAt` and `reportedGeneration`; forward to the Panel; on success with `spec.install.startOnInstall`, start the server |
@@ -374,14 +376,15 @@ The PVC root is a Wings `root_directory` for one server, so Wings path logic app
 ```
 
 The game container mounts **only** `volumes/<uuid>` and `machine-id`, so a game process cannot read
-activity, logs or install state. The `prepare` init container runs as the pod UID and creates these
-directories and `machine-id` before any container mounts them as `subPath`. Backup archives and Wings'
+activity, logs or install state. The `prepare` init container runs as the pod UID and creates `volumes/<uuid>`,
+`install/`, `logs/install/` and `machine-id` before any container mounts them as `subPath`; the agent
+creates `logs/console/` and Wings creates `wings.db`. Backup archives and Wings'
 temporary files live on the pod's scratch volume (§10.1).
 
 ### 6.3 Agent = Wings as a library
 
 `cmd/agent` calls `internal/agent/app`, which imports `github.com/pelican/wings` and runs the parts of
-Wings' boot sequence that do not touch Docker: `config.Set`, the `remote` client (base URL = gateway,
+Wings' boot sequence that do not touch Docker: `config.FromFile`, the `remote` client (base URL = gateway,
 §5.7), the activity database, `server.NewManager` (which fetches the one-server list from the gateway),
 the cron scheduler, `sftp.New` and `router.Configure`. A `ServeMux` in front of Wings' Gin engine adds
 the agent's own routes and serves both on `:8080`:
@@ -397,8 +400,7 @@ Everything else the agent serves is Wings' router: power, commands, files, backu
 downloads and uploads, `deauthorize-user`, `ws/deny`, and the SFTP server on `:2022`.
 
 **Hooks.** The agent plugs into Wings through four opt-in hooks on the `pelican-k8s-hooks` branch of
-[Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`. Docker stays
-Wings' default:
+[Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`:
 
 | # | Hook | Used by the agent for |
 |---|---|---|
@@ -485,7 +487,8 @@ consumes pod readiness (both Services publish not-ready addresses, the StatefulS
 | `ExitState` | From `exited{}`, the operator's `/internal/v1/exit-state`, or the reconnect case above; code 1 when no exit is known |
 | `IsRunning`, `Uptime` | Shim status |
 | `InSituUpdate` | No-op; the operator resizes the pod in place |
-| `Create`, `Destroy`, `Exists` | Trivial; the pod belongs to the operator |
+| `Create`, `Exists` | No-op and always true; the pod belongs to the operator |
+| `Destroy` | `stopping`, SIGKILL to the process group through the shim (`kill`), then `offline` |
 
 **Agent restart:** the agent container restarts while the game keeps running. The agent reconnects,
 finds the process running and re-attaches; the console history comes from the console log, or from the
@@ -515,7 +518,7 @@ spec:
     uuidShort: 1a2b3c4d
     # The raw `settings` object from GET /api/remote/servers/{uuid}, minus `environment`
     # (preserve-unknown-fields). The agent consumes it as its Wings server configuration;
-    # the operator reads only suspended, container.image, build.* and allocations.*.
+    # the operator reads uuid, meta.name, egg.id, suspended, container.image, build.* and allocations.*.
     settings:
       id: 1
       meta: {name: "Survival SMP", description: ""}
@@ -544,7 +547,7 @@ spec:
   # --- desired process state (§4.2; written by the gateway, kubectl-editable) ---
   power:
     desired: Running          # Running | Stopped (default Stopped)
-    generation: 3             # bump with desired=Running ⇒ (re)start; the operator acts once per generation
+    generation: 3             # bumped with every power action; the operator acts once per generation
     kill: false               # with desired=Stopped: SIGKILL instead of the stop procedure
     restartRequest: 0         # bump to recreate the pod at the next safe point
 
@@ -570,7 +573,7 @@ the resources used in that case (§7.3, §11).
 status:
   observedGeneration: 7
   phase: Running            # Pending | Installing | Stopped | Starting | Running | Stopping | Suspended | Error
-  process:                  # written by the gateway from the agent's container/status posts
+  process:                  # state/since: gateway (agent's container/status posts); lastExit: operator (relayed container exit)
     state: running          # offline | starting | running | stopping
     since: "…"
     lastExit: {code: 0, oomKilled: false, at: "…"}
@@ -606,7 +609,7 @@ status:
   templateHash: "…"         # pod template hash of the current StatefulSet
   snapshot: {lastAt: "…", lastName: gs-…-20261006-120000}
   conditions:
-    - type: VolumeReady          # PVC bound (and expanded to the requested size)
+    - type: VolumeReady          # PVC bound
     - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange)
     - type: AgentReady           # agent container started and ready
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
@@ -838,9 +841,9 @@ older than the one it wrote.
 
 | Spec or status change | Operator action |
 |---|---|
-| `spec.power.generation` ≠ `status.power.observedGeneration` | `desired: Running` ⇒ `POST /power {start}`, or `{restart}` if the process is `running`; refused with an event while suspended; while `RecreatePending`, `stop` the process first and leave the generation unobserved until the new pod runs. `desired: Stopped` ⇒ `POST /power {stop}`, or `{kill}` if `kill: true`, when the process is not `offline`. Then record `observedGeneration` |
+| `spec.power.generation` ≠ `status.power.observedGeneration` | `desired: Running` ⇒ `POST /power {start}`, or `{restart}` if the process is not `offline`; refused with an event while suspended; while `RecreatePending`, `stop` the process first and leave the generation unobserved until the new pod runs. `desired: Stopped` ⇒ `POST /power {stop}`, or `{kill}` if `kill: true`, when the process is not `offline`. Then record `observedGeneration` |
 | Fresh pod (`status.agent.podUID` ≠ current pod, agent ready) | Record the pod. If `desired: Running` and the server is neither suspended nor `RecreatePending`, `POST /power {start}` (Wings' "was running before reboot"). An install in flight in the old pod is requested again |
-| `spec.panel.panelRevision` or the env Secret's resourceVersion changed | `POST /sync`: the agent re-fetches its configuration from the gateway (§5.7) and runs Wings' `SyncWithConfiguration`, which also stops a suspended server |
+| `spec.panel.panelRevision` or the env Secret's resourceVersion changed | `POST /sync`: the agent re-fetches its configuration from the gateway (§5.7) and runs Wings' `Server.Sync` (`SyncWithConfiguration` and `SyncWithEnvironment`), which also stops a suspended server |
 | `spec.install.generation` > `status.install.observedGeneration` | `POST /install` (or `/reinstall`); once `status.install.preparedGeneration` matches, create the Job (§8.2). Without "prepared" within `install.prepareTimeoutSeconds`, the install fails |
 | `settings.suspended: true` with `suspendScalesToZero` | StatefulSet at 0 replicas; the preStop hooks run the stop procedure |
 

@@ -72,3 +72,26 @@ func TestStatusPatchOnlyChangedFields(t *testing.T) {
 		t.Fatalf("expected usage: null, got %v", m["status"])
 	}
 }
+
+// The operator writes process.lastExit while the gateway writes
+// process.state; the patch must carry only the operator's field.
+func TestStatusPatchProcessLastExitOnly(t *testing.T) {
+	orig := &v1alpha1.GameServerStatus{Process: v1alpha1.ProcessStatus{State: "running"}}
+	cur := orig.DeepCopy()
+	cur.Process.LastExit = &v1alpha1.ExitStatus{Code: 137, OOMKilled: true, At: metav1.Now()}
+	p, err := StatusPatch(orig, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]map[string]map[string]any
+	if err := json.Unmarshal(p, &m); err != nil {
+		t.Fatal(err)
+	}
+	process := m["status"]["process"]
+	if process["lastExit"] == nil {
+		t.Fatalf("lastExit expected: %s", p)
+	}
+	if _, ok := process["state"]; ok {
+		t.Fatalf("gateway-owned process.state must not be in the patch: %s", p)
+	}
+}

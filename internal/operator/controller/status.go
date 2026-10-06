@@ -36,7 +36,7 @@ func StatusPatch(orig, cur *v1alpha1.GameServerStatus) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	diff := diffMaps(o, c, map[string]bool{"install": true, "agent": true, "power": true})
+	diff := diffMaps(o, c, map[string]bool{"process": true, "install": true, "agent": true, "power": true})
 	if len(diff) == 0 {
 		return nil, nil
 	}
