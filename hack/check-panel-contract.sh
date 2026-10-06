@@ -26,7 +26,7 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 SRC=${PANEL_SRC_DIR:-}
-if [ -z "$SRC" ]; then
+if [[ -z "$SRC" ]]; then
   SRC=$WORKDIR/panel
   docker pull -q "$PANEL_IMAGE"
   for f in "${FILES[@]}"; do
@@ -37,7 +37,7 @@ if [ -z "$SRC" ]; then
 fi
 
 for f in "${FILES[@]}"; do
-  [ -s "$SRC/$f" ] || { echo "::error::$f is missing or empty in $PANEL_IMAGE (upstream moved it)"; exit 1; }
+  [[ -s "$SRC/$f" ]] || { echo "::error::$f is missing or empty in $PANEL_IMAGE (upstream moved it)"; exit 1; }
 done
 
 fail=0
@@ -55,7 +55,7 @@ parse_routes() {
       continue
     fi
     if [[ $line =~ ^[[:space:]]*\}\)\; ]]; then
-      if [ ${#stack[@]} -gt 0 ]; then unset 'stack[${#stack[@]}-1]'; fi
+      if [[ ${#stack[@]} -gt 0 ]]; then unset 'stack[${#stack[@]}-1]'; fi
       continue
     fi
     if [[ $line =~ Route::(get|post|put|patch|delete)\(\'([^\']*)\' ]]; then
@@ -64,7 +64,7 @@ parse_routes() {
       prefix=$(IFS=; echo "${stack[*]-}")
       path="$prefix$path"
       path=${path//\/\//\/}                                   # joined group + "/" leaf
-      if [ "$path" != "/" ]; then path=${path%/}; fi           # a group's own "/" leaf
+      if [[ "$path" != "/" ]]; then path=${path%/}; fi           # a group's own "/" leaf
       path=$(echo "$path" | sed -E 's/\{[A-Za-z_]+:([A-Za-z_]+)\}/{\1}/g')
       echo "$(echo "$method" | tr '[:lower:]' '[:upper:]') $path"
     fi
@@ -89,7 +89,7 @@ EOF
 )
 got_routes=$(parse_routes)
 
-if [ -z "$got_routes" ]; then
+if [[ -z "$got_routes" ]]; then
   note "parsed no routes from routes/api-remote.php; the parser in $0 needs updating"
 elif ! diff -u <(echo "$want_routes") <(echo "$got_routes") > "$WORKDIR/routes.diff"; then
   note "the Panel remote API no longer matches docs/wings-panel-contract.md section 3 (-want +got):"
@@ -111,7 +111,7 @@ grep -q 'Pelican Wings' "$SRC/app/Repositories/Daemon/DaemonRepository.php" ||
 grep -q 'daemon_token_id' "$SRC/app/Repositories/Daemon/DaemonRepository.php" ||
   note "the response User-Agent is no longer matched against the node's daemon_token_id (contract 1.1)"
 
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
   echo "Panel contract check failed against $PANEL_IMAGE" >&2
   exit 1
 fi
