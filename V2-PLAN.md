@@ -1,9 +1,12 @@
 # pelican-k8s v2 plan
 
 **Temporary document.** [ARCHITECTURE.md](ARCHITECTURE.md) and the other docs describe the
-split-pod design as the system is meant to work. The code on `master` still implements the
-single-pod design of 1.x. This file lists the work that closes the gap. Delete it when Part 2 has
-shipped.
+split-pod design as the system is meant to work. The code still implements the single-pod design
+of 1.x. This file lists the work that closes the gap. Delete it when Part 2 has shipped.
+
+All of this lands on the long-lived branch `v2`: pull requests for the steps below target `v2`, not
+`master`. `master` keeps the 1.x code and docs and takes fixes for 1.x; merge it into `v2`
+regularly. `v2` merges into `master` when Part 1 is complete, as release 2.0.0.
 
 ## 1. What changes
 
@@ -49,8 +52,8 @@ shipped.
 
 ## 3. Part 1: split pods (main)
 
-The steps are ordered so that each one can merge to `master` and ship on its own. Steps 1 and 2
-change nothing visible; step 3 is the breaking change that makes the release 2.0.0.
+The steps are ordered so that each one can merge to `v2` on its own and leave the branch working.
+Steps 1 and 2 change nothing visible; step 3 is the breaking change.
 
 ### Step 1: shim protocol over TCP, inside the single pod
 
@@ -128,7 +131,7 @@ is where later scheduling rules get their tests.
 
 - **Workflow** *Placement* (`.github/workflows/placement.yaml`, `hack/e2e-placement.sh`): on pull
   requests that touch `internal/operator`, `internal/agent`, `internal/shim`, `api` or
-  `charts/pelican-k8s`, on pushes to `master`, and nightly.
+  `charts/pelican-k8s`, on pushes to `master` and `v2`, and nightly.
 - **Cluster:** kind with one control-plane node and three workers, the same node image as the
   *Contract* workflow.
 - **Storage:** a StorageClass whose volumes are not bound to a node. kind's default local-path
