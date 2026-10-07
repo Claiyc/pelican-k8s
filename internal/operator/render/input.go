@@ -45,9 +45,18 @@ const (
 	LabelName   = "app.kubernetes.io/name"
 )
 
-// AgentURL is the base URL of the agent API on a pod IP. The API is plain HTTP
-// on the pod network: each request carries the agent's token, and the agent
-// pod's NetworkPolicy admits the port only from pelican-k8s pods (12.4).
+// Where the certificates are mounted when TLS is on (ARCHITECTURE.md 12.5).
+const (
+	// AgentTLSDir holds the agent's certificate Secret.
+	AgentTLSDir = "/etc/pelican-tls"
+	// GameCAFile is the CA bundle the shim verifies the agent with.
+	GameCAFile = "/pelican/tls/ca.crt"
+)
+
+// AgentURL is the base URL of the agent API on a pod IP without TLS: plain
+// HTTP on the pod network, each request carrying the agent's token, the port
+// admitted only from pelican-k8s pods by the agent pod's NetworkPolicy (12.4).
+// With TLS callers use https and a name from pki.AgentHost instead (12.6).
 func AgentURL(ip string) string {
 	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, strconv.Itoa(AgentPort))}).String()
 }
@@ -77,6 +86,9 @@ type Input struct {
 	// AgentNode, when set, is the only node the agent pod may run on: the
 	// game pod's node.
 	AgentNode string
+	// TLS secures the agent's HTTP API and the shim connection with the
+	// certificate in names.TLSSecret (ARCHITECTURE.md 12.5).
+	TLS bool
 }
 
 // UUID returns the server UUID.

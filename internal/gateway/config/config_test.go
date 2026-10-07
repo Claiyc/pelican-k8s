@@ -47,7 +47,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	if c.Timezone != "UTC" || c.ResyncInterval != 15*time.Minute || c.StateCacheTTL != 2*time.Second || c.AgentWait != 2*time.Minute {
 		t.Errorf("misc defaults: %+v", c)
 	}
-	if c.MetalLBPools || c.SFTPKeyOnly || c.AllowedOrigins != nil || c.ExternalIPs != nil {
+	if c.MetalLBPools || c.SFTPKeyOnly || c.AllowedOrigins != nil || c.ExternalIPs != nil || c.TLSDir != "" {
 		t.Errorf("flags should default off: %+v", c)
 	}
 }
@@ -63,6 +63,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("PELICAN_GW_SFTP_KEY_ONLY", "true")
 	t.Setenv("PELICAN_GW_RESYNC_INTERVAL", "30s")
 	t.Setenv("PELICAN_GW_AGENT_WAIT", "45s")
+	t.Setenv("PELICAN_GW_TLS_DIR", "/etc/pelican-tls")
 	t.Setenv("TZ", "Europe/Berlin")
 	c, err := FromEnv()
 	if err != nil {
@@ -80,7 +81,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	if !c.MetalLBPools || !reflect.DeepEqual(c.MetalLBPoolNames, []string{"p1", "p2"}) || c.MetalLBMaxAddresses != 42 {
 		t.Errorf("metallb settings: %+v", c)
 	}
-	if !c.SFTPKeyOnly || c.ResyncInterval != 30*time.Second || c.Timezone != "Europe/Berlin" || c.AgentWait != 45*time.Second {
+	if !c.SFTPKeyOnly || c.ResyncInterval != 30*time.Second || c.Timezone != "Europe/Berlin" || c.AgentWait != 45*time.Second || c.TLSDir != "/etc/pelican-tls" {
 		t.Errorf("misc: %+v", c)
 	}
 }

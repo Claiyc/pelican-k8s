@@ -42,8 +42,9 @@ gateway:
     poolNames: []
     # Cap on the addresses offered; a large pool would flood the dropdown.
     maxAddresses: 256
-  # How agents reach the gateway's remote API (in-cluster).
-  remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
+  # How agents reach the gateway's remote API (in-cluster). With tls.enabled
+  # it must be an https URL whose host is the gateway Service.
+  remoteURL: ""      # default http(s)://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
   # How long an open console is held while the server's agent pod is replaced
   # (moved to the game pod's node, recreated with a new template, evicted).
@@ -89,6 +90,39 @@ operator:
     requests: {cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi}
     limits: {memory: 512Mi}
   logLevel: info
+
+# TLS between the gateway, the operator, the agents and the shims, from an
+# internal CA the operator keeps in the release namespace (docs/security.md).
+# Turning it on or off recreates every agent pod, and running game pods with
+# them through the usual RecreatePending path.
+tls:
+  enabled: false
+  # The internal CA, when cert-manager is not used.
+  ca:
+    # Lifetime of the CA the operator creates.
+    lifetime: 87600h
+    # Replace the CA automatically once it enters the last third of its
+    # lifetime: the new CA is trusted everywhere first, then signs, then the
+    # old one is dropped, with no pod restarted (docs/security.md).
+    rotation:
+      enabled: false
+      # How long each step waits for the new trust bundle to reach every pod.
+      overlap: 1h
+  # Issue every certificate through cert-manager instead of the internal CA.
+  # Needs cert-manager installed.
+  certManager:
+    enabled: false
+    # The issuer, e.g. {name: corp-ca, kind: ClusterIssuer}. It must issue
+    # certificates in both the release and the servers namespace, so use a
+    # ClusterIssuer. Empty: the chart creates a self-signed CA in caNamespace
+    # and a ClusterIssuer for it.
+    issuerRef: {}
+    # cert-manager's cluster resource namespace, where a chart-created CA
+    # lives.
+    caNamespace: cert-manager
+    # Lifetime of a chart-created CA. cert-manager renews it on its own;
+    # see docs/security.md before shortening it.
+    caDuration: 87600h
 
 # The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config
 # in the servers namespace. Keys under `extra` are merged verbatim.

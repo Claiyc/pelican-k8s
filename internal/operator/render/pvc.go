@@ -44,6 +44,16 @@ func ShimSecret(in *Input, token string) *corev1.Secret {
 	}
 }
 
+// TLSSecret renders the agent's certificate Secret with the given data
+// (pki.CertFile, pki.KeyFile, pki.CAFile).
+func TLSSecret(in *Input, data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: in.Meta(names.TLSSecret(in.UUID()), "agent"),
+		Type:       corev1.SecretTypeTLS,
+		Data:       data,
+	}
+}
+
 // RetainPVC marks a claim as orphaned after a Retain deletion.
 func RetainPVC(pvc *corev1.PersistentVolumeClaim, now metav1.Time) {
 	if pvc.Labels == nil {

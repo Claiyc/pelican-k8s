@@ -54,7 +54,7 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 	c.System.CrashDetection.CrashDetectionEnabled = false
 	config.Set(c)
 
-	ln, err := protocol.Listen("127.0.0.1:0", []byte(shimToken), nil)
+	ln, err := protocol.Listen("127.0.0.1:0", []byte(shimToken), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

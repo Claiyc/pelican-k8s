@@ -2,6 +2,7 @@ package wsproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/serversync"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/test/fakepanel"
 )
 
@@ -53,6 +55,8 @@ type env struct {
 	agentOrigin chan string
 	agentConn   chan *websocket.Conn
 	agentRecv   chan string
+	// agentClient receives the client certificate name the agent saw.
+	agentClient chan string
 
 	dialedMu sync.Mutex
 	dialed   []string // agent addresses the proxy dialed
@@ -64,6 +68,9 @@ type opts struct {
 	suspended bool
 	agentDown bool
 	panelDown bool
+	// tls serves the fake agent with a certificate for the server and has
+	// the resolver call it with the gateway's client certificate.
+	tls       bool
 	origins   []string
 	agentOrig string
 }
@@ -109,7 +116,7 @@ func newEnv(t *testing.T, o opts) *env {
 			t.Fatal(err)
 		}
 	}
-	e := &env{t: t, c: c, st: st, agentOrigin: make(chan string, 4), agentConn: make(chan *websocket.Conn, 4), agentRecv: make(chan string, 64)}
+	e := &env{t: t, c: c, st: st, agentOrigin: make(chan string, 4), agentConn: make(chan *websocket.Conn, 4), agentRecv: make(chan string, 64), agentClient: make(chan string, 4)}
 	if !o.noPod && !o.noServer {
 		e.createAgentPod("pod-1", "127.0.0.1")
 		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(uuid), Namespace: ns}, Data: map[string][]byte{"token_id": []byte("agentid"), "token": []byte(agentTok)}}
@@ -120,7 +127,10 @@ func newEnv(t *testing.T, o opts) *env {
 
 	// Fake agent websocket endpoint.
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	e.agentSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	e.agentSrv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 {
+			e.agentClient <- r.TLS.VerifiedChains[0][0].Subject.CommonName
+		}
 		conn, err := up.Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -136,10 +146,18 @@ func newEnv(t *testing.T, o opts) *env {
 			e.agentRecv <- string(data)
 		}
 	}))
+	res := agents.NewResolver(st, time.Second)
+	if o.tls {
+		agentTLS, gatewayTLS := testPKI(t)
+		e.agentSrv.TLS = agentTLS
+		e.agentSrv.StartTLS()
+		res.EnableTLS(func() *tls.Config { return gatewayTLS })
+	} else {
+		e.agentSrv.Start()
+	}
 	t.Cleanup(e.agentSrv.Close)
 	agentAddr := e.agentSrv.Listener.Addr().String()
 
-	res := agents.NewResolver(st, time.Second)
 	res.HTTPWait, res.Poll = 100*time.Millisecond, 10*time.Millisecond
 	e.proxy = &Proxy{Cfg: cfg, Store: st, Agents: res, Sync: sy, Log: slog.Default(), OriginForAgent: o.agentOrig,
 		netDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -711,5 +729,55 @@ func TestConsoleClosedWhenAgentDoesNotReturn(t *testing.T) {
 	var ce *websocket.CloseError
 	if !errors.As(err, &ce) || ce.Code != websocket.CloseTryAgainLater {
 		t.Fatalf("want close 1013, got %v", err)
+	}
+}
+
+// testPKI returns the server configuration of an agent for this server and
+// the gateway's client configuration, from one CA.
+func testPKI(t *testing.T) (agent, gateway *tls.Config) {
+	t.Helper()
+	now := time.Now()
+	ca, _, err := pki.NewCA(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := func(cn string, dns []string, usage pki.Usage) tls.Certificate {
+		certPEM, keyPEM, err := ca.Issue(cn, dns, usage, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	agent = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair("agent", pki.AgentDNSNames(uuid, ns), pki.Server)}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: ca.Pool()}
+	gateway = &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: ca.Pool(), Certificates: []tls.Certificate{pair(pki.GatewayName, nil, pki.Client)}}
+	return agent, gateway
+}
+
+func TestTLSToTheAgent(t *testing.T) {
+	e := newEnv(t, opts{tls: true})
+	conn := e.connect()
+	e.waitAgent()
+	select {
+	case cn := <-e.agentClient:
+		if cn != pki.GatewayName {
+			t.Fatalf("agent saw client %q", cn)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent saw no client certificate")
+	}
+	// The name in the URL is for TLS; the connection goes to the pod address.
+	e.dialedMu.Lock()
+	dialed := append([]string(nil), e.dialed...)
+	e.dialedMu.Unlock()
+	if len(dialed) != 1 || dialed[0] != "127.0.0.1:8080" {
+		t.Fatalf("dialed %q", dialed)
+	}
+	send(t, conn, "send stats")
+	if got := e.nextAgent(); !strings.Contains(got, "send stats") {
+		t.Fatalf("agent saw %q", got)
 	}
 }

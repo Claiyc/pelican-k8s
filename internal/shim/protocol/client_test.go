@@ -331,10 +331,10 @@ func TestDecodeOversizedLine(t *testing.T) {
 }
 
 func TestHandshakeEdgeCases(t *testing.T) {
-	if _, err := Listen("127.0.0.1:0", nil, nil); err == nil {
+	if _, err := Listen("127.0.0.1:0", nil, nil, nil); err == nil {
 		t.Fatal("Listen without a token")
 	}
-	if _, err := Listen("256.0.0.1:0", []byte("t"), nil); err == nil || !strings.Contains(err.Error(), "listen") {
+	if _, err := Listen("256.0.0.1:0", []byte("t"), nil, nil); err == nil || !strings.Contains(err.Error(), "listen") {
 		t.Fatalf("Listen on an invalid address: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestHandshakeEdgeCases(t *testing.T) {
 }
 
 func TestListenerLifecycle(t *testing.T) {
-	ln, err := Listen("127.0.0.1:0", []byte("secret"), nil)
+	ln, err := Listen("127.0.0.1:0", []byte("secret"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,6 +29,9 @@ func AgentSecret(uuid string) string { return Prefix + uuid + "-agent" }
 // ShimSecret holds the token both ends of the shim connection prove.
 func ShimSecret(uuid string) string { return Prefix + uuid + "-shim" }
 
+// TLSSecret holds the agent's certificate and the CA bundle (ARCHITECTURE.md 12.5).
+func TLSSecret(uuid string) string { return Prefix + uuid + "-tls" }
+
 // StatefulSet is the game pod's controller.
 func StatefulSet(uuid string) string { return Prefix + uuid }
 

@@ -8,6 +8,7 @@
 #
 #   KEEP=1 hack/e2e-placement.sh          # keep the cluster afterwards
 #   RUN=TestDrain hack/e2e-placement.sh   # one scenario
+#   TLS=false hack/e2e-placement.sh       # without tls.enabled (on by default here)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -110,6 +111,7 @@ CHART_ARGS=(
   --set defaultClass.spec.exposure.mode=NodePort
   --set defaultClass.spec.storage.storageClassName=standard --set defaultClass.spec.storage.scratch.type=EmptyDir
   --set defaultClass.spec.imageResolution.pinDigest=false --set defaultClass.spec.terminationGracePeriodSeconds=30
+  --set tls.enabled="${TLS:-true}"
   --set gateway.logLevel=debug --set operator.logLevel=debug
 )
 helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace "${CHART_ARGS[@]}" --wait --timeout 5m >/dev/null # NOSONAR: as above

@@ -35,6 +35,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/sftprelay"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/wsproxy"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
@@ -49,7 +50,9 @@ type Gateway struct {
 	PanelAPI *panelapi.Handler
 	Remote   *remoteapi.Handler
 	Relay    *sftprelay.Relay
-	cache    cache.Cache
+	// certs is the gateway's certificate directory, nil without TLS.
+	certs *pki.Dir
+	cache cache.Cache
 }
 
 // Scheme returns the runtime scheme used by the gateway.
@@ -79,9 +82,16 @@ func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.
 	st := store.New(cl, cfg.ServersNamespace, cfg.DefaultClass)
 	p := panel.New(cfg.PanelURL, cfg.NodeTokenID, cfg.NodeToken, cfg.UserAgent())
 	res := agents.NewResolver(st, cfg.StateCacheTTL)
+	var certs *pki.Dir
+	if cfg.TLSDir != "" {
+		if certs, err = pki.LoadDir(cfg.TLSDir); err != nil {
+			return nil, fmt.Errorf("tls: %w", err)
+		}
+		res.EnableTLS(certs.ClientConfig)
+	}
 	sync := &serversync.Syncer{Store: st, Panel: p, Timezone: cfg.Timezone, Log: logger.With("component", "sync")}
 	sessions := sftprelay.NewSessions(cfg.NodeToken)
-	g := &Gateway{Cfg: cfg, Log: logger, Store: st, Panel: p, Agents: res, Sync: sync, cache: c}
+	g := &Gateway{Cfg: cfg, Log: logger, Store: st, Panel: p, Agents: res, Sync: sync, certs: certs, cache: c}
 	g.PanelAPI = &panelapi.Handler{Cfg: cfg, Store: st, Agents: res, Sync: sync, Log: logger.With("component", "panelapi"), Diagnostics: g.diagnostics}
 	if cfg.MetalLBPools {
 		// Uncached on purpose: the MetalLB CRD may not be installed, and the
@@ -128,9 +138,18 @@ func (g *Gateway) Run(ctx context.Context) error {
 			errc <- fmt.Errorf("panel api: %w", err)
 		}
 	}()
+	if g.certs != nil {
+		// Agents authenticate with their token; the certificate lets them
+		// verify the gateway and encrypts their configuration.
+		remoteSrv.TLSConfig = g.certs.ServerConfig(false)
+	}
 	go func() {
-		g.Log.Info("remote api listening", "addr", g.Cfg.ListenRemote)
-		if err := remoteSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		g.Log.Info("remote api listening", "addr", g.Cfg.ListenRemote, "tls", g.certs != nil)
+		serve := remoteSrv.ListenAndServe
+		if g.certs != nil {
+			serve = func() error { return remoteSrv.ListenAndServeTLS("", "") }
+		}
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- fmt.Errorf("remote api: %w", err)
 		}
 	}()

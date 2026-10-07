@@ -469,7 +469,7 @@
       }
     },
     "tls": {
-      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace (docs/security.md). Turning it on or off recreates every agent pod, and running game pods with them through the usual RecreatePending path.",
+      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace or from cert-manager (docs/security.md). Turning it on or off recreates every agent pod, and running game pods with them through the usual RecreatePending path.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -477,6 +477,68 @@
           "description": "Serve the gateway remote API, the agent API and the shim connections over TLS. The operator creates the CA and issues the certificates; nothing has to be supplied.",
           "type": "boolean",
           "default": false
+        },
+        "ca": {
+          "description": "The internal CA, when cert-manager is not used (ARCHITECTURE.md 12.6).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lifetime": {
+              "description": "Lifetime of the CA the operator creates, as a Go duration.",
+              "allOf": [{"$ref": "#/definitions/goDuration"}],
+              "default": "87600h"
+            },
+            "rotation": {
+              "description": "Automatic replacement of the CA once it enters the last third of its lifetime: the new CA is trusted everywhere first, then signs, then the old one is dropped, with no pod restarted.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "description": "Rotate the CA automatically.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "overlap": {
+                  "description": "How long each rotation step waits for the new trust bundle to reach every pod, as a Go duration.",
+                  "allOf": [{"$ref": "#/definitions/goDuration"}],
+                  "default": "1h"
+                }
+              }
+            }
+          }
+        },
+        "certManager": {
+          "description": "Issue every certificate through cert-manager instead of the internal CA. Needs cert-manager installed and tls.enabled.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Use cert-manager.",
+              "type": "boolean",
+              "default": false
+            },
+            "issuerRef": {
+              "description": "The issuer, as a Certificate's spec.issuerRef. It must issue in both the release and the servers namespace, so use a ClusterIssuer. Empty: the chart creates a self-signed CA in caNamespace and a ClusterIssuer for it.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {"description": "Issuer name.", "type": "string"},
+                "kind": {"description": "Issuer kind; ClusterIssuer when empty.", "type": "string", "enum": ["", "Issuer", "ClusterIssuer"]},
+                "group": {"description": "Issuer API group; cert-manager.io when empty.", "type": "string"}
+              },
+              "default": {}
+            },
+            "caNamespace": {
+              "description": "cert-manager's cluster resource namespace, where a chart-created CA lives.",
+              "type": "string",
+              "default": "cert-manager"
+            },
+            "caDuration": {
+              "description": "Lifetime of a chart-created CA, as a Go duration. cert-manager renews it on its own; see docs/security.md before shortening it.",
+              "allOf": [{"$ref": "#/definitions/goDuration"}],
+              "default": "87600h"
+            }
+          }
         }
       }
     },

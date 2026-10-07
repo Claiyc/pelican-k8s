@@ -23,6 +23,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/serversync"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // Message is the websocket frame format.
@@ -117,7 +118,14 @@ func (p *Proxy) dial(uuid string, t *agents.Target) (*websocket.Conn, error) {
 		header.Set("Origin", p.OriginForAgent)
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
-	agent, resp, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
+	if c := p.Agents.TLSConfig(); c != nil {
+		dial := p.netDial
+		if dial == nil {
+			dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+		}
+		dialer.NetDialTLSContext = pki.TLSDialer(pki.AgentDialer(dial), c)
+	}
+	agent, resp, err := dialer.Dial(t.WSBase()+"/api/servers/"+uuid+"/ws", header)
 	if resp != nil {
 		_ = resp.Body.Close()
 	}

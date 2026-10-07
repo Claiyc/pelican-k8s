@@ -33,6 +33,7 @@ func (h errorStringHandler) HandleLog(e *log.Entry) error {
 func main() {
 	configPath := flag.String("config", "/etc/pelican/config.yml", "Wings configuration file")
 	shimListen := flag.String("shim-listen", ":8082", "TCP address the shim connects to")
+	tlsDir := flag.String("tls-dir", "", "directory with tls.crt, tls.key and ca.crt; serves TLS and requires client certificates")
 	debug := flag.Bool("debug", false, "debug logging")
 	flag.Parse()
 
@@ -46,7 +47,7 @@ func main() {
 	log.SetHandler(errorStringHandler{json.New(os.Stdout)})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimListen: *shimListen, ShimToken: os.Getenv(protocol.TokenEnv), Logger: logger})
+	err := app.Run(ctx, app.Options{ConfigPath: *configPath, ShimListen: *shimListen, ShimToken: os.Getenv(protocol.TokenEnv), TLSDir: *tlsDir, Logger: logger})
 	cancel()
 	if err != nil {
 		logger.Error("agent failed", "error", err)

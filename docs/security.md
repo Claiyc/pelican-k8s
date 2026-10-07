@@ -52,15 +52,32 @@ pods with the namespace UID range, `anyuid` for the installer).
   additional in-cluster allowances.
 - Install Jobs get DNS and the same internet egress, without the in-cluster
   allowances.
-- Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster,
-  protected by NetworkPolicy and bearer tokens. Shim ↔ agent traffic is plain
-  TCP, protected by NetworkPolicy and a mutual handshake keyed with the shim
-  token.
-- None of that traffic is encrypted. NetworkPolicy limits who can connect, not
-  who can read: the design trusts the cluster network against observers.
-  Someone who can capture pod traffic can read an agent token, which is scoped
-  to one server, and console data. Use a CNI with transparent encryption if the
-  network between nodes is not trusted.
+- With `tls.enabled: true` every hop between the components is TLS 1.3 from an
+  internal CA the operator keeps: gateway and operator to the agent's HTTP API
+  (with client certificates, on top of the agent token), the agent to the
+  gateway's remote API, and the shim to the agent (around the shim-token
+  handshake). SFTP between the gateway and the agent is SSH either way.
+  Certificates are renewed by the operator and reloaded without restarts.
+  `tls.ca.rotation.enabled` (default `false`) also replaces the CA before it
+  expires, trusting the new one everywhere before it signs, so nothing
+  restarts. `tls.certManager.enabled` (default `false`) has cert-manager issue
+  every certificate instead, from `tls.certManager.issuerRef` (a ClusterIssuer)
+  or a self-signed CA the chart creates; use an issuer dedicated to
+  pelican-k8s, since agents accept any client certificate it signs for the
+  names `pelican-gateway` and `pelican-operator`. cert-manager renewing that
+  CA with a new key breaks trust until every leaf renews, so give it a long
+  lifetime or distribute its bundle separately (trust-manager).
+  Turning the value on or off recreates every agent pod and, through
+  `RecreatePending`, running game pods. Details, names and rotation:
+  ARCHITECTURE.md §12.6.
+- With `tls.enabled: false` (the default) that traffic is plain HTTP and plain
+  TCP inside the cluster, protected by NetworkPolicy, bearer tokens and the
+  mutual shim handshake. NetworkPolicy limits who can connect, not who can
+  read: someone who can capture pod traffic can read an agent token, which is
+  scoped to one server, the server configuration with its egg variables, and
+  console data. Turn TLS on, or use a CNI with transparent encryption, if the
+  cluster network is not trusted. A CNI that encrypts between nodes does not
+  protect against an observer on the node itself.
 
 ## Blast radius
 

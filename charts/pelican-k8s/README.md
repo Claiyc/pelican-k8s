@@ -49,7 +49,7 @@ file against it when the file starts with
 | `gateway.allowedOrigins` | `[]` | Extra websocket origins |
 | `gateway.externalIPs` | `[]` | Addresses returned by `/api/system/ips` (falls back to the class `exposure.externalIPs`, then the MetalLB pools with `gateway.metallb.discoverPools`, then node addresses) |
 | `gateway.metallb.discoverPools` / `.poolNames` / `.maxAddresses` | `false` / `[]` / `256` | Offer MetalLB `IPAddressPool` addresses from `/api/system/ips` (empty `poolNames` = every pool) |
-| `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` | How agents reach the gateway |
+| `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` (`https://` with `tls.enabled`) | How agents reach the gateway; with `tls.enabled` an `https` URL whose host goes on the gateway's certificate |
 | `gateway.resyncInterval` | `15m` | Panel/cluster drift check |
 | `gateway.agentWait` | `120s` | How long open consoles are held while a server's agent pod is replaced |
 | `gateway.extraCA.configMap` / `.key` | `""` / `ca.crt` | ConfigMap with a PEM CA to trust for the Panel's TLS (private CAs, OpenShift router CA) |
@@ -62,6 +62,12 @@ file against it when the file starts with
 | `gateway.logLevel` / `operator.logLevel` | `info` | `debug` for verbose logs |
 | `operator.concurrency` | `4` | Max concurrent reconciles |
 | `operator.leaderElect` | `true` | Leader election |
+| `tls.enabled` | `false` | TLS between gateway, operator, agents and shims from an internal CA the operator keeps (Secret `<release>-ca`); switching it recreates every agent pod and running game pods |
+| `tls.ca.lifetime` | `87600h` | Lifetime of the internal CA the operator creates |
+| `tls.ca.rotation.enabled` / `.overlap` | `false` / `1h` | Replace the internal CA automatically in its last third of life; each step waits `overlap` for Secrets to reach every pod |
+| `tls.certManager.enabled` | `false` | Issue every certificate through cert-manager instead of the internal CA (needs cert-manager) |
+| `tls.certManager.issuerRef` | `{}` | The issuer, e.g. `{name: corp-ca, kind: ClusterIssuer}`; empty creates a self-signed CA and ClusterIssuer `<release>-ca` |
+| `tls.certManager.caNamespace` / `.caDuration` | `cert-manager` / `87600h` | Namespace and lifetime of the chart-created CA (cert-manager's cluster resource namespace) |
 | `agent.*` | see values | Rendered into the agent's Wings `config.yml` (crash detection, SFTP read-only, log count, upload limit, timezone); `agent.extra` is merged verbatim |
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `agentPriorityClass.create` / `.name` / `.value` | `true` / `pelican-agent` / `1000` | PriorityClass of agent pods (class `agentPriorityClassName`); must rank above game pods |
