@@ -265,7 +265,7 @@ func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
 	defer mu.Unlock()
 	state, err := h.agentState(ctx, uuid)
 	if err != nil {
-		h.Log.Debug("cannot poll the agent, recording the posted state", "uuid", uuid, "state", posted, "error", err)
+		h.Log.Debug("cannot poll the agent, recording the posted state", "uuid", uuid, "error", err)
 		state = posted
 		if _, busy := h.repolling.LoadOrStore(uuid, true); !busy {
 			go h.repollState(context.WithoutCancel(ctx), uuid)
