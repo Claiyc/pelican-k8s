@@ -68,6 +68,10 @@ func main() {
 		HealthProbeBindAddress: *probeAddr,
 		LeaderElection:         *leaderElect,
 		LeaderElectionID:       "pelican-operator.pelican-k8s.io",
+		// Release the Lease on shutdown so a standby replica takes over at once
+		// on a rollout or drain instead of waiting for the Lease to expire. Safe
+		// because main exits as soon as the manager returns.
+		LeaderElectionReleaseOnCancel: true,
 		Cache: cache.Options{
 			// Namespaced objects are watched in the servers namespace only; cluster-scoped
 			// kinds (classes, nodes, namespaces) are unaffected.
