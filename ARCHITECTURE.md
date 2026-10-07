@@ -512,10 +512,13 @@ challenge: each side sends a nonce and answers the other's with HMAC-SHA256 keye
 (`PELICAN_SHIM_TOKEN` from Secret `gs-<uuid>-shim`, in the env of the agent and the game container).
 The shim also sends its pod UID. The agent hands only authenticated connections to Wings, and a newer
 one replaces the previous one; the shim takes commands only from an authenticated agent. The
-NetworkPolicies admit the port only between a server's own two pods (§12.4). The shim makes itself
-non-dumpable (`PR_SET_DUMPABLE=0`) before it reads the token, so a process with the same UID and no
-capabilities cannot read its memory, `/proc/1/environ` or `/proc/1/fd`, and it removes the token from
-the environment it gives the game process. Events reach a connection only after the agent subscribes.
+NetworkPolicies admit the port only between a server's own two pods (§12.4). The game pod's `prepare`
+copies the shim execute-only (mode `0111`, on a read-only mount), and the kernel makes every process
+that runs a file its user cannot read non-dumpable from exec on: the shim itself, and kubelet's
+readiness probe `shim ready`, which inherits the container's environment with the token. A process
+with the same UID and no capabilities therefore cannot read their memory, `/proc/<pid>/environ` or
+`/proc/<pid>/fd`. The shim also sets `PR_SET_DUMPABLE=0` before it reads the token and removes the token
+from the environment it gives the game process. Events reach a connection only after the agent subscribes.
 With `tls.enabled` the connection is TLS: the shim verifies the agent's certificate for the
 `gs-<uuid>-agent` name against the CA bundle at `/pelican/tls/ca.crt` (`--agent-ca`), and the challenge
 runs inside the encrypted connection (§12.6).

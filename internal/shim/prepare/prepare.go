@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -89,11 +90,25 @@ func copySelf(dst string) error {
 	}
 	defer func() { _ = dir.Close() }()
 	name := filepath.Base(dst)
-	out, err := dir.OpenFile(name+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// A leftover copy is execute-only and cannot be reopened for writing.
+	if err := dir.Remove(name + ".tmp"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := dir.OpenFile(name+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	// Execute-only: the kernel makes a process non-dumpable from the moment it
+	// executes a file its user cannot read. The game container's readiness
+	// probe (shim ready) inherits the container environment with the shim
+	// token, and the game process runs as the same UID; non-dumpable, the
+	// probe's /proc/<pid>/environ and memory are closed to it from exec on, as
+	// are the shim's own before it clears the token (ARCHITECTURE.md 6.4).
+	if err := out.Chmod(0o111); err != nil {
 		out.Close()
 		return err
 	}

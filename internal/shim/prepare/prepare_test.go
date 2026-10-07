@@ -72,8 +72,8 @@ func TestLayout(t *testing.T) {
 		t.Fatalf("machine-id %q %v", mid, err)
 	}
 	st, err := os.Stat(l.Bin)
-	if err != nil || st.Mode()&0o111 == 0 || st.Size() == 0 {
-		t.Fatalf("shim binary not copied: %v", err)
+	if err != nil || st.Mode().Perm() != 0o111 || st.Size() == 0 {
+		t.Fatalf("shim binary not copied execute-only: %v %v", st, err)
 	}
 	if err := (Layout{Data: dir}).Run(); err == nil {
 		t.Fatal("expected error without uuid")
