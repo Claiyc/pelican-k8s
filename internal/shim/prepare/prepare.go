@@ -82,8 +82,14 @@ func copySelf(dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// The copy and the rename stay inside dst's directory.
+	dir, err := os.OpenRoot(filepath.Dir(dst))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	name := filepath.Base(dst)
+	out, err := dir.OpenFile(name+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
@@ -94,7 +100,7 @@ func copySelf(dst string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	return dir.Rename(name+".tmp", name)
 }
 
 // Probe resolves the egg image entrypoint by convention and generates passwd
