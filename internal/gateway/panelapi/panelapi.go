@@ -434,7 +434,7 @@ func (h *Handler) deauthorize(w http.ResponseWriter, r *http.Request) {
 // proxy forwards a server-scoped request to its agent.
 func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("server")
-	t, err := h.Agents.Resolve(r.Context(), uuid)
+	t, err := h.Agents.Wait(r.Context(), uuid)
 	if err != nil {
 		h.agentUnavailable(w, err)
 		return
@@ -501,7 +501,7 @@ func (h *Handler) signedProxy(scope string) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "The requested resource was not found on this server.")
 			return
 		}
-		t, err := h.Agents.Resolve(r.Context(), claims.ServerUUID)
+		t, err := h.Agents.Wait(r.Context(), claims.ServerUUID)
 		if err != nil {
 			h.agentUnavailable(w, err)
 			return

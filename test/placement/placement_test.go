@@ -2,7 +2,8 @@
 
 // Package placement checks on a live multi-node cluster that the scheduler,
 // the StatefulSet controller and kubelet place and move the agent pod and the
-// game pod as ARCHITECTURE.md 7.7 describes. hack/e2e-placement.sh sets up the
+// game pod as ARCHITECTURE.md 7.7 describes, and that an open console survives
+// the agent pod's replacement (5.9). hack/e2e-placement.sh sets up the
 // cluster (kind, three workers, storage not bound to a node), the fake Panel
 // and these variables:
 //
@@ -27,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gbrlsnchs/jwt/v3"
+	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -653,6 +656,26 @@ func TestAgentPodDeletedWhileRunning(t *testing.T) {
 	}
 }
 
+// The agent pod goes while a console is open (ARCHITECTURE.md 5.9): the
+// gateway keeps the browser's websocket, asks for a fresh token once the new
+// agent is up, and the new agent accepts it.
+func TestConsoleSurvivesAgentPodDeletion(t *testing.T) {
+	e := load(t)
+	s := e.newServer(t, serverOpts{})
+	agent := s.waitAgent()
+	c := e.console(t, s.uuid)
+	c.auth()
+	c.waitFor("auth success")
+	e.deletePod(t, agent)
+	c.waitFor("token expiring")
+	if a := s.agentPod(); a == nil || a.UID == agent.UID {
+		t.Fatal("the console was moved before the agent pod was replaced")
+	}
+	c.auth()
+	c.waitFor("auth success")
+	c.send("send logs")
+}
+
 // The game pod goes while the game runs: the shim stops the process, and the
 // server runs again in a new game pod.
 func TestGamePodDeletedWhileRunning(t *testing.T) {
@@ -734,4 +757,76 @@ func TestAllocationIPPinsThePair(t *testing.T) {
 		t.Fatalf("game pod on %s, the allocation IP %s is %s's", game.Spec.NodeName, ip, target.Name)
 	}
 	s.sameNode()
+}
+
+// console is a browser's websocket to the gateway.
+type console struct {
+	t    *testing.T
+	e    *env
+	uuid string
+	c    *websocket.Conn
+}
+
+func (e *env) console(t *testing.T, uuid string) *console {
+	t.Helper()
+	u := strings.Replace(e.gateway, "http://", "ws://", 1) + "/api/servers/" + uuid + "/ws"
+	c, res, err := (&websocket.Dialer{HandshakeTimeout: 15 * time.Second}).Dial(u, nil)
+	if res != nil {
+		_ = res.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("dial %s: %v", u, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return &console{t: t, e: e, uuid: uuid, c: c}
+}
+
+func (c *console) send(event string, args ...string) {
+	c.t.Helper()
+	if args == nil {
+		args = []string{}
+	}
+	if err := c.c.WriteJSON(map[string]any{"event": event, "args": args}); err != nil {
+		c.t.Fatalf("send %s: %v", event, err)
+	}
+}
+
+// auth sends a fresh token signed with the node token, as the Panel issues it.
+func (c *console) auth() {
+	c.t.Helper()
+	now := time.Now()
+	tok, err := jwt.Sign(map[string]any{
+		"iss": c.e.panel, "aud": []string{c.e.gateway}, "jti": fmt.Sprintf("placement-%d", now.UnixNano()),
+		"iat": now.Unix(), "nbf": now.Add(-5 * time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
+		"server_uuid": c.uuid, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "unique_id": fmt.Sprintf("u%d", now.UnixNano()), "scope": "websocket",
+		"permissions": []string{"websocket.connect", "control.console"},
+	}, jwt.NewHS256([]byte(c.e.token)))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.send("auth", string(tok))
+}
+
+// waitFor reads frames until one with the event arrives. The gateway holds the
+// console for gateway.agentWait (120 s) before it closes it.
+func (c *console) waitFor(event string) {
+	c.t.Helper()
+	_ = c.c.SetReadDeadline(time.Now().Add(3 * time.Minute))
+	seen := map[string]int{}
+	for {
+		var m struct {
+			Event string   `json:"event"`
+			Args  []string `json:"args"`
+		}
+		if err := c.c.ReadJSON(&m); err != nil {
+			c.t.Fatalf("waiting for %s: %v (seen %v)", event, err, seen)
+		}
+		if m.Event == event {
+			return
+		}
+		if m.Event == "jwt error" || m.Event == "daemon error" {
+			c.t.Fatalf("waiting for %s: %s %v", event, m.Event, m.Args)
+		}
+		seen[m.Event]++
+	}
 }

@@ -45,6 +45,9 @@ gateway:
   # How agents reach the gateway's remote API (in-cluster).
   remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
+  # How long an open console is held while the server's agent pod is replaced
+  # (moved to the game pod's node, recreated with a new template, evicted).
+  agentWait: 120s
   # Extra CA certificate for the Panel's TLS (private CAs, OpenShift router CA):
   # a ConfigMap in the release namespace whose key holds a PEM bundle.
   extraCA:

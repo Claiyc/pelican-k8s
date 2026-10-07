@@ -40,7 +40,10 @@ func expectClose(t *testing.T, c *websocket.Conn, code int) {
 
 func TestPumpClientToAgentFrames(t *testing.T) {
 	s, browser, agent := newTestSession(t)
-	wait := runPump(t, func() { s.pumpClientToAgent(context.Background()) })
+	wait := runPump(t, func() {
+		s.pumpClientToAgent(context.Background())
+		s.detach()
+	})
 
 	// Binary frames are dropped; unparseable text goes through untouched.
 	if err := browser.WriteMessage(websocket.BinaryMessage, []byte{1, 2, 3}); err != nil {
@@ -71,31 +74,62 @@ func TestPumpClientToAgentFrames(t *testing.T) {
 	wait()
 }
 
-func TestPumpClientToAgentStopsOnAgentWriteError(t *testing.T) {
-	t.Run("passthrough", func(t *testing.T) {
-		s, browser, _ := newTestSession(t)
-		_ = s.agent.Close()
-		wait := runPump(t, func() { s.pumpClientToAgent(context.Background()) })
-		if err := browser.WriteJSON(Message{Event: "send command", Args: []string{"say hi"}}); err != nil {
-			t.Fatal(err)
+// A failed write to the agent does not end the browser side: the agent pump
+// notices a dead agent, and a replaced one is reattached.
+func TestPumpClientToAgentSurvivesAgentWriteError(t *testing.T) {
+	s, browser, _ := newTestSession(t)
+	_ = s.agent.Close()
+	wait := runPump(t, func() { s.pumpClientToAgent(context.Background()) })
+	if err := browser.WriteJSON(Message{Event: "send command", Args: []string{"say hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Still reading: a power request without auth is answered.
+	if err := browser.WriteJSON(Message{Event: "set state", Args: []string{"start"}}); err != nil {
+		t.Fatal(err)
+	}
+	if m := readMessage(t, browser); m.Event != "jwt error" {
+		t.Fatalf("browser got %+v, want a jwt error", m)
+	}
+	_ = browser.Close()
+	wait()
+}
+
+// Without an agent (it is being replaced) frames are dropped and auth is only
+// verified.
+func TestPumpClientToAgentWithoutAgent(t *testing.T) {
+	s, browser, agent := newTestSession(t)
+	s.detach()
+	expectClose(t, agent, websocket.CloseNormalClosure)
+	wait := runPump(t, func() { s.pumpClientToAgent(context.Background()) })
+	if err := browser.WriteJSON(Message{Event: "send command", Args: []string{"say hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	tok := signToken(t, testNodeToken, testUUID, time.Now().Add(10*time.Minute))
+	if err := browser.WriteJSON(Message{Event: "auth", Args: []string{tok}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		claims := s.claims
+		s.mu.Unlock()
+		if claims != nil {
+			break
 		}
-		wait()
-	})
-	t.Run("auth", func(t *testing.T) {
-		s, browser, _ := newTestSession(t)
-		_ = s.agent.Close()
-		wait := runPump(t, func() { s.pumpClientToAgent(context.Background()) })
-		tok := signToken(t, testNodeToken, testUUID, time.Now().Add(10*time.Minute))
-		if err := browser.WriteJSON(Message{Event: "auth", Args: []string{tok}}); err != nil {
-			t.Fatal(err)
+		if time.Now().After(deadline) {
+			t.Fatal("auth not verified without an agent")
 		}
-		wait()
-	})
+		time.Sleep(5 * time.Millisecond)
+	}
+	expectNothing(t, browser)
+	_ = browser.Close()
+	wait()
 }
 
 func TestPumpAgentToClient(t *testing.T) {
 	s, browser, agent := newTestSession(t)
-	wait := runPump(t, s.pumpAgentToClient)
+	var agentErr error
+	wait := runPump(t, func() { _, agentErr = s.pumpAgentToClient(s.agent) })
 
 	if err := agent.WriteMessage(websocket.TextMessage, []byte(`{"event":"console output","args":["hi"]}`)); err != nil {
 		t.Fatal(err)
@@ -111,18 +145,21 @@ func TestPumpAgentToClient(t *testing.T) {
 		t.Fatalf("browser got %d %v, %v; want the binary frame", mt, data, err)
 	}
 
-	// The agent's close code and reason reach the browser.
+	// The agent's close is returned to run, which decides what the browser sees.
 	err := agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4000, "bye"), time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectClose(t, browser, 4000)
 	wait()
+	var ce *websocket.CloseError
+	if !errors.As(agentErr, &ce) || ce.Code != 4000 {
+		t.Fatalf("agent error %v, want close 4000", agentErr)
+	}
 }
 
 func TestPumpAgentToClientStopsWhenAgentDropsAbruptly(t *testing.T) {
 	s, _, agent := newTestSession(t)
-	wait := runPump(t, s.pumpAgentToClient)
+	wait := runPump(t, func() { s.pumpAgentToClient(s.agent) })
 	_ = agent.UnderlyingConn().Close()
 	wait()
 }
@@ -130,11 +167,15 @@ func TestPumpAgentToClientStopsWhenAgentDropsAbruptly(t *testing.T) {
 func TestPumpAgentToClientStopsOnClientWriteError(t *testing.T) {
 	s, _, agent := newTestSession(t)
 	_ = s.client.Close()
-	wait := runPump(t, s.pumpAgentToClient)
+	var clientGone bool
+	wait := runPump(t, func() { clientGone, _ = s.pumpAgentToClient(s.agent) })
 	if err := agent.WriteMessage(websocket.TextMessage, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	wait()
+	if !clientGone {
+		t.Fatal("a failed browser write is reported as the browser leaving")
+	}
 }
 
 // run relays both directions and returns as soon as either one ends.

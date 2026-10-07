@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows
 - A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now handles one server's posts one at a time and records the state the agent reports on a fresh poll.
 
 ### Added
+- Open consoles survive an agent pod replacement: the gateway holds the browser's websocket for up to `gateway.agentWait` (default `120s`), moves it to the new agent and asks the Panel for a fresh token. File-manager and other HTTP calls wait up to 10 s for the new agent.
 - The *Placement* workflow (`hack/e2e-placement.sh`, `test/placement`) runs the placement scenarios on a kind cluster with three workers.
 
 ## [1.1.0] - 2026-10-06

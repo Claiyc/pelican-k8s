@@ -134,6 +134,7 @@ func newHarness(t *testing.T) *harness {
 	st := store.New(c, ns, "default")
 	pc := panel.New(cfg.PanelURL, nodeID, nodeToken, cfg.UserAgent())
 	res := agents.NewResolver(st, cfg.StateCacheTTL)
+	res.HTTPWait, res.Poll = 50*time.Millisecond, 10*time.Millisecond
 	// Route "pod IP" lookups to the fake agent: pods are created with the agent's host as IP.
 	sy := &serversync.Syncer{Store: st, Panel: pc, Timezone: "UTC", Log: slog.Default()}
 	sessions := sftprelay.NewSessions(nodeToken)

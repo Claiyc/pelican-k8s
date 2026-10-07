@@ -22,6 +22,7 @@ func setBase(t *testing.T) {
 		"PELICAN_GW_EXTERNAL_IPS", "PELICAN_GW_METALLB_POOLS", "PELICAN_GW_METALLB_POOL_NAMES",
 		"PELICAN_GW_SFTP_HOSTKEY_SECRET", "PELICAN_GW_SFTP_KEY_ONLY", "PELICAN_GW_RESYNC_INTERVAL",
 		"PELICAN_GW_METALLB_MAX_ADDRESSES", "PELICAN_GW_TOKEN_FILE", "PELICAN_GW_TOKEN_ID_FILE",
+		"PELICAN_GW_AGENT_WAIT",
 	} {
 		t.Setenv(k, "")
 	}
@@ -43,7 +44,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	if c.ServersNamespace != "pelican-servers" || c.SystemNamespace != "pelican-system" || c.DefaultClass != "default" {
 		t.Errorf("namespace defaults: %+v", c)
 	}
-	if c.Timezone != "UTC" || c.ResyncInterval != 15*time.Minute || c.StateCacheTTL != 2*time.Second {
+	if c.Timezone != "UTC" || c.ResyncInterval != 15*time.Minute || c.StateCacheTTL != 2*time.Second || c.AgentWait != 2*time.Minute {
 		t.Errorf("misc defaults: %+v", c)
 	}
 	if c.MetalLBPools || c.SFTPKeyOnly || c.AllowedOrigins != nil || c.ExternalIPs != nil {
@@ -61,6 +62,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("PELICAN_GW_METALLB_MAX_ADDRESSES", "42")
 	t.Setenv("PELICAN_GW_SFTP_KEY_ONLY", "true")
 	t.Setenv("PELICAN_GW_RESYNC_INTERVAL", "30s")
+	t.Setenv("PELICAN_GW_AGENT_WAIT", "45s")
 	t.Setenv("TZ", "Europe/Berlin")
 	c, err := FromEnv()
 	if err != nil {
@@ -78,7 +80,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	if !c.MetalLBPools || !reflect.DeepEqual(c.MetalLBPoolNames, []string{"p1", "p2"}) || c.MetalLBMaxAddresses != 42 {
 		t.Errorf("metallb settings: %+v", c)
 	}
-	if !c.SFTPKeyOnly || c.ResyncInterval != 30*time.Second || c.Timezone != "Europe/Berlin" {
+	if !c.SFTPKeyOnly || c.ResyncInterval != 30*time.Second || c.Timezone != "Europe/Berlin" || c.AgentWait != 45*time.Second {
 		t.Errorf("misc: %+v", c)
 	}
 }
@@ -87,6 +89,7 @@ func TestFromEnvInvalidValues(t *testing.T) {
 	for _, tc := range []struct{ key, val string }{
 		{"PELICAN_GW_RESYNC_INTERVAL", "soon"},
 		{"PELICAN_GW_METALLB_MAX_ADDRESSES", "many"},
+		{"PELICAN_GW_AGENT_WAIT", "a while"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			setBase(t)

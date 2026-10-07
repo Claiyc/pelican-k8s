@@ -120,6 +120,51 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+// Wait holds a call while the agent pod is not ready and gives up after
+// HTTPWait.
+func TestWait(t *testing.T) {
+	ctx := context.Background()
+	t.Run("agent becomes ready", func(t *testing.T) {
+		c := newClient(t, agentPod("10.0.0.1", false), agentSecret())
+		r := NewResolver(store.New(c, testNS, "default"), time.Second)
+		r.HTTPWait, r.Poll = 5*time.Second, 10*time.Millisecond
+		errc := make(chan error, 1)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			if err := c.Delete(ctx, agentPod("10.0.0.1", false)); err != nil {
+				errc <- err
+				return
+			}
+			errc <- c.Create(ctx, agentPod("10.0.0.1", true))
+		}()
+		got, err := r.Wait(ctx, testUUID)
+		if err := <-errc; err != nil {
+			t.Fatal(err)
+		}
+		if err != nil || got.PodIP != "10.0.0.1" {
+			t.Fatalf("Wait = %+v, %v; want the agent once it is ready", got, err)
+		}
+	})
+	t.Run("gives up", func(t *testing.T) {
+		r := NewResolver(store.New(newClient(t, agentSecret()), testNS, "default"), time.Second)
+		r.HTTPWait, r.Poll = 50*time.Millisecond, 10*time.Millisecond
+		start := time.Now()
+		if _, err := r.Wait(ctx, testUUID); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+		if time.Since(start) < 50*time.Millisecond {
+			t.Fatal("Wait returned before HTTPWait")
+		}
+	})
+	t.Run("other errors are returned at once", func(t *testing.T) {
+		r := NewResolver(store.New(newClient(t, agentPod("10.0.0.1", true)), testNS, "default"), time.Second)
+		r.HTTPWait = time.Hour
+		if _, err := r.Wait(ctx, testUUID); err == nil || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want the missing secret", err)
+		}
+	})
+}
+
 func TestProxy(t *testing.T) {
 	var gotAuth, gotXFF, gotHost, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

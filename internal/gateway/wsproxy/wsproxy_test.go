@@ -52,7 +52,7 @@ func newTestSession(t *testing.T) (s *session, browser, agent *websocket.Conn) {
 	t.Helper()
 	clientConn, browser := wsPair(t)
 	agentConn, agent := wsPair(t)
-	p := &Proxy{Cfg: &config.Config{NodeToken: testNodeToken}}
+	p := &Proxy{Cfg: &config.Config{NodeToken: testNodeToken}, grace: time.Millisecond, pollEvery: time.Millisecond}
 	return &session{p: p, uuid: testUUID, agentToken: testAgentToken, client: clientConn, agent: agentConn}, browser, agent
 }
 
@@ -112,9 +112,7 @@ func TestHandleAuthRejectsWithJWTError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, browser, agent := newTestSession(t)
-			if err := s.handleAuth(Message{Event: "auth", Args: []string{tt.token}}); err != nil {
-				t.Fatalf("handleAuth: %v", err)
-			}
+			s.handleAuth(Message{Event: "auth", Args: []string{tt.token}})
 			m := readMessage(t, browser)
 			if m.Event != "jwt error" || len(m.Args) != 1 {
 				t.Fatalf("browser got %+v, want one jwt error", m)
@@ -139,9 +137,7 @@ func TestHandleAuthForwardsResignedToken(t *testing.T) {
 	s, browser, agent := newTestSession(t)
 	tok := signToken(t, testNodeToken, testUUID, time.Now().Add(10*time.Minute))
 
-	if err := s.handleAuth(Message{Event: "auth", Args: []string{tok}}); err != nil {
-		t.Fatalf("handleAuth: %v", err)
-	}
+	s.handleAuth(Message{Event: "auth", Args: []string{tok}})
 
 	m := readMessage(t, agent)
 	if m.Event != "auth" || len(m.Args) != 1 {
@@ -163,13 +159,18 @@ func TestHandleAuthForwardsResignedToken(t *testing.T) {
 	expectNothing(t, browser)
 }
 
-func TestHandleAuthReturnsAgentWriteError(t *testing.T) {
-	s, _, _ := newTestSession(t)
-	_ = s.agent.Close()
+// While the agent is being replaced an auth frame is only verified: its claims
+// are kept for power requests and nothing is forwarded.
+func TestHandleAuthWithoutAgent(t *testing.T) {
+	s, browser, agent := newTestSession(t)
+	s.detach()
+	expectClose(t, agent, websocket.CloseNormalClosure)
 	tok := signToken(t, testNodeToken, testUUID, time.Now().Add(10*time.Minute))
-	if err := s.handleAuth(Message{Event: "auth", Args: []string{tok}}); err == nil {
-		t.Fatal("expected the failed agent write to be returned")
+	s.handleAuth(Message{Event: "auth", Args: []string{tok}})
+	if s.claims == nil || s.claims.ServerUUID != testUUID {
+		t.Fatalf("session claims not stored: %+v", s.claims)
 	}
+	expectNothing(t, browser)
 }
 
 // TestPumpClientToAgent covers the loop around handleAuth: auth is re-signed,
