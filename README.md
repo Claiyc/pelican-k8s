@@ -105,6 +105,7 @@ kubectl -n pelican-servers describe gameserver gs-<uuid>   # conditions and even
 | [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and tested platforms |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
 | [docs/development.md](docs/development.md) | Building, testing, the code map, the Wings fork and its hooks, release process |
+| [docs/v2-plan.md](docs/v2-plan.md) | Temporary: the work that brings the code in line with the split-pod design these documents describe |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
 | [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Wings ⇄ Panel protocol reference |
 
