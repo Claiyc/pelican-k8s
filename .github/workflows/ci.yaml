@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, main, v2]
+    branches: [master, main]
   # The generated release PR (release-pr.yaml) is rewritten on every push to
   # master and adds nothing master's own run has not checked, so it runs
   # nothing while it is a draft; marking it ready starts the checks.
