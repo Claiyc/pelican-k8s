@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -417,6 +419,32 @@ func TestResetServersState(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("waits while the agent pod cannot be read", func(t *testing.T) {
+		fp := fakepanel.New(nodeID, nodeToken)
+		ps := httptest.NewServer(fp.Handler())
+		defer ps.Close()
+		gs := gameServer(uuid)
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/0"}}
+		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
+		g.Store.Client = interceptor.NewClient(g.Store.Client.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { g.resetServersState(ctx); close(done) }()
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		<-done
+		if n := len(fp.CallsMatching("/servers/reset")); n != 0 {
+			t.Fatalf("reset sent while the restore could still run (%d calls)", n)
+		}
+	})
 
 	// A restore of an earlier agent instance ended with it.
 	t.Run("resets after a restore of a replaced agent", func(t *testing.T) {
