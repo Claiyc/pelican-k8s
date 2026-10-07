@@ -798,7 +798,7 @@ func (c *console) auth() {
 	tok, err := jwt.Sign(map[string]any{
 		"iss": c.e.panel, "aud": []string{c.e.gateway}, "jti": fmt.Sprintf("placement-%d", now.UnixNano()),
 		"iat": now.Unix(), "nbf": now.Add(-5 * time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
-		"server_uuid": c.uuid, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "unique_id": fmt.Sprintf("u%d", now.UnixNano()),
+		"server_uuid": c.uuid, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "unique_id": fmt.Sprintf("u%d", now.UnixNano()), "scope": "websocket",
 		"permissions": []string{"websocket.connect", "control.console"},
 	}, jwt.NewHS256([]byte(c.e.token)))
 	if err != nil {
