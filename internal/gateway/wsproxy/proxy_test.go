@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -52,6 +53,9 @@ type env struct {
 	agentOrigin chan string
 	agentConn   chan *websocket.Conn
 	agentRecv   chan string
+
+	dialedMu sync.Mutex
+	dialed   []string // agent addresses the proxy dialed
 }
 
 type opts struct {
@@ -107,15 +111,7 @@ func newEnv(t *testing.T, o opts) *env {
 	}
 	e := &env{t: t, c: c, st: st, agentOrigin: make(chan string, 4), agentConn: make(chan *websocket.Conn, 4), agentRecv: make(chan string, 64)}
 	if !o.noPod && !o.noServer {
-		started := true
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
-		if err := c.Create(context.Background(), pod); err != nil {
-			t.Fatal(err)
-		}
-		pod.Status = corev1.PodStatus{PodIP: "127.0.0.1", ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
-		if err := c.Status().Update(context.Background(), pod); err != nil {
-			t.Fatal(err)
-		}
+		e.createAgentPod("pod-1", "127.0.0.1")
 		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(uuid), Namespace: ns}, Data: map[string][]byte{"token_id": []byte("agentid"), "token": []byte(agentTok)}}
 		if err := c.Create(context.Background(), sec); err != nil {
 			t.Fatal(err)
@@ -144,18 +140,52 @@ func newEnv(t *testing.T, o opts) *env {
 	agentAddr := e.agentSrv.Listener.Addr().String()
 
 	res := agents.NewResolver(st, time.Second)
+	res.HTTPWait, res.Poll = 100*time.Millisecond, 10*time.Millisecond
 	e.proxy = &Proxy{Cfg: cfg, Store: st, Agents: res, Sync: sy, Log: slog.Default(), OriginForAgent: o.agentOrig,
-		netDial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		netDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			e.dialedMu.Lock()
+			e.dialed = append(e.dialed, addr)
+			e.dialedMu.Unlock()
 			if o.agentDown {
 				return nil, errors.New("agent down")
 			}
 			return (&net.Dialer{}).DialContext(ctx, network, agentAddr)
-		}}
+		},
+		pollEvery: 10 * time.Millisecond, grace: 50 * time.Millisecond}
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/servers/{server}/ws", e.proxy)
 	e.srv = httptest.NewServer(mux)
 	t.Cleanup(e.srv.Close)
 	return e
+}
+
+// createAgentPod creates a ready agent pod with the given UID and IP.
+func (e *env) createAgentPod(uid, ip string) {
+	e.t.Helper()
+	started := true
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: types.UID(uid)}}
+	if err := e.c.Create(context.Background(), pod); err != nil {
+		e.t.Fatal(err)
+	}
+	pod.Status = corev1.PodStatus{PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
+	if err := e.c.Status().Update(context.Background(), pod); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// replaceAgentPod deletes the agent pod and closes the agent's websocket the
+// way a stopping agent does.
+func (e *env) replaceAgentPod(agent *websocket.Conn) {
+	e.t.Helper()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
+	if err := e.c.Delete(context.Background(), pod); err != nil {
+		e.t.Fatal(err)
+	}
+	_ = agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, ""), time.Now().Add(time.Second))
+	_ = agent.Close()
+	if got := e.nextAgent(); !strings.HasPrefix(got, "closed:") {
+		e.t.Fatalf("old agent connection should end, saw %q", got)
+	}
 }
 
 func (e *env) dial(uuid string, hdr http.Header) (*websocket.Conn, *http.Response, error) {
@@ -623,4 +653,63 @@ func TestSetStateExpiredToken(t *testing.T) {
 		t.Fatal("power changed with an expired token")
 	}
 	_ = conn
+}
+
+// The browser's console survives an agent pod replacement: frames sent in the
+// gap are dropped, set state still works, and once the new agent is dialed the
+// browser is asked for a fresh token, which goes to the new agent re-signed.
+func TestConsoleHeldAcrossAgentReplacement(t *testing.T) {
+	e := newEnv(t, opts{})
+	conn := e.connect()
+	agent := e.waitAgent()
+	send(t, conn, "auth", token(t, nodeToken, validClaims("*")))
+	_ = e.nextAgent()
+
+	e.replaceAgentPod(agent)
+	send(t, conn, "send command", "dropped")
+	send(t, conn, "set state", "start")
+	if p := e.waitPower(func(p v1alpha1.PowerSpec) bool { return p.Desired == v1alpha1.PowerRunning }); p.Desired != v1alpha1.PowerRunning {
+		t.Fatalf("set state in the gap -> %+v", p)
+	}
+
+	// The new pod has a new address; the test dialer reaches the same fake agent.
+	e.createAgentPod("pod-2", "127.0.0.2")
+	e.waitAgent()
+	e.dialedMu.Lock()
+	last := e.dialed[len(e.dialed)-1]
+	e.dialedMu.Unlock()
+	if last != "127.0.0.2:8080" {
+		t.Fatalf("redialed %s, want the new pod's address", last)
+	}
+	if m := readMsg(t, conn); m.Event != "token expiring" {
+		t.Fatalf("browser got %+v, want token expiring", m)
+	}
+	send(t, conn, "auth", token(t, nodeToken, validClaims("*")))
+	var m Message
+	if err := json.Unmarshal([]byte(e.nextAgent()), &m); err != nil || m.Event != "auth" {
+		t.Fatalf("new agent's first frame is %+v (%v), want the auth frame", m, err)
+	}
+	if _, _, err := jwtx.Verify([]byte(m.Args[0]), []byte(agentTok)); err != nil {
+		t.Fatalf("forwarded token does not verify with the agent token: %v", err)
+	}
+	send(t, conn, "send logs")
+	if got := e.nextAgent(); !strings.Contains(got, "send logs") {
+		t.Fatalf("new agent got %q, want send logs", got)
+	}
+}
+
+func TestConsoleClosedWhenAgentDoesNotReturn(t *testing.T) {
+	e := newEnv(t, opts{})
+	e.proxy.Cfg.AgentWait = 100 * time.Millisecond
+	conn := e.connect()
+	agent := e.waitAgent()
+	e.replaceAgentPod(agent)
+	if m := readMsg(t, conn); m.Event != "daemon error" || m.Args[0] != "the server agent is unavailable" {
+		t.Fatalf("got %+v", m)
+	}
+	_, _, err := conn.ReadMessage()
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != websocket.CloseTryAgainLater {
+		t.Fatalf("want close 1013, got %v", err)
+	}
 }
