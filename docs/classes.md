@@ -4,9 +4,11 @@ A `GameServerClass` is cluster-scoped, admin-owned policy. Every `GameServer`
 references one through `spec.className` (the gateway writes the chart's
 default class name). Panel settings decide *what* a server is; the class
 decides *how* it runs on this cluster. Changing a class re-renders every server
-using it. A stopped server has no game pod and picks the change up at its next
-start; a running one gets new pods at the next safe point (when the process is
-offline).
+using it. A stopped server has no game pod and picks a game pod change up at
+its next start; a running one gets a new game pod once the process is offline.
+A change to the agent pod (agent image or resources, scratch type, security)
+replaces the agent pod once the process is offline and the agent has no
+in-flight work.
 
 ```yaml
 apiVersion: pelican-k8s.io/v1alpha1
@@ -35,7 +37,7 @@ spec:
 | `overheadPercent` | 10 | PVC = `disk_space × (1 + overhead)`: room for logs, activity DB, install output |
 | `scratch.type` | `Ephemeral` | `Ephemeral` (generic ephemeral volume) or `EmptyDir` for backup archives and agent temp files; part of the agent pod |
 | `scratch.storageClassName` | `storageClassName` | Class of the ephemeral scratch volume |
-| `scratch.sizeGiB` | 0 = PVC size | An archive can be as large as the server |
+| `scratch.sizeGiB` | 0 = PVC size | An archive can be as large as the server; a changed size applies when the agent pod is next replaced |
 | `deletionPolicy` | `Delete` | `Delete`, `Retain` (PVC orphaned and labelled `pelican-k8s.io/orphaned-at`) or `SnapshotThenDelete` |
 | `volumeSnapshotClassName` | cluster default | `VolumeSnapshotClass` for `SnapshotThenDelete` and `snapshotSchedule` |
 | `snapshotSchedule` | | Cron expression for crash-consistent `VolumeSnapshot`s per server |

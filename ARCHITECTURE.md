@@ -937,7 +937,11 @@ spec:
 ```
 
 The game pod never mounts the PVC root. The template hash leaves out the game container's resources
-(resized in place) and both pods' affinity (set per start, §7.7).
+(resized in place) and the placement toward the other pod (the game pod's pod affinity and the agent
+pod's node affinity, set per start, §7.7); the game pod's node affinity to the allocation nodes (§9.3)
+is part of it. The agent pod's hash also leaves out what follows Panel edits of the server (its name,
+its egg label and the scratch size derived from `disk_space`): those reach the agent pod when it is
+next replaced and do not replace it by themselves.
 
 **Egg environment.** The game process gets its environment from the agent (`start{env}`, built by
 Wings' `Environment()` from the server configuration the gateway assembles from `spec.panel` and the
@@ -981,7 +985,7 @@ older than the one it wrote.
 | `build.disk_space` | Expand the PVC; a smaller value sets `DiskShrinkRefused` |
 | `allocations`, `container.image`, server name, any other game pod template change | Update the exposure Service and the NetworkPolicies at once. With a game pod: `RecreatePending`; the game pod is deleted when the process is `offline` (§8.5), and a pod whose game container never started is replaced at once. Without one: nothing |
 | Agent pod template change (agent image, class agent resources, …) | `RecreatePending`; the agent pod is deleted when the process is `offline` and the agent has no in-flight work (§7.7) |
-| `power.restartRequest` bump | Once the process is offline, delete the game pod and the agent pod |
+| `power.restartRequest` bump | Once the process is offline, delete the game pod, and the agent pod once the agent has no in-flight work (§7.7) |
 | Game container terminated (`lastState.terminated`) | `POST /internal/v1/exit-state` with the exit code and `OOMKilled` (§6.4) |
 | A pod `Terminating` on a `NotReady` node, `failover.forceDeleteAfter` set | `NodeLost`; force-delete the agent pod and the game pod once the deletion is older than that duration (§14) |
 | CR deleted | Finalizer (§8.8) |
@@ -1381,7 +1385,7 @@ address. Inside a pod the node or LB IP is not bindable, so:
 - **Scratch volume** (class `storage.scratch`): a generic ephemeral volume (or emptyDir) mounted in the
   agent at `/scratch`, holding Wings' `archive_directory`, `backup_directory` and `tmp_directory`. Its
   default size equals the server PVC size, since an archive can be as large as the server. It is created
-  and deleted with the agent pod.
+  and deleted with the agent pod, so a changed size applies when the agent pod is next replaced.
 
 ### 10.2 Expansion
 

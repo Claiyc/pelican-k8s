@@ -329,6 +329,18 @@ func TestTemplateHash(t *testing.T) {
 	same("agent resources", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Resources.Agent.Memory = resource.MustParse("256Mi") })), false)
 	// The game image is not part of the agent pod.
 	same("game image in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Image = "other@sha256:def" })), true)
+	// Panel edits of the server do not replace its agent pod.
+	same("disk size in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Build.DiskSpace = 99999 })), true)
+	same("server name in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Meta.Name = "renamed" })), true)
+	same("egg in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Egg.ID = "another-egg" })), true)
+	same("disk size in the emptyDir agent", AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir })),
+		AgentPodTemplate(testInput(t, func(i *Input) {
+			i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir
+			i.Settings.Build.DiskSpace = 99999
+		})), true)
+	same("scratch type", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir })), false)
+	// The game pod is still replaced for a rename while it runs.
+	same("server name in the game", game, GamePodTemplate(testInput(t, func(i *Input) { i.Settings.Meta.Name = "renamed" })), false)
 }
 
 // The shim dials the agent over TCP and writes its readiness file to
