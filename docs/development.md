@@ -10,6 +10,10 @@ make images           # docker build of the four images (build/*.Dockerfile)
 ```
 
 Go 1.27 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
+CI builds and pushes both architectures on pushes to master; on a pull
+request it builds the images for `linux/amd64` only (for the Trivy scan) and
+cross-compiles the binaries for `linux/arm64`. A new push to a pull request
+cancels the CI, Contract and CodeQL runs still going for the previous one.
 
 ## Tests
 
