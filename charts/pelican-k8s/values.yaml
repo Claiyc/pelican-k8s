@@ -29,8 +29,10 @@ gateway:
   nodeSelector: {}
   tolerations: []
   # Keeps at most maxUnavailable replicas down during voluntary disruptions
-  # (drains, cluster upgrades). maxUnavailable rather than minAvailable, so a
-  # drain is never blocked even with replicas: 1.
+  # (drains, cluster upgrades). maxUnavailable rather than minAvailable, so
+  # replicas: 1 can still be drained. A drain waits for an evicted replica to
+  # run elsewhere before evicting the next, so draining the only schedulable
+  # node with both replicas on it waits until another node is available.
   podDisruptionBudget:
     enabled: true
     maxUnavailable: 1
