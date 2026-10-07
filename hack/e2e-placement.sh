@@ -48,7 +48,7 @@ trap cleanup EXIT
 
 log "kind cluster $CLUSTER ($KIND_IMAGE, three workers)"
 "$KIND" delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-mkdir -p "$SHARED" && chmod 0777 "$SHARED"
+mkdir -p "$SHARED"
 "$KIND" create cluster --name "$CLUSTER" --image "$KIND_IMAGE" --config hack/kind-placement.yaml --wait 180s
 kubectl get nodes -o wide
 
