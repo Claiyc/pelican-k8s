@@ -24,7 +24,7 @@
       "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     },
     "image": {
-      "description": "Images of the gateway, operator, agent and shim. Every image is `<registry>/<component>:<tag>`; the agent and shim images are written into the default GameServerClass and injected into game pods by the operator.",
+      "description": "Images of the gateway, operator, agent and shim. Every image is `<registry>/<component>:<tag>`; the agent and shim images are written into the default GameServerClass, and the operator runs them in agent pods and game pods.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -56,7 +56,7 @@
       }
     },
     "serversNamespace": {
-      "description": "The namespace holding GameServer objects, game pods, their volumes and install Jobs. It is separate from the release namespace (which holds the gateway and operator).",
+      "description": "The namespace holding GameServer objects, agent pods, game pods, their volumes and install Jobs. It is separate from the release namespace (which holds the gateway and operator).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -352,7 +352,7 @@
       }
     },
     "agent": {
-      "description": "The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config in the servers namespace and read by the agent sidecar of every game pod.",
+      "description": "The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config in the servers namespace and read by the agent pod of every server.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -406,6 +406,34 @@
           "type": "object",
           "default": {},
           "examples": [{"system": {"activity_send_interval": 60}}]
+        }
+      }
+    },
+    "agentPriorityClass": {
+      "description": "PriorityClass of agent pods, written into the default class as agentPriorityClassName. It must rank above game pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "description": "Create the PriorityClass (preemptionPolicy PreemptLowerPriority, not the global default). With false, a PriorityClass named `name` must exist.",
+          "type": "boolean",
+          "default": true
+        },
+        "name": {
+          "description": "Name of the PriorityClass. Names starting with `system-` are reserved by Kubernetes.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "not": {"pattern": "^system-"},
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "default": "pelican-agent"
+        },
+        "value": {
+          "description": "Priority value. Must exceed the priority of game pods (defaultClass.spec.priorityClassName, 0 when unset). User-defined classes are limited to 1000000000.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 1000000000,
+          "default": 1000
         }
       }
     },
@@ -698,7 +726,7 @@
       }
     },
     "gameServerClassSpec": {
-      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap and serviceAccountName are filled in by the chart and cannot be set here.",
+      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap, serviceAccountName, agentServiceAccountName and agentPriorityClassName are filled in by the chart and cannot be set here; agentPriorityClassName comes from agentPriorityClass.name.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -845,7 +873,7 @@
               "default": true
             },
             "inClusterEgress": {
-              "description": "In-cluster destinations game pods may reach despite blockedEgressCIDRs.",
+              "description": "In-cluster destinations game and agent pods may reach despite blockedEgressCIDRs.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
@@ -878,7 +906,7 @@
               }
             },
             "blockedEgressCIDRs": {
-              "description": "IPv4 ranges excluded from the internet egress of game pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
+              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
               "type": "array",
               "items": {"$ref": "#/definitions/ipv4CIDR"},
               "default": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]
@@ -944,7 +972,7 @@
               "default": 100
             },
             "agent": {
-              "description": "Resources of the agent sidecar in every game pod.",
+              "description": "Resources of the agent pod of every server. This is all a stopped server requests.",
               "allOf": [{"$ref": "#/definitions/containerResources"}],
               "default": {"cpu": "50m", "memory": "128Mi", "memoryLimit": "512Mi"}
             }
@@ -1023,7 +1051,7 @@
           "additionalProperties": false,
           "properties": {
             "forceDeleteAfter": {
-              "description": "Force-delete a game pod stuck Terminating on a NotReady node after this Go duration (`5m`), so it reschedules. Empty never does. Safe only when the storage fences the old node or the node is confirmed down.",
+              "description": "Force-delete a server's pods stuck Terminating on a NotReady node after this Go duration (`5m`), so it reschedules. Empty never does. Safe only when the storage fences the old node or the node is confirmed down.",
               "anyOf": [{"type": "string", "const": ""}, {"$ref": "#/definitions/goDuration"}],
               "default": ""
             }
@@ -1040,7 +1068,7 @@
               "default": false
             },
             "pullSecrets": {
-              "description": "Names of Secrets in the servers namespace used for registry lookups and as imagePullSecrets of game pods.",
+              "description": "Names of Secrets in the servers namespace used for registry lookups and as imagePullSecrets of agent pods, game pods and install Jobs.",
               "type": "array",
               "items": {"$ref": "#/definitions/dnsSubdomain"},
               "default": []
@@ -1072,18 +1100,30 @@
           "minimum": 0,
           "default": 660
         },
+        "scheduling": {
+          "description": "Placement of game pods relative to their agent pod (ARCHITECTURE.md 7.7).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preferAgentNode": {
+              "description": "Give the game pod a preferred pod affinity toward the node of its agent pod, so the agent moves only when that node does not fit. false gives the agent's node no advantage, so the agent moves more often.",
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
         "suspendScalesToZero": {
-          "description": "Delete the pod of a server suspended in the Panel instead of keeping it stopped.",
+          "description": "Run no agent pod for a server suspended in the Panel.",
           "type": "boolean",
           "default": false
         },
         "nodeSelector": {
-          "description": "Node selector of game pods.",
+          "description": "Node selector of agent pods, game pods and install Jobs.",
           "allOf": [{"$ref": "#/definitions/stringMap"}],
           "default": {}
         },
         "tolerations": {
-          "description": "Tolerations of game pods.",
+          "description": "Tolerations of agent pods, game pods and install Jobs.",
           "type": "array",
           "items": {"$ref": "#/definitions/toleration"},
           "default": []
