@@ -51,7 +51,7 @@ owned by the gateway and overwritten on the next Panel sync.
 | Game container OOM-killed | kubelet restarts the container; the operator relays the exit to the agent; Wings' crash handler restarts the process (unless the previous crash was < 60 s ago) |
 | Process crashes and Wings does not restart it (second crash within 60 s, clean exit, crash detection off) | the Panel shows the server as offline; after a minute `desired` becomes `Stopped` and the game pod is removed |
 | Agent container restarts, or the agent pod is replaced | the game keeps running; the shim reconnects and the agent re-attaches. Open consoles stay connected through the gateway |
-| Agent moves to another node | only before a start, and never while it has in-flight work (transfers, backups, installs, active SFTP). Consoles stay connected; idle SFTP sessions reconnect; local-adapter backups are lost |
+| Agent moves to another node | only before a start, and never while it has in-flight work (transfers, backups, installs, active SFTP). Consoles stay connected; idle SFTP sessions end and the client has to connect again; local-adapter backups are lost |
 | Gateway restarts | live console and SFTP sessions drop and reconnect; no state is lost |
 | Operator restarts | reconciles are idempotent |
 | Panel server deleted | CR deleted; the operator's finalizer stops the process, removes the workload and applies the class deletion policy to the volume |
@@ -70,9 +70,11 @@ server's pods are recreated (or use `deletionPolicy: Retain` and swap the PVC).
 
 1. `kubectl apply -f charts/pelican-k8s/crds` (Helm does not upgrade CRDs).
 2. `helm upgrade pelican-k8s charts/pelican-k8s -n pelican-system -f values.yaml`.
-3. New shim/agent images change the pod templates. A stopped server's agent pod
-   is recreated at once, and its next start uses the new shim. A running server
-   keeps both until its process is offline (`RecreatePending`).
+3. New shim/agent images change the pod templates (`RecreatePending`). An agent
+   pod is recreated when the server's process is offline and the agent has no
+   in-flight work (transfers, backups, installs, active SFTP). A stopped server's
+   next start uses the new shim; a running server's game pod is replaced once its
+   process is offline.
 
 Upgrading the Panel is independent; re-run the compatibility checks in
 `test/upstream` when bumping the pinned Wings version.

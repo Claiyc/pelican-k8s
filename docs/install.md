@@ -181,7 +181,7 @@ Panel console and to `logs/install/<uuid>.log` on the server volume.
 
 ## 5. OpenShift
 
-Set `openshift.enabled=true`. This binds `restricted-v2` to the game
+Set `openshift.enabled=true`. This binds `restricted-v2` to the game and agent
 ServiceAccounts and `anyuid` to the installer ServiceAccount, makes the operator
 pick the namespace's UID range (`openshift.io/sa.scc.uid-range`) as the pinned
 UID, and drops the seccomp profile from install pods (the `anyuid` SCC rejects

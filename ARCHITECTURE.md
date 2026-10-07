@@ -943,8 +943,8 @@ game pod's own address (§9.4).
 
 **Image pinning.** With `pinDigest` the operator resolves the tag to a digest (registry `HEAD`, the
 operator's own registry credentials, results cached for 5 minutes) when it creates a game pod, so
-every start runs what the tag points to at that time, like Wings' pull before each start. An existing
-game pod keeps its digest until the tag in the spec changes. A failed lookup uses the tag and emits a
+every start from stopped runs what the tag points to at that time. An existing game pod keeps its
+digest until the tag in the spec changes: a `restart` and a crash restart reuse the pod and its image. A failed lookup uses the tag and emits a
 `DigestLookupFailed` event. The game container's `imagePullPolicy` is `Always` unless the image is
 digest-pinned; a `~` prefix on the image (Wings' "never pull") disables pinning and uses `IfNotPresent`.
 
@@ -1026,7 +1026,8 @@ into the agent StatefulSet's template.
   so the agent of a stopped server can be rescheduled anywhere after an eviction or a drain.
 
 Agent pods run with `agentPriorityClassName` (the chart's PriorityClass `pelican-agent`), above game
-pods, so an agent that follows its game pod to a full node preempts instead of staying `Pending`.
+pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there. It
+stays `Pending`, and the server in `Starting`, only when the node has nothing the scheduler may evict.
 
 **Lost pods.**
 - The agent pod goes while the game runs (eviction, deletion): it comes back on the same node because
@@ -1430,11 +1431,12 @@ Wings' compress, decompress and archive code on large servers.
 **Blast radius of a compromised game process** (arbitrary egg code, RCE in a game):
 - it can read and modify its own server files; the rest of the volume (activity, logs, install state)
   is not mounted in its pod
-- it can use the game pod's egress (limited by the NetworkPolicy), which reaches its own agent on the
-  shim port and nothing else of pelican-k8s
+- it can use the game pod's egress (limited by the NetworkPolicy): the internet, its own agent on the
+  shim port, and what the class allows inside the cluster (other game pods with
+  `inClusterEgress.gameServers`, on by default, and the `inClusterEgress.additional` destinations)
 - it can connect to the agent's shim port, but it cannot pass the handshake (the shim token is out of
   its reach, §6.4), so process state, stats and exit codes come from the shim
-- it **cannot** reach the gateway's remote API, the agent's HTTP or SFTP ports, other servers' agents,
+- it **cannot** reach the gateway, the operator, the agent's HTTP or SFTP ports, other servers' agents,
   the Panel, the Kubernetes API (no token), the agent token or the node token
 
 A compromised **agent** holds its own Wings token and the shim token. It can mint browser tokens for its
@@ -1505,7 +1507,9 @@ enforce the workload shapes:
   token replay and denylist checks are Wings code in the agent.
 - Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster, protected by
   NetworkPolicy and bearer tokens. Shim ↔ agent traffic is plain TCP, protected by NetworkPolicy and the
-  mutual shim-token handshake.
+  mutual shim-token handshake. None of it is encrypted: NetworkPolicy limits who can connect, not who
+  can read. The design trusts the cluster network against observers; someone who can capture pod
+  traffic can read an agent token (scoped to one server) and console data.
 - Registry credentials: class `imageResolution.pullSecrets` (Secrets in the servers namespace) as
   `imagePullSecrets` of agent pods, game pods and install Jobs.
 

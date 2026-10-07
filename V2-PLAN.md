@@ -1,6 +1,6 @@
 # pelican-k8s v2 plan
 
-**Temporary document.** [ARCHITECTURE.md](../ARCHITECTURE.md) and the other docs describe the
+**Temporary document.** [ARCHITECTURE.md](ARCHITECTURE.md) and the other docs describe the
 split-pod design as the system is meant to work. The code on `master` still implements the
 single-pod design of 1.x. This file lists the work that closes the gap. Delete it when Part 2 has
 shipped.
@@ -35,7 +35,8 @@ shipped.
   normalises the score, so any weight behaves the same.
 - **Required affinity while the agent has in-flight work**, so a move never breaks a transfer,
   backup, restore, install or active SFTP session.
-- **Agent priority class above game pods**, so the agent always fits on the game pod's node.
+- **Agent priority class above game pods**, so an agent that follows its game pod can preempt
+  lower-priority pods on that node.
 - **No live migration.** Moving a running server is stop, reschedule, start.
 - **No migration path from 1.x.** 2.0 is a major release. The operator replaces every 1.x pod at
   upgrade; a running server is stopped through the 1.x `preStop` path and started in the new layout.

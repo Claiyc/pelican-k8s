@@ -39,8 +39,9 @@ REGISTRY=harbor.example.com/pelican VALUES=my-values.yaml hack/dev-push.sh
 ```
 
 The operator recreates agent pods with the new agent image at the next safe
-point (at once for a stopped server); game pods get the new shim at their next
-start.
+point: the process is offline and the agent has no in-flight work (transfers,
+backups, installs, active SFTP). Game pods get the new shim when they are next
+created.
 
 ## Wings as a dependency
 

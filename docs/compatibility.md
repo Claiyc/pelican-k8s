@@ -14,7 +14,7 @@
 | Backups (wings, s3) and restore | ✅ | Local archives are lost when the agent pod is recreated or moves to another node |
 | Activity log | ✅ | Per-agent SQLite on the volume, forwarded through the gateway |
 | Suspension, deauthorize | ✅ | |
-| Image change at next start | ✅ | Every start creates a game pod with the current image, digest pinned; a running server's pod is replaced once the process is offline |
+| Image change at next start | ✅ | A start from stopped creates a game pod with the current image, digest pinned. A running server's pod is replaced once the process is offline. A restart without an image change reuses the pod and its digest, where Wings would pull the tag again |
 | Live resource changes | ✅ | In-place resize of the game pod; `ResizePending` when deferred. Removing a limit (Panel "unlimited") replaces the game pod once the process is offline. A stopped server reserves no game resources |
 | Start time | ⚠️ | A start schedules a pod, checks the image and runs two init containers before the process starts; longer when the agent has to move to another node |
 | Disk limit | ⚠️ | Wings soft limit plus the PVC hard limit; PVCs cannot shrink |

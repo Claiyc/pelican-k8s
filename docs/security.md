@@ -23,7 +23,9 @@ Every server has an agent pod, which runs Wings and holds the server's tokens,
 and, while it is on, a game pod, which runs the egg's code. The two share only
 the server's volume; the game pod mounts just the server directory of it.
 
-Game and agent pods satisfy the `restricted` Pod Security Standard: non-root pinned UID,
+Agent pods and game pods satisfy the `restricted` Pod Security Standard (in
+`HostPort` mode the game pod additionally uses host ports, which needs a
+`privileged` namespace; everything else stays as below): non-root pinned UID,
 `fsGroup`, all capabilities dropped, `RuntimeDefault` seccomp, read-only root
 filesystem, no host namespaces, no service account token. Because install
 Jobs need root in the same namespace, the namespace is labelled `baseline` and
@@ -54,17 +56,27 @@ pods with the namespace UID range, `anyuid` for the installer).
   protected by NetworkPolicy and bearer tokens. Shim ↔ agent traffic is plain
   TCP, protected by NetworkPolicy and a mutual handshake keyed with the shim
   token.
+- None of that traffic is encrypted. NetworkPolicy limits who can connect, not
+  who can read: the design trusts the cluster network against observers.
+  Someone who can capture pod traffic can read an agent token, which is scoped
+  to one server, and console data. Use a CNI with transparent encryption if the
+  network between nodes is not trusted.
 
 ## Blast radius
 
 A compromised game process can read and write its own files and use the game
-pod's allowed egress. Of pelican-k8s that egress reaches one thing: the shim
-port of its own agent. Every connection there must answer a challenge keyed
+pod's allowed egress: the internet, the shim port of its own agent, and what
+the class allows inside the cluster. With `inClusterEgress.gameServers` (on by
+default) that includes every port of other servers' game pods, and
+`inClusterEgress.additional` adds the configured destinations; turn the first
+off when servers must not reach each other. Every connection to the shim port
+must answer a challenge keyed
 with the shim token. The shim reads that token from its environment after
 making itself non-dumpable and removes it from the game's environment, so the
 game process cannot pose as the shim: process state, stats and exit codes come
-from the shim. It cannot reach the gateway, its agent's Wings API or SFTP
-server, other servers' pods, the Panel, the Kubernetes API, the agent token or
+from the shim. It cannot reach the gateway, the operator, its agent's Wings API
+or SFTP server, other servers' agents, the Panel, the Kubernetes API, the agent
+token or
 the node token, and the agent's part of the volume (activity, logs, install
 state) is not mounted in its pod.
 

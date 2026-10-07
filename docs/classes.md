@@ -136,7 +136,7 @@ image's original `ENTRYPOINT`+`CMD`:
 | `entrypointOverrides` | yolks, steamcmd and games images → `["/bin/bash", "/entrypoint.sh"]` | Glob on the image reference → argv; exact match wins, then the longest pattern |
 | `registryLookup` | false | Resolve the image config from the registry with the operator's registry credentials (needs operator egress to the registry) |
 | `pullSecrets` | [] | `imagePullSecrets` of agent pods, game pods and install Jobs (Secrets in the servers namespace) |
-| `pinDigest` | true | Resolve the tag to a digest (operator's registry credentials) at every start, when the game pod is created. `~image` (Wings' never pull) disables it |
+| `pinDigest` | true | Resolve the tag to a digest (operator's registry credentials) whenever a game pod is created, which is every start from stopped; a restart reuses the pod. `~image` (Wings' never pull) disables it |
 
 Without an override or registry lookup, an init container running the egg
 image itself checks for the yolk convention (`/entrypoint.sh`, run by
@@ -155,7 +155,7 @@ with a clear message otherwise.
 | `terminationGracePeriodSeconds` | 660 | Must exceed Wings' 10-minute stop wait |
 | `nodeSelector` / `tolerations` | | Applied to game pods, agent pods and install Jobs |
 | `priorityClassName` | | Priority class of game pods |
-| `agentPriorityClassName` | `pelican-agent` | Priority class of agent pods. It must rank above the game pods', so an agent that follows its game pod to a full node preempts instead of staying `Pending` |
+| `agentPriorityClassName` | `pelican-agent` | Priority class of agent pods. It must rank above the game pods', so an agent that follows its game pod to a full node can preempt lower-priority pods there; it stays `Pending` when the node has nothing the scheduler may evict |
 
 ## Multiple classes
 
