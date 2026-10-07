@@ -17,7 +17,10 @@ import (
 
 	"github.com/pelican/wings/remote"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -254,24 +257,28 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // recordState writes a posted process state. The agent sends each change from
-// its own goroutine, so posts can arrive out of order; each server's posts are
-// handled one at a time and the state written is the one the agent reports on
-// a fresh poll. When the poll fails the posted state is written and the agent
-// is polled again in the background until it answers, because no further post
-// comes while its state stays put.
+// its own goroutine, so posts can arrive out of order, and with several
+// gateway replicas at different replicas. The state written is the one the
+// agent reports on a fresh poll, and the write applies only if the GameServer
+// has not changed since it was read before the poll: a poll that lost the race
+// to a newer one is retried rather than written over it. Each replica also
+// handles a server's posts one at a time. When the poll fails the posted state
+// is written and the agent is polled again in the background until it answers,
+// because no further post comes while its state stays put.
 func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
 	mu := h.stateLock(uuid)
 	mu.Lock()
 	defer mu.Unlock()
-	state, err := h.agentState(ctx, uuid)
-	if err != nil {
+	h.writeState(ctx, uuid, func(state string, err error) (string, bool) {
+		if err == nil {
+			return state, true
+		}
 		h.Log.Debug("cannot poll the agent, recording the posted state", "uuid", uuid, "error", err)
-		state = posted
 		if _, busy := h.repolling.LoadOrStore(uuid, true); !busy {
 			go h.repollState(context.WithoutCancel(ctx), uuid)
 		}
-	}
-	h.writeState(ctx, uuid, state)
+		return posted, true
+	})
 }
 
 // repollState writes the agent's state once it answers a poll.
@@ -288,12 +295,13 @@ func (h *Handler) repollState(ctx context.Context, uuid string) {
 	for deadline := time.Now().Add(total); time.Now().Before(deadline); {
 		time.Sleep(every)
 		mu.Lock()
-		state, err := h.agentState(ctx, uuid)
-		if err == nil {
-			h.writeState(ctx, uuid, state)
-		}
+		answered := false
+		h.writeState(ctx, uuid, func(state string, err error) (string, bool) {
+			answered = err == nil
+			return state, answered
+		})
 		mu.Unlock()
-		if err == nil {
+		if answered {
 			return
 		}
 	}
@@ -328,9 +336,28 @@ func (h *Handler) agentState(ctx context.Context, uuid string) (string, error) {
 	return st.State, nil
 }
 
-func (h *Handler) writeState(ctx context.Context, uuid, state string) {
-	status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
-	if err := h.Store.PatchStatus(ctx, uuid, status); err != nil {
+// stateWriteBackoff paces the retries of a state write that lost to another
+// write of the GameServer (another replica's, or any other status change).
+var stateWriteBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 8, Cap: time.Second}
+
+// writeState reads the GameServer, polls the agent, and writes the state pick
+// chooses from the poll's result, conditional on the version read. A write
+// that conflicts starts over with a fresh read and poll. pick returns false
+// to write nothing.
+func (h *Handler) writeState(ctx context.Context, uuid string, pick func(state string, err error) (string, bool)) {
+	err := retry.OnError(stateWriteBackoff, apierrors.IsConflict, func() error {
+		gs, err := h.Store.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		state, ok := pick(h.agentState(ctx, uuid))
+		if !ok {
+			return nil
+		}
+		status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
+		return h.Store.PatchStatusAt(ctx, uuid, gs.ResourceVersion, status)
+	})
+	if err != nil {
 		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
 	}
 }

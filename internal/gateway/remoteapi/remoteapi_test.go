@@ -63,6 +63,9 @@ type fixture struct {
 	agentHit chan string
 	// agentState is the process state the fake agent reports.
 	agentState atomic.Value
+	// onPoll, when set, runs once during the next agent request, after the
+	// reported state was read.
+	onPoll atomic.Pointer[func()]
 }
 
 type options struct {
@@ -100,7 +103,11 @@ func newFixture(t *testing.T, o options) *fixture {
 	f.agentState.Store("running")
 	f.agent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.agentHit <- r.Method + " " + r.URL.Path
-		_, _ = fmt.Fprintf(w, `{"state":%q,"utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`, f.agentState.Load())
+		state := f.agentState.Load()
+		if hook := f.onPoll.Swap(nil); hook != nil {
+			(*hook)()
+		}
+		_, _ = fmt.Fprintf(w, `{"state":%q,"utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`, state)
 	}))
 	t.Cleanup(f.agent.Close)
 
@@ -532,6 +539,27 @@ func TestContainerStatusOutOfOrder(t *testing.T) {
 			t.Fatalf("process state %q once the agent answers, want running", f.gs().Status.Process.State)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With several gateway replicas, a post's poll can return before another
+// replica's newer poll and be written after it. The older result must not
+// stay recorded.
+func TestContainerStatusAcrossReplicas(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	other := &Handler{Store: f.h.Store, Panel: f.h.Panel, Agents: f.h.Agents, Log: f.h.Log, Sync: f.h.Sync}
+	f.agentState.Store("starting")
+	hook := func() {
+		// The agent reaches running while this replica's poll is in flight,
+		// and the other replica records it first.
+		f.agentState.Store("running")
+		other.recordState(context.Background(), uuid, "running")
+	}
+	f.onPoll.Store(&hook)
+	f.h.recordState(context.Background(), uuid, "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
+		t.Fatalf("process state %q, want running", got)
 	}
 }
 

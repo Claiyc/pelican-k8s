@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -227,6 +228,25 @@ func TestPatchSpecAndStatus(t *testing.T) {
 		t.Fatal("unmarshalable spec succeeded")
 	}
 	if err := s.PatchStatus(ctx, uid1, map[string]any{"bad": func() {}}); err == nil {
+		t.Fatal("unmarshalable status succeeded")
+	}
+}
+
+func TestPatchStatusAt(t *testing.T) {
+	s := newStore(t, gameServer(uid1, ""))
+	ctx := context.Background()
+	gs, _ := s.Get(ctx, uid1)
+	if err := s.PatchStatusAt(ctx, uid1, gs.ResourceVersion, map[string]any{"process": map[string]any{"state": "starting"}}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.PatchStatusAt(ctx, uid1, gs.ResourceVersion, map[string]any{"process": map[string]any{"state": "offline"}})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("patch at a stale version: %v, want a conflict", err)
+	}
+	if gs, _ = s.Get(ctx, uid1); gs.Status.Process.State != "starting" {
+		t.Fatalf("status = %+v", gs.Status.Process)
+	}
+	if err := s.PatchStatusAt(ctx, uid1, "1", map[string]any{"bad": func() {}}); err == nil {
 		t.Fatal("unmarshalable status succeeded")
 	}
 }

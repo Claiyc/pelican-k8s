@@ -189,6 +189,18 @@ func (s *Store) PatchStatus(ctx context.Context, uuid string, status map[string]
 	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
 }
 
+// PatchStatusAt applies a JSON merge patch to the status subresource only if
+// the GameServer is still at resourceVersion; otherwise it fails with a
+// conflict.
+func (s *Store) PatchStatusAt(ctx context.Context, uuid, resourceVersion string, status map[string]any) error {
+	b, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": resourceVersion}, "status": status})
+	if err != nil {
+		return err
+	}
+	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
+	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
 // SetCondition sets one status condition through a merge patch (the operator
 // uses list-map merge for conditions so the type key is preserved).
 func (s *Store) SetCondition(ctx context.Context, uuid string, cond metav1.Condition) error {
