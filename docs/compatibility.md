@@ -11,14 +11,16 @@
 | SFTP | ✅ | Gateway terminates SSH, authenticates against the Panel, relays to the agent's Wings SFTP server; activity rows carry the gateway address |
 | Egg config file rewriting | ✅ | Wings parser; the default allocation IP is presented as `0.0.0.0`, the real IP as `SERVER_PUBLIC_IP` |
 | Installs and reinstalls | ✅ | Kubernetes Job with the egg installer image; exit codes ignored unless `strictExitCode` |
-| Backups (wings, s3) and restore | ✅ | Local archives are not durable across pod recreation |
+| Backups (wings, s3) and restore | ✅ | Local archives are lost when the agent pod is recreated or moves to another node |
 | Activity log | ✅ | Per-agent SQLite on the volume, forwarded through the gateway |
 | Suspension, deauthorize | ✅ | |
-| Image change at next start | ✅ | Pod recreate at the next safe point, digest pinned |
-| Live resource changes | ✅ | In-place pod resize; `ResizePending` when deferred. Removing a limit (Panel "unlimited") recreates the pod once the process is offline |
+| Image change at next start | ✅ | Every start creates a game pod with the current image, digest pinned; a running server's pod is replaced once the process is offline |
+| Live resource changes | ✅ | In-place resize of the game pod; `ResizePending` when deferred. Removing a limit (Panel "unlimited") replaces the game pod once the process is offline. A stopped server reserves no game resources |
+| Start time | ⚠️ | A start schedules a pod, checks the image and runs two init containers before the process starts; longer when the agent has to move to another node |
 | Disk limit | ⚠️ | Wings soft limit plus the PVC hard limit; PVCs cannot shrink |
 | `/api/system` Docker fields, image prune, docker disk | ⚠️ | Stubbed |
 | Container hostname | ⚠️ | `gs-<uuid>-0`; `/etc/machine-id` is provided |
+| Container network | ⚠️ | The game pod gets a new IP at every start (`INTERNAL_IP`) |
 | Server transfers | ❌ | One gateway is one node; nothing to transfer to |
 | Panel mounts | ❌ | |
 | `force_outgoing_ip`, swap, `io_weight`, `threads`, OOM-killer disable | ❌ | Not expressible per pod |
