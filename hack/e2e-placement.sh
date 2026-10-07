@@ -102,15 +102,17 @@ YAML
 kubectl -n pelican rollout status deploy/fakepanel --timeout=2m
 
 log "pelican-k8s (chart)"
-PANEL_URL=http://fakepanel.pelican.svc # NOSONAR: the fake Panel is plain HTTP inside the throwaway cluster
-helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace \
-  --set image.registry=pelican-k8s --set image.tag="$TAG" --set image.pullPolicy=Never \
-  --set gateway.panelURL="$PANEL_URL" --set gateway.nodeTokenID="$TOKEN_ID" --set gateway.nodeToken="$TOKEN" \
-  --set gateway.sftp.service.type=ClusterIP \
-  --set defaultClass.spec.exposure.mode=NodePort \
-  --set defaultClass.spec.storage.storageClassName=standard --set defaultClass.spec.storage.scratch.type=EmptyDir \
-  --set defaultClass.spec.imageResolution.pinDigest=false --set defaultClass.spec.terminationGracePeriodSeconds=30 \
-  --set gateway.logLevel=debug --set operator.logLevel=debug --wait --timeout 5m >/dev/null
+CHART_ARGS=(
+  --set image.registry=pelican-k8s --set image.tag="$TAG" --set image.pullPolicy=Never
+  --set gateway.panelURL=http://fakepanel.pelican.svc # NOSONAR: the fake Panel is plain HTTP inside the throwaway cluster
+  --set gateway.nodeTokenID="$TOKEN_ID" --set gateway.nodeToken="$TOKEN"
+  --set gateway.sftp.service.type=ClusterIP
+  --set defaultClass.spec.exposure.mode=NodePort
+  --set defaultClass.spec.storage.storageClassName=standard --set defaultClass.spec.storage.scratch.type=EmptyDir
+  --set defaultClass.spec.imageResolution.pinDigest=false --set defaultClass.spec.terminationGracePeriodSeconds=30
+  --set gateway.logLevel=debug --set operator.logLevel=debug
+)
+helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace "${CHART_ARGS[@]}" --wait --timeout 5m >/dev/null # NOSONAR: as above
 kubectl -n pelican-system rollout status deploy/pelican-k8s-gateway --timeout=3m
 kubectl -n pelican-system rollout status deploy/pelican-k8s-operator --timeout=3m
 
