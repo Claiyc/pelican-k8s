@@ -76,6 +76,23 @@ server's pods are recreated (or use `deletionPolicy: Retain` and swap the PVC).
    next start uses the new shim; a running server's game pod is replaced once its
    process is offline.
 
+### From 1.x to 2.0
+
+2.0 runs every server in an agent pod and a game pod. There is no compatibility
+mode: after the upgrade above, the operator deletes each pod of the 1.x layout
+(a `gs-<uuid>-0` with an `agent` container, event `LegacyPodDeleted`) as soon as
+it reconciles the server. A running server is stopped through the 1.x pod's
+shutdown path and started again in the new layout; a stopped server only gets
+its agent pod. Plan the upgrade for a quiet time, and take the steps below
+first:
+
+- Scripts and runbooks that use `kubectl logs gs-<uuid>-0 -c agent` or
+  `kubectl exec gs-<uuid>-0 -c agent` move to `gs-<uuid>-agent-0`.
+- Custom admission policies or SCCs that match the game pods'
+  ServiceAccount `pelican-game` also need `pelican-agent`.
+- Local backups (the `wings` adapter) of a server are lost when its agent pod
+  moves to another node; switch to S3 for durable backups.
+
 Upgrading the Panel is independent; re-run the compatibility checks in
 `test/upstream` when bumping the pinned Wings version.
 
