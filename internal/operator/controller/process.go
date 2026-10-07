@@ -22,39 +22,56 @@ import (
 // reconcileProcess drives the agent: fresh-pod start, power generations,
 // configuration sync and installs (ARCHITECTURE.md 7.6 "Process").
 func (r *GameServerReconciler) reconcileProcess(s *scope) error {
-	if s.agent == nil || s.pod == nil {
-		if err := r.reconcileInstall(s); err != nil {
-			return err
-		}
-		return nil
+	if s.agent == nil {
+		return r.reconcileInstall(s)
 	}
 	gs := s.gs
-	podUID := string(s.pod.UID)
 	recreatePending := condTrue(gs, v1alpha1.ConditionRecreatePending)
+	agentUID := string(s.agentPod.UID)
+	gameUID := ""
+	if s.pod != nil {
+		gameUID = string(s.pod.UID)
+	}
 
-	// Fresh pod: record it and restore the desired state (Wings' "was running before reboot").
-	if gs.Status.Agent.PodUID != podUID {
-		gs.Status.Agent.PodUID = podUID
-		gs.Status.Agent.SyncedRevision = gs.Spec.Panel.PanelRevision
-		gs.Status.Agent.SyncedEnvVersion = r.envSecretVersion(s)
-		gs.Status.Agent.RelayedExit = ""
-		// An install that was in flight in the previous pod lost its agent-side
-		// lock and tail; ask the new agent again and start a clean Job.
-		if st := &gs.Status.Install; gs.Spec.Install.Generation > st.ObservedGeneration && st.RequestedGeneration != 0 {
-			r.event(s, corev1.EventTypeWarning, "InstallRestarted", "pod was recreated during install generation %d; requesting it again", gs.Spec.Install.Generation)
-			if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
-				return err
-			}
-			st.RequestedGeneration, st.RequestedAt, st.PreparedGeneration, st.JobName = 0, nil, 0, ""
-			st.Result = ""
+	// Fresh pod: record it and restore the desired state (Wings' "was running
+	// before reboot"). With a game pod, wait until its shim is attached, so
+	// the start reaches that pod, and until the agent is on the game pod's
+	// node, so the start does not precede a move of the agent (section 7.7).
+	if gs.Status.Agent.PodUID != agentUID || gs.Status.Game.PodUID != gameUID {
+		if s.pod != nil && (s.shim == nil || !s.shim.Attached || s.shim.PodUID != gameUID || !s.shim.Running && !colocated(s)) {
+			s.requeue = requeueFast
+			return r.reconcileInstall(s)
 		}
-		if gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended && !recreatePending {
-			if err := r.power(s, "start"); err != nil {
-				return err
+		if gs.Status.Agent.PodUID != agentUID {
+			gs.Status.Agent.PodUID = agentUID
+			gs.Status.Agent.SyncedRevision = gs.Spec.Panel.PanelRevision
+			gs.Status.Agent.SyncedEnvVersion = r.envSecretVersion(s)
+			// An install that was in flight in the previous agent pod lost its
+			// agent-side lock and tail; ask the new agent again and start a clean Job.
+			if st := &gs.Status.Install; gs.Spec.Install.Generation > st.ObservedGeneration && st.RequestedGeneration != 0 {
+				r.event(s, corev1.EventTypeWarning, "InstallRestarted", "agent pod was recreated during install generation %d; requesting it again", gs.Spec.Install.Generation)
+				if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
+					return err
+				}
+				st.RequestedGeneration, st.RequestedAt, st.PreparedGeneration, st.JobName = 0, nil, 0, ""
+				st.Result = ""
 			}
 		}
-		gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
-		return r.reconcileInstall(s)
+		if gs.Status.Game.PodUID != gameUID {
+			gs.Status.Game.PodUID = gameUID
+			gs.Status.Agent.RelayedExit = ""
+		}
+		if s.pod != nil {
+			// A shim that already runs the process (a new agent pod next to a
+			// running game pod) is attached by the agent; there is nothing to start.
+			if !s.shim.Running && gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended && !recreatePending {
+				if err := r.power(s, "start"); err != nil {
+					return err
+				}
+			}
+			gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
+			return r.reconcileInstall(s)
+		}
 	}
 
 	// Configuration sync.
@@ -70,7 +87,7 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 
 	// Power generations.
 	if gs.Spec.Power.Generation != gs.Status.Power.ObservedGeneration {
-		state, err := s.agent.GetServer(s.ctx, s.in.UUID())
+		state, err := r.serverState(s)
 		if err != nil {
 			return err
 		}
@@ -81,8 +98,15 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 				gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 				break
 			}
+			if s.pod == nil || !s.pod.DeletionTimestamp.IsZero() || !colocated(s) {
+				// The game StatefulSet creates the game pod; the fresh-pod rule
+				// starts the process once its shim is attached. An agent on
+				// another node moves first.
+				s.requeue = requeueFast
+				break
+			}
 			if recreatePending {
-				// Stop first; reconcilePod recreates the pod once offline and the
+				// Stop first; reconcilePods recreates the pod once offline and the
 				// fresh-pod rule starts it. The generation stays unobserved until then.
 				if state.State != v1alpha1.ProcessOffline {
 					if err := r.power(s, "stop"); err != nil {
@@ -120,7 +144,11 @@ func (r *GameServerReconciler) power(s *scope, action string) error {
 	if err := s.agent.Power(s.ctx, s.in.UUID(), action); err != nil {
 		return fmt.Errorf("power %s: %w", action, err)
 	}
-	s.gs.Status.Power.LastAction = &v1alpha1.PowerActionRecord{Action: action, At: s.now, PodUID: string(s.pod.UID)}
+	rec := &v1alpha1.PowerActionRecord{Action: action, At: s.now}
+	if s.pod != nil {
+		rec.PodUID = string(s.pod.UID)
+	}
+	s.gs.Status.Power.LastAction = rec
 	r.event(s, corev1.EventTypeNormal, "Power", "issued %s", action)
 	s.requeue = requeueFast
 	return nil
@@ -279,4 +307,9 @@ func (r *GameServerReconciler) deleteInstallJob(s *scope, gen int64) error {
 	policy := metav1.DeletePropagationBackground
 	err := r.Delete(s.ctx, job, &client.DeleteOptions{PropagationPolicy: &policy})
 	return client.IgnoreNotFound(err)
+}
+
+// colocated reports whether the agent pod runs on the game pod's node.
+func colocated(s *scope) bool {
+	return s.pod != nil && s.agentPod != nil && s.pod.Spec.NodeName == s.agentPod.Spec.NodeName
 }

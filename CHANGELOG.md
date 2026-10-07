@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- BREAKING: every server runs in two pods. The agent pod `gs-<uuid>-agent-0` (StatefulSet `gs-<uuid>-agent`) serves files, SFTP, the console and backups for as long as the server exists. The game pod `gs-<uuid>-0` (StatefulSet `gs-<uuid>`) runs only while the server is on, so a stopped server requests no game resources. `kubectl logs gs-<uuid>-0 -c agent` becomes `kubectl logs gs-<uuid>-agent-0`; `kubectl logs gs-<uuid>-0` still shows the console.
+- BREAKING: the shim reaches the agent over TCP, on port 8082 of the headless Service `gs-<uuid>-agent`, and stops the process with the egg's stop configuration on SIGTERM. Each pod has its own NetworkPolicy: `gs-<uuid>` for the game pod and `gs-<uuid>-agent` for the agent pod.
+- The scheduler places the game pod and the agent follows it. The game pod prefers the agent's node (class `scheduling.preferAgentNode`, default `true`) and requires it while the agent has in-flight work. An agent pod on another node is moved to the game pod's node once it is idle (`AgentRelocating`). Archives of the local backup adapter live on the agent pod's scratch volume and are lost when it moves.
+- Agent pods run under their own ServiceAccount `pelican-agent` (class `agentServiceAccountName`) and PriorityClass `pelican-agent` (class `agentPriorityClassName`, chart `agentPriorityClass`), which ranks above game pods.
+- A process that exits without Wings restarting it leaves the server stopped: after a minute offline the gateway sets `desired: Stopped` and the game pod goes, as the Panel shows it.
+- New conditions `GamePodReady` and `AgentRelocating`; `status.game` records the game pod and its node, `status.agent.node` the agent's.
+
+### Fixed
+- A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now handles one server's posts one at a time and records the state the agent reports on a fresh poll.
+
+### Added
+- The *Placement* workflow (`hack/e2e-placement.sh`, `test/placement`) runs the placement scenarios on a kind cluster with three workers.
+
 ## [1.1.0] - 2026-10-06
 
 ### What's Changed

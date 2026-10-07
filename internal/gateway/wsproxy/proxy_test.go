@@ -108,11 +108,11 @@ func newEnv(t *testing.T, o opts) *env {
 	e := &env{t: t, c: c, st: st, agentOrigin: make(chan string, 4), agentConn: make(chan *websocket.Conn, 4), agentRecv: make(chan string, 64)}
 	if !o.noPod && !o.noServer {
 		started := true
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns}}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
 		if err := c.Create(context.Background(), pod); err != nil {
 			t.Fatal(err)
 		}
-		pod.Status = corev1.PodStatus{PodIP: "127.0.0.1", InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
+		pod.Status = corev1.PodStatus{PodIP: "127.0.0.1", ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
 		if err := c.Status().Update(context.Background(), pod); err != nil {
 			t.Fatal(err)
 		}

@@ -112,6 +112,9 @@ func TestPod(t *testing.T) {
 	if err != nil || got != nil {
 		t.Fatalf("missing pod must be nil without error, got %v, %v", got, err)
 	}
+	if got, err := s.AgentPod(ctx, uid1); err != nil || got != nil {
+		t.Fatalf("the game pod is not the agent pod: %v, %v", got, err)
+	}
 }
 
 func TestSecretsAndConfigMaps(t *testing.T) {
@@ -273,8 +276,8 @@ func TestSetCondition(t *testing.T) {
 func TestPodAgentReady(t *testing.T) {
 	podWith := func(ip string, started *bool, name string) *corev1.Pod {
 		return &corev1.Pod{Status: corev1.PodStatus{
-			PodIP:                 ip,
-			InitContainerStatuses: []corev1.ContainerStatus{{Name: name, Started: started}},
+			PodIP:             ip,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: name, Started: started}},
 		}}
 	}
 	now := metav1.Now()

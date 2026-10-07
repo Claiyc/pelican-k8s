@@ -58,6 +58,18 @@ spec:
                 description: AgentConfigMap names the ConfigMap holding the agent's
                   Wings config.yml.
                 type: string
+              agentPriorityClassName:
+                default: pelican-agent
+                description: |-
+                  AgentPriorityClassName is applied to agent pods. It should rank above
+                  game pods, so an agent that follows its game pod to a full node can
+                  preempt lower-priority pods there.
+                type: string
+              agentServiceAccountName:
+                default: pelican-agent
+                description: AgentServiceAccountName is the ServiceAccount of agent
+                  pods.
+                type: string
               exposure:
                 description: ExposureSpec configures how game ports reach players.
                 properties:
@@ -280,10 +292,11 @@ spec:
               nodeSelector:
                 additionalProperties:
                   type: string
-                description: NodeSelector, Tolerations and PriorityClassName are applied
-                  to game pods.
+                description: NodeSelector and Tolerations are applied to both pods
+                  and install Jobs.
                 type: object
               priorityClassName:
+                description: PriorityClassName is applied to game pods.
                 type: string
               resources:
                 description: ResourcesSpec maps Panel build limits to pod resources.
@@ -359,6 +372,17 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                type: object
+              scheduling:
+                description: SchedulingSpec configures where game pods are placed
+                  (ARCHITECTURE.md 7.7).
+                properties:
+                  preferAgentNode:
+                    default: true
+                    description: |-
+                      PreferAgentNode gives the game pod a preferred pod affinity toward its
+                      agent pod's node, so the agent moves only when that node does not fit.
+                    type: boolean
                 type: object
               security:
                 description: SecuritySpec pins the UID game pods run as.
@@ -452,7 +476,8 @@ spec:
                     type: string
                 type: object
               suspendScalesToZero:
-                description: SuspendScalesToZero deletes the pod of a suspended server.
+                description: SuspendScalesToZero also runs no agent pod for a suspended
+                  server.
                 type: boolean
               terminationGracePeriodSeconds:
                 default: 660

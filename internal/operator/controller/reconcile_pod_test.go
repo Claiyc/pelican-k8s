@@ -22,23 +22,24 @@ import (
 
 var errBoom = errors.New("boom")
 
-// podHarness is a harness with an existing pod and a scope pointing at it, for
-// exercising the phases of reconcilePod one at a time.
+// podHarness is a harness with existing pods and a scope pointing at them,
+// for exercising the phases of reconcilePods one at a time.
 type podHarness struct {
 	*harness
-	pod *corev1.Pod
-	s   *scope
+	pod      *corev1.Pod
+	agentPod *corev1.Pod
+	s        *scope
 }
 
-// newPodHarness reconciles a GameServer to the point where its pod exists
-// (agent ready or not) and builds the scope reconcilePod would see.
+// newPodHarness reconciles a GameServer to the point where its pods exist
+// (agent ready or not) and builds the scope reconcilePods would see.
 func newPodHarness(t *testing.T, agentReady bool, cls *v1alpha1.GameServerClass, funcs interceptor.Funcs) *podHarness {
 	t.Helper()
 	h := newHarnessWith(t, funcs, newGS(), cls)
 	h.reconcile(2)
 	h.createPod(agentReady)
 	h.reconcile(2)
-	ph := &podHarness{harness: h, pod: h.pod()}
+	ph := &podHarness{harness: h, pod: h.pod(), agentPod: h.agentPod()}
 	ph.s = ph.scope(cls)
 	return ph
 }
@@ -58,6 +59,7 @@ func (h *podHarness) scope(cls *v1alpha1.GameServerClass) *scope {
 		settings: st,
 		in:       &render.Input{GS: gs, Class: cls, Settings: st},
 		pod:      h.pod,
+		agentPod: h.agentPod,
 		now:      metav1.NewTime(h.now),
 		requeue:  requeueSlow,
 	}
@@ -121,7 +123,7 @@ func (h *podHarness) createNode(ready bool) {
 	}
 }
 
-func TestReconcilePodTerminating(t *testing.T) {
+func TestReconcilePodsTerminating(t *testing.T) {
 	tests := []struct {
 		name        string
 		class       *v1alpha1.GameServerClass
@@ -136,43 +138,49 @@ func TestReconcilePodTerminating(t *testing.T) {
 		{name: "node lost within the window", class: failoverClass(time.Hour), node: ptr(false), terminating: time.Minute, wantNodeLos: true},
 		{name: "node lost past the window", class: failoverClass(time.Minute), node: ptr(false), terminating: time.Hour, wantNodeLos: true, wantDeleted: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newPodHarness(t, true, tt.class, interceptor.Funcs{})
-			if tt.node != nil {
-				h.createNode(*tt.node)
-			}
-			deleting := metav1.NewTime(h.now.Add(-tt.terminating))
-			h.pod.DeletionTimestamp = &deleting
-			h.pod.Spec.NodeName = "node-1"
+	for _, which := range []string{"game", "agent"} {
+		for _, tt := range tests {
+			t.Run(which+"/"+tt.name, func(t *testing.T) {
+				h := newPodHarness(t, true, tt.class, interceptor.Funcs{})
+				if tt.node != nil {
+					h.createNode(*tt.node)
+				}
+				pod, cond, get := h.pod, v1alpha1.ConditionGamePodReady, h.harness.pod
+				if which == "agent" {
+					pod, cond, get = h.agentPod, v1alpha1.ConditionAgentReady, h.harness.agentPod
+				}
+				deleting := metav1.NewTime(h.now.Add(-tt.terminating))
+				pod.DeletionTimestamp = &deleting
+				pod.Spec.NodeName = "node-1"
 
-			if err := h.r.reconcilePod(h.s); err != nil {
-				t.Fatal(err)
-			}
+				if err := h.r.reconcilePods(h.s); err != nil {
+					t.Fatal(err)
+				}
 
-			nodeLost := condition(h.s, v1alpha1.ConditionNodeLost)
-			if tt.wantNodeLos != (nodeLost != nil && nodeLost.Status == metav1.ConditionTrue) {
-				t.Fatalf("NodeLost condition %+v, want lost=%v", nodeLost, tt.wantNodeLos)
-			}
-			if c := condition(h.s, v1alpha1.ConditionAgentReady); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Terminating" {
-				t.Fatalf("AgentReady condition %+v", c)
-			}
-			if h.s.requeue != requeueFast {
-				t.Fatalf("requeue %v", h.s.requeue)
-			}
-			if deleted := h.harness.pod() == nil; deleted != tt.wantDeleted {
-				t.Fatalf("pod deleted=%v, want %v", deleted, tt.wantDeleted)
-			}
-			if got := hasEvent(h.events(), "ForceDelete"); got != tt.wantDeleted {
-				t.Fatalf("ForceDelete event=%v, want %v", got, tt.wantDeleted)
-			}
-		})
+				nodeLost := condition(h.s, v1alpha1.ConditionNodeLost)
+				if tt.wantNodeLos != (nodeLost != nil && nodeLost.Status == metav1.ConditionTrue) {
+					t.Fatalf("NodeLost condition %+v, want lost=%v", nodeLost, tt.wantNodeLos)
+				}
+				if c := condition(h.s, cond); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "Terminating" {
+					t.Fatalf("%s condition %+v", cond, c)
+				}
+				if h.s.requeue != requeueFast {
+					t.Fatalf("requeue %v", h.s.requeue)
+				}
+				if deleted := get() == nil; deleted != tt.wantDeleted {
+					t.Fatalf("pod deleted=%v, want %v", deleted, tt.wantDeleted)
+				}
+				if got := hasEvent(h.events(), "ForceDelete"); got != tt.wantDeleted {
+					t.Fatalf("ForceDelete event=%v, want %v", got, tt.wantDeleted)
+				}
+			})
+		}
 	}
 }
 
 func ptr[T any](v T) *T { return &v }
 
-func TestReconcilePodTerminatingForceDeleteErrors(t *testing.T) {
+func TestReconcilePodsTerminatingForceDeleteErrors(t *testing.T) {
 	var grace *int64
 	funcs := interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 		o := &client.DeleteOptions{}
@@ -186,7 +194,7 @@ func TestReconcilePodTerminatingForceDeleteErrors(t *testing.T) {
 	h.pod.DeletionTimestamp = &deleting
 	h.pod.Spec.NodeName = "node-1"
 
-	if err := h.r.reconcilePod(h.s); !errors.Is(err, errBoom) {
+	if err := h.r.reconcilePods(h.s); !errors.Is(err, errBoom) {
 		t.Fatalf("err %v, want the delete error", err)
 	}
 	if grace == nil || *grace != 0 {
@@ -194,7 +202,7 @@ func TestReconcilePodTerminatingForceDeleteErrors(t *testing.T) {
 	}
 }
 
-func TestReconcilePodTerminatingForceDeleteIgnoresNotFound(t *testing.T) {
+func TestReconcilePodsTerminatingForceDeleteIgnoresNotFound(t *testing.T) {
 	h := newPodHarness(t, true, failoverClass(time.Minute), interceptor.Funcs{})
 	h.createNode(false)
 	deleting := metav1.NewTime(h.now.Add(-time.Hour))
@@ -204,7 +212,7 @@ func TestReconcilePodTerminatingForceDeleteIgnoresNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.r.reconcilePod(h.s); err != nil {
+	if err := h.r.reconcilePods(h.s); err != nil {
 		t.Fatalf("a pod that is already gone is not an error: %v", err)
 	}
 }
@@ -317,21 +325,27 @@ func TestRelayTerminationSkipsRelayedAndMissing(t *testing.T) {
 	}
 }
 
-func TestRecreateWhenOffline(t *testing.T) {
+func TestRecreate(t *testing.T) {
 	tests := []struct {
-		name        string
-		state       string
-		getErr      error
-		deleteErr   error
-		restart     bool
-		wantErr     error
-		wantDeleted bool
+		name          string
+		state         string
+		getErr        error
+		deleteErr     error
+		restart       bool
+		agent, game   bool
+		wantErr       error
+		wantGameGone  bool
+		wantAgentGone bool
+		wantObserved  int64
 	}{
-		{name: "agent unreachable", getErr: errBoom, wantErr: errBoom},
-		{name: "process still running", state: v1alpha1.ProcessRunning},
-		{name: "offline", state: v1alpha1.ProcessOffline, wantDeleted: true},
-		{name: "offline with restart request", state: v1alpha1.ProcessOffline, restart: true, wantDeleted: true},
-		{name: "delete fails", state: v1alpha1.ProcessOffline, deleteErr: errBoom, wantErr: errBoom},
+		{name: "agent unreachable", game: true, getErr: errBoom, wantErr: errBoom},
+		{name: "process still running", game: true, state: v1alpha1.ProcessRunning},
+		{name: "game template, offline", game: true, state: v1alpha1.ProcessOffline, wantGameGone: true},
+		{name: "agent template, offline", agent: true, state: v1alpha1.ProcessOffline, wantAgentGone: true},
+		{name: "agent template, running", agent: true, state: v1alpha1.ProcessRunning},
+		{name: "restart request, offline", restart: true, state: v1alpha1.ProcessOffline, wantGameGone: true, wantAgentGone: true, wantObserved: 3},
+		{name: "restart request, running", restart: true, state: v1alpha1.ProcessRunning},
+		{name: "delete fails", game: true, state: v1alpha1.ProcessOffline, deleteErr: errBoom, wantErr: errBoom},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -347,79 +361,65 @@ func TestRecreateWhenOffline(t *testing.T) {
 			h.s.gs.Spec.Power.RestartRequest = 3
 			h.events()
 
-			err := h.r.recreateWhenOffline(h.s, h.pod, tt.restart)
+			err := h.r.recreate(h.s, tt.restart, tt.agent, tt.game)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("err %v, want %v", err, tt.wantErr)
 			}
-			if gone := h.s.pod == nil; gone != tt.wantDeleted {
-				t.Fatalf("scope pod cleared=%v, want %v", gone, tt.wantDeleted)
+			if gone := h.s.pod == nil; gone != tt.wantGameGone {
+				t.Fatalf("scope game pod cleared=%v, want %v", gone, tt.wantGameGone)
 			}
-			if tt.wantDeleted {
-				if h.s.agent != nil || h.s.requeue != requeueFast {
-					t.Fatalf("agent %v requeue %v: a recreate drops the agent and requeues fast", h.s.agent, h.s.requeue)
+			if gone := h.harness.pod() == nil; gone != tt.wantGameGone {
+				t.Fatalf("game pod deleted=%v, want %v", gone, tt.wantGameGone)
+			}
+			if gone := h.s.agentPod == nil && h.s.agent == nil; gone != tt.wantAgentGone {
+				t.Fatalf("scope agent cleared=%v, want %v", gone, tt.wantAgentGone)
+			}
+			if gone := h.harness.agentPod() == nil; gone != tt.wantAgentGone {
+				t.Fatalf("agent pod deleted=%v, want %v", gone, tt.wantAgentGone)
+			}
+			if tt.wantGameGone || tt.wantAgentGone {
+				if h.s.requeue != requeueFast || !hasEvent(h.events(), "Recreate") {
+					t.Fatal("a recreate requeues fast and records an event")
 				}
-				if h.harness.pod() != nil {
-					t.Fatal("pod must be deleted")
-				}
-				if !hasEvent(h.events(), "Recreate") {
-					t.Fatal("Recreate event expected")
-				}
-				wantObserved := int64(0)
-				if tt.restart {
-					wantObserved = 3
-				}
-				if got := h.s.gs.Status.Power.ObservedRestartRequest; got != wantObserved {
-					t.Fatalf("ObservedRestartRequest %d, want %d", got, wantObserved)
-				}
-			} else if h.s.agent == nil || h.harness.pod() == nil {
-				t.Fatal("pod and agent must be kept")
+			}
+			if got := h.s.gs.Status.Power.ObservedRestartRequest; got != tt.wantObserved {
+				t.Fatalf("ObservedRestartRequest %d, want %d", got, tt.wantObserved)
 			}
 		})
 	}
 }
 
-func TestDeletePodForRecreate(t *testing.T) {
-	t.Run("already gone", func(t *testing.T) {
-		h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
-		if err := h.c.Delete(context.Background(), h.pod.DeepCopy()); err != nil {
-			t.Fatal(err)
-		}
-		if err := h.r.deletePodForRecreate(h.s, h.pod, false); err != nil {
-			t.Fatalf("a missing pod is not an error: %v", err)
-		}
-		if h.s.pod != nil {
-			t.Fatal("pod must be forgotten")
-		}
-	})
-	t.Run("error keeps the pod and the request", func(t *testing.T) {
-		funcs := interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return errBoom }}
-		h := newPodHarness(t, true, newClass(), funcs)
-		h.s.gs.Spec.Power.RestartRequest = 2
-		if err := h.r.deletePodForRecreate(h.s, h.pod, true); !errors.Is(err, errBoom) {
-			t.Fatalf("err %v", err)
-		}
-		if h.s.pod == nil || h.s.gs.Status.Power.ObservedRestartRequest != 0 {
-			t.Fatal("a failed delete must not acknowledge the restart or forget the pod")
-		}
-	})
+func TestRecreateAlreadyGone(t *testing.T) {
+	h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+	h.s.agent = h.agent
+	if err := h.c.Delete(context.Background(), h.pod.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.r.recreate(h.s, false, false, true); err != nil {
+		t.Fatalf("a missing pod is not an error: %v", err)
+	}
+	if h.s.pod != nil {
+		t.Fatal("pod must be forgotten")
+	}
 }
 
-// An agent that is not ready yet, with a game container that never started,
-// lets an outdated pod be replaced right away.
-func TestReconcilePodRecreatesUnstartedOutdatedPod(t *testing.T) {
+// A game pod whose game container never started, and an agent pod that never
+// became ready, are replaced right away: neither holds the process.
+func TestReconcilePodsRecreatesUnstartedOutdatedPods(t *testing.T) {
 	h := newPodHarness(t, false, newClass(), interceptor.Funcs{})
+	h.pod.Status.ContainerStatuses = nil
 	h.s.gs.Status.TemplateHash = "something-else"
-	h.s.gs.Spec.Power.RestartRequest = 5
+	h.s.gs.Status.Agent.TemplateHash = "something-else"
 	h.events()
 
-	if err := h.r.reconcilePod(h.s); err != nil {
+	if err := h.r.reconcilePods(h.s); err != nil {
 		t.Fatal(err)
 	}
 	if h.s.pod != nil || h.harness.pod() != nil {
-		t.Fatal("the unstarted outdated pod must be deleted")
+		t.Fatal("the unstarted outdated game pod must be deleted")
 	}
-	if h.s.gs.Status.Power.ObservedRestartRequest != 5 {
-		t.Fatal("restart request must be acknowledged")
+	if h.s.agentPod != nil || h.harness.agentPod() != nil {
+		t.Fatal("the unready outdated agent pod must be deleted")
 	}
 	if c := condition(h.s, v1alpha1.ConditionAgentReady); c == nil || c.Reason != "Starting" {
 		t.Fatalf("AgentReady condition %+v", c)
@@ -429,12 +429,28 @@ func TestReconcilePodRecreatesUnstartedOutdatedPod(t *testing.T) {
 	}
 }
 
-func TestReconcilePodKeepsStartedPodWhileAgentNotReady(t *testing.T) {
+// A restart request waits for an agent that can tell the process is offline.
+func TestReconcilePodsRestartWaitsForTheAgent(t *testing.T) {
+	h := newPodHarness(t, false, newClass(), interceptor.Funcs{})
+	h.s.gs.Spec.Power.RestartRequest = 5
+
+	if err := h.r.reconcilePods(h.s); err != nil {
+		t.Fatal(err)
+	}
+	if h.harness.pod() == nil || h.harness.agentPod() == nil {
+		t.Fatal("both pods must be kept until the process is known to be offline")
+	}
+	if h.s.gs.Status.Power.ObservedRestartRequest != 0 {
+		t.Fatal("restart request must not be acknowledged yet")
+	}
+}
+
+func TestReconcilePodsKeepsStartedPodWhileAgentNotReady(t *testing.T) {
 	h := newPodHarness(t, false, newClass(), interceptor.Funcs{})
 	h.s.gs.Status.TemplateHash = "something-else"
 	withTermination(h.pod, h.now)
 
-	if err := h.r.reconcilePod(h.s); err != nil {
+	if err := h.r.reconcilePods(h.s); err != nil {
 		t.Fatal(err)
 	}
 	if h.s.pod == nil || h.harness.pod() == nil {
@@ -445,7 +461,7 @@ func TestReconcilePodKeepsStartedPodWhileAgentNotReady(t *testing.T) {
 	}
 }
 
-func TestReconcilePodAgentTokenError(t *testing.T) {
+func TestReconcilePodsAgentTokenError(t *testing.T) {
 	h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
 	sec := &corev1.Secret{}
 	if !h.get(sec, names.AgentSecret(uuid)) {
@@ -455,7 +471,7 @@ func TestReconcilePodAgentTokenError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.r.reconcilePod(h.s); err == nil {
+	if err := h.r.reconcilePods(h.s); err == nil {
 		t.Fatal("a missing agent secret must fail the reconcile")
 	}
 	if h.s.agent != nil {
@@ -463,24 +479,25 @@ func TestReconcilePodAgentTokenError(t *testing.T) {
 	}
 }
 
-func TestReconcilePodRelayError(t *testing.T) {
+func TestReconcilePodsRelayError(t *testing.T) {
 	h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
 	h.agent.exitErr = errBoom
 	withTermination(h.pod, h.now)
+	h.pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
 
-	if err := h.r.reconcilePod(h.s); !errors.Is(err, errBoom) {
+	if err := h.r.reconcilePods(h.s); !errors.Is(err, errBoom) {
 		t.Fatalf("err %v, want the relay error", err)
 	}
 }
 
-func TestReconcilePodUpToDateDoesNotRecreate(t *testing.T) {
+func TestReconcilePodsUpToDateDoesNotRecreate(t *testing.T) {
 	h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
 
-	if err := h.r.reconcilePod(h.s); err != nil {
+	if err := h.r.reconcilePods(h.s); err != nil {
 		t.Fatal(err)
 	}
 	if h.s.pod == nil || h.s.agent == nil {
-		t.Fatal("an up-to-date pod keeps its agent")
+		t.Fatal("up-to-date pods keep their agent")
 	}
 	if c := condition(h.s, v1alpha1.ConditionRecreatePending); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "UpToDate" {
 		t.Fatalf("RecreatePending %+v", c)
@@ -488,17 +505,77 @@ func TestReconcilePodUpToDateDoesNotRecreate(t *testing.T) {
 	if c := condition(h.s, v1alpha1.ConditionAgentReady); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("AgentReady %+v", c)
 	}
+	if c := condition(h.s, v1alpha1.ConditionGamePodReady); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("GamePodReady %+v", c)
+	}
+}
+
+func TestGamePodReadyReasons(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(h *podHarness)
+		reason string
+	}{
+		"no pod, stopped": {func(h *podHarness) { h.s.pod = nil }, "NotRequested"},
+		"no pod, running": {func(h *podHarness) { h.s.pod = nil; h.s.gs.Spec.Power.Desired = v1alpha1.PowerRunning }, "NoPod"},
+		"unschedulable": {func(h *podHarness) {
+			h.pod.Spec.NodeName = ""
+			h.pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "0/3 nodes are available"}}
+		}, "Unschedulable"},
+		"agent not ready":   {func(h *podHarness) { h.s.agentPod.Status.ContainerStatuses[0].Ready = false }, "AgentNotReady"},
+		"not running":       {func(h *podHarness) { h.pod.Status.ContainerStatuses = nil }, "Starting"},
+		"shim not attached": {func(h *podHarness) { h.agent.shimPod = "" }, "ShimNotAttached"},
+		"other pod's shim":  {func(h *podHarness) { h.agent.shimPod = "old" }, "ShimNotAttached"},
+		"ready":             {func(h *podHarness) {}, "Ready"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+			tc.mutate(h)
+			if err := h.r.reconcilePods(h.s); err != nil {
+				t.Fatal(err)
+			}
+			if c := condition(h.s, v1alpha1.ConditionGamePodReady); c == nil || c.Reason != tc.reason {
+				t.Fatalf("GamePodReady %+v, want %s", c, tc.reason)
+			}
+		})
+	}
+}
+
+// A pod of the single-pod layout is deleted as soon as the operator sees it.
+func TestLegacyPodIsDeleted(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	legacy := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns, Labels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: "game"}},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "prepare"}, {Name: render.AgentContainer}},
+			Containers:     []corev1.Container{{Name: render.GameContainer}},
+		},
+	}
+	if err := h.c.Create(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if h.pod() != nil {
+		t.Fatal("the legacy pod must be deleted")
+	}
+	if !hasEvent(recordedEvents(h), "LegacyPodDeleted") {
+		t.Fatal("LegacyPodDeleted event expected")
+	}
 }
 
 // The resize phase always runs, even when the pod is already due for a
 // recreate for another reason: it owns the ResizePending condition and the
 // in-place resize attempt, and the recreate may stay deferred for a while.
-func TestReconcilePodResizesEvenWhenRecreateIsPending(t *testing.T) {
-	reasons := map[string]func(*scope){
-		"outdated template": func(s *scope) { s.gs.Status.TemplateHash = "something-else" },
-		"restart requested": func(s *scope) { s.gs.Spec.Power.RestartRequest = 1 },
+func TestReconcilePodsResizesEvenWhenRecreateIsPending(t *testing.T) {
+	reasons := map[string]struct {
+		pending func(*scope)
+		reason  string
+	}{
+		"outdated template": {func(s *scope) { s.gs.Status.TemplateHash = "something-else" }, "ResizeNeedsRecreate"},
+		"restart requested": {func(s *scope) { s.gs.Spec.Power.RestartRequest = 1 }, "RestartRequested"},
 	}
-	for name, makePending := range reasons {
+	for name, tc := range reasons {
 		t.Run(name+"/resize applied", func(t *testing.T) {
 			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
 			h.agent.state = v1alpha1.ProcessRunning
@@ -506,10 +583,10 @@ func TestReconcilePodResizesEvenWhenRecreateIsPending(t *testing.T) {
 				gs.Spec.Panel.Settings = settingsJSON(4096, 200, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
 			})
 			h.s = h.scope(newClass())
-			makePending(h.s)
+			tc.pending(h.s)
 			h.events()
 
-			if err := h.r.reconcilePod(h.s); err != nil {
+			if err := h.r.reconcilePods(h.s); err != nil {
 				t.Fatal(err)
 			}
 			if !hasEvent(h.events(), "Resized") {
@@ -529,17 +606,80 @@ func TestReconcilePodResizesEvenWhenRecreateIsPending(t *testing.T) {
 				gs.Spec.Panel.Settings = settingsJSON(2048, 0, 5120, "ghcr.io/pelican-eggs/yolks:java_21", false)
 			})
 			h.s = h.scope(newClass())
-			makePending(h.s)
+			tc.pending(h.s)
 
-			if err := h.r.reconcilePod(h.s); err != nil {
+			if err := h.r.reconcilePods(h.s); err != nil {
 				t.Fatal(err)
 			}
 			if c := condition(h.s, v1alpha1.ConditionResizePending); c == nil || c.Status != metav1.ConditionTrue || c.Reason != "RecreateRequired" {
 				t.Fatalf("ResizePending %+v", c)
 			}
-			if c := condition(h.s, v1alpha1.ConditionRecreatePending); c == nil || c.Reason != "ResizeNeedsRecreate" {
-				t.Fatalf("RecreatePending %+v", c)
+			if c := condition(h.s, v1alpha1.ConditionRecreatePending); c == nil || c.Reason != tc.reason {
+				t.Fatalf("RecreatePending %+v, want %s", c, tc.reason)
 			}
 		})
 	}
+}
+
+func TestGameReplicas(t *testing.T) {
+	cases := []struct {
+		name      string
+		desired   v1alpha1.PowerState
+		suspended bool
+		noPod     bool
+		noAgent   bool
+		deleting  bool
+		unstarted bool
+		state     string
+		want      int32
+	}{
+		{name: "running, no pod yet", desired: v1alpha1.PowerRunning, noPod: true, want: 1},
+		{name: "running, process running", desired: v1alpha1.PowerRunning, state: v1alpha1.ProcessRunning, want: 1},
+		{name: "running, crashed and offline", desired: v1alpha1.PowerRunning, state: v1alpha1.ProcessOffline, want: 1},
+		{name: "stopped, no pod", desired: v1alpha1.PowerStopped, noPod: true, want: 0},
+		{name: "stopped, still stopping", desired: v1alpha1.PowerStopped, state: v1alpha1.ProcessStopping, want: 1},
+		{name: "stopped, offline", desired: v1alpha1.PowerStopped, state: v1alpha1.ProcessOffline, want: 0},
+		{name: "stopped, agent unavailable", desired: v1alpha1.PowerStopped, noAgent: true, want: 1},
+		{name: "stopped, game container never started", desired: v1alpha1.PowerStopped, unstarted: true, state: v1alpha1.ProcessRunning, want: 0},
+		{name: "stopped, pod terminating", desired: v1alpha1.PowerStopped, deleting: true, state: v1alpha1.ProcessRunning, want: 0},
+		{name: "suspended, running", desired: v1alpha1.PowerRunning, suspended: true, state: v1alpha1.ProcessRunning, want: 1},
+		{name: "suspended, offline", desired: v1alpha1.PowerRunning, suspended: true, state: v1alpha1.ProcessOffline, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+			h.s.gs.Spec.Power.Desired = tc.desired
+			h.s.settings.Suspended = tc.suspended
+			h.agent.state = tc.state
+			h.s.agent = h.agent
+			if tc.noAgent {
+				h.s.agent = nil
+			}
+			if tc.noPod {
+				h.s.pod = nil
+			}
+			if tc.deleting {
+				now := metav1.NewTime(h.now)
+				h.pod.DeletionTimestamp = &now
+			}
+			if tc.unstarted {
+				h.pod.Status.ContainerStatuses = nil
+			}
+			got, err := h.r.gameReplicas(h.s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("replicas %d, want %d", got, tc.want)
+			}
+		})
+	}
+	t.Run("agent error", func(t *testing.T) {
+		h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+		h.agent.getErr = errBoom
+		h.s.agent = h.agent
+		if _, err := h.r.gameReplicas(h.s); !errors.Is(err, errBoom) {
+			t.Fatalf("err %v", err)
+		}
+	})
 }

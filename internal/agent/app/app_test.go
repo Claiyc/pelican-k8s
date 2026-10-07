@@ -192,7 +192,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	go func() {
 		done <- Run(ctx, Options{
 			ConfigPath: writeConfig(t, dir, c),
-			ShimSocket: filepath.Join(dir, "shim.sock"),
+			ShimListen: "127.0.0.1:0",
 			ShimToken:  "s",
 			Ready:      ready,
 		})
@@ -204,6 +204,23 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatalf("Run returned before listening: %v", err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("agent did not start listening")
+	}
+
+	// Wings' SFTP server starts in its own goroutine and writes its host key
+	// into the data directory first. Wait for it to listen, so it does not
+	// write into the directory while the test removes it.
+	sftpAddr := fmt.Sprintf("127.0.0.1:%d", c.sftpPort)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", sftpAddr, time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the SFTP server is not listening: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", c.apiPort)
@@ -223,14 +240,22 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatalf("healthz: %d %+v", res.StatusCode, health)
 	}
 
-	// The game is not running: not ready, and the agent never auto-starts it.
-	res, err = http.Get(base + "/internal/v1/ready")
+	// No shim has connected, and the agent never auto-starts the game.
+	req, _ := http.NewRequest("GET", base+"/internal/v1/shim", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	res, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var shim struct {
+		Attached bool `json:"attached"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&shim); err != nil {
+		t.Fatal(err)
+	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("ready: %d", res.StatusCode)
+	if res.StatusCode != http.StatusOK || shim.Attached {
+		t.Fatalf("shim: %d %+v", res.StatusCode, shim)
 	}
 
 	// The Wings API is reachable behind the same listener and requires the token.

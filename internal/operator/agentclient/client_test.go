@@ -69,6 +69,32 @@ func TestGetServer(t *testing.T) {
 	}
 }
 
+func TestShimAndActivity(t *testing.T) {
+	c, s := server(t, 200, `{"attached":true,"podUID":"p1","running":true}`)
+	sh, err := c.Shim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sh.Attached || sh.PodUID != "p1" || !sh.Running || sh.Terminating {
+		t.Fatalf("shim: %+v", sh)
+	}
+	if s.method != "GET" || s.path != "/internal/v1/shim" || s.auth != "Bearer tok" {
+		t.Fatalf("request: %+v", s)
+	}
+
+	c, s = server(t, 200, `{"busy":true,"reasons":["files","pull"]}`)
+	act, err := c.Activity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !act.Busy || len(act.Reasons) != 2 || act.Reasons[1] != "pull" {
+		t.Fatalf("activity: %+v", act)
+	}
+	if s.path != "/internal/v1/activity" {
+		t.Fatalf("request: %+v", s)
+	}
+}
+
 func TestCommands(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {

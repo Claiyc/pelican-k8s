@@ -1,0 +1,52 @@
+# Live placement suite: a kind cluster with three workers and storage that is
+# not bound to a node runs pelican-k8s built from this commit against the fake
+# Panel, and test/placement checks how the agent pod and the game pod are
+# placed and moved (ARCHITECTURE.md 7.7).
+name: Placement
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "api/**"
+      - "internal/operator/**"
+      - "internal/agent/**"
+      - "internal/shim/**"
+      - "charts/pelican-k8s/**"
+      - "test/placement/**"
+      - "test/fakepanel/**"
+      - "hack/e2e-placement.sh"
+      - "hack/kind-placement.yaml"
+      - ".github/workflows/placement.yaml"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its running suite; see ci.yaml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    name: Placement on kind
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: true
+      - name: Run the suite
+        run: hack/e2e-placement.sh

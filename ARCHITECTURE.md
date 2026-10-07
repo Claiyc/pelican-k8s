@@ -327,7 +327,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `GET /servers?page=` | One-item list: `{settings, process_configuration}` assembled from `spec.panel` and the `gs-<uuid>-env` Secret (§9.4); `build.memory_limit: 0` becomes the class `unlimitedMemoryMiB` and the default allocation IP becomes `0.0.0.0` |
 | `GET /servers/{uuid}` | Same object; `404` for any other UUID |
 | `POST /servers/reset` | `204`, dropped (the gateway sends the node reset itself, §8.9) |
-| `POST /servers/{uuid}/container/status` | Write `status.process.state`; set `spec.power.desired=Stopped` (and `kill: false`) when `previous_state` is `stopping` and `new_state` is `offline`, unless the game pod or the agent pod is terminating; refresh `status.usage`; forward to the Panel |
+| `POST /servers/{uuid}/container/status` | Write `status.process.state` (the agent's state on a fresh poll, below); set `spec.power.desired=Stopped` (and `kill: false`) when `previous_state` is `stopping` and `new_state` is `offline`, unless the game pod or the agent pod is terminating; refresh `status.usage`; forward to the Panel |
 | `GET /servers/{uuid}/install` | Install script of `spec.install.generation` from ConfigMap `gs-<uuid>-install-<gen>`, with `spec.install.image` and `entrypoint`; `404` if the ConfigMap is missing |
 | `POST /servers/{uuid}/install/prepared` | Record `status.install.preparedGeneration` and `result: Running`; answer with the generation and `strict_exit_code` (§8.2) |
 | `GET /servers/{uuid}/install/state?generation=` | The Job outcome recorded by the operator, polled by the installer |
@@ -344,7 +344,10 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 `GET /api/servers/:s` and the list endpoint are served from a per-replica cache filled by polling the
 agent's `GET /api/servers/:s` (state plus utilization) on demand: 2 s TTL, 900 ms poll timeout. A
 `container/status` post or a server delete invalidates the entry. State changes go to `status.process`
-when the agent posts them; after each post the gateway also refreshes `status.usage` from a fresh poll.
+when the agent posts them. The agent sends each change from its own goroutine, so `starting` can arrive
+after `running`; each gateway replica therefore handles one server's posts one at a time and writes the
+state a fresh poll of the agent returns, or the posted state when the agent cannot be polled. After
+each post the gateway also refreshes `status.usage` from a fresh poll.
 
 ### 5.9 Agent pod replacement
 
@@ -697,8 +700,8 @@ status:
     - type: VolumeReady          # PVC bound
     - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange, AllocationIPNotOnNode)
     - type: AgentReady           # agent container started and ready
-    - type: GamePodReady         # game pod scheduled and its shim attached to the agent; False (NotRequested) while the server is off, otherwise Unschedulable, WaitingForVolume or ShimNotAttached
-    - type: AgentRelocating      # the agent pod is being moved to the game pod's node (§7.7)
+    - type: GamePodReady         # game pod scheduled and its shim attached to the agent; False (NotRequested) while the server is off, otherwise NoPod, Unschedulable, WaitingForVolume, AgentNotReady, Starting, ShimNotAttached or Terminating
+    - type: AgentRelocating      # True while the agent pod moves to the game pod's node: WaitingForWork, Relocating; False: SameNode, NoGamePod (§7.7)
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
     - type: Installed            # True once a generation finished; reason Succeeded or Failed
     - type: ResizePending        # in-place resize of the game pod deferred, infeasible or needing a recreate
@@ -855,7 +858,6 @@ spec:
       lifecycle: {preStop: {httpGet: {path: /internal/v1/prestop, port: agent}}}
       env:
         - {name: PELICAN_SERVER_UUID, value: <uuid>}
-        - {name: PELICAN_POD_IMAGE, value: <game image>}
         - {name: WINGS_TOKEN_ID, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token_id}}}
         - {name: WINGS_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token}}}
         - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}
@@ -1019,11 +1021,15 @@ into the agent StatefulSet's template.
   cluster and most starts elsewhere.
 - If it runs on another node, the operator sets `AgentRelocating` and deletes the agent pod once it has
   no in-flight work. The StatefulSet recreates it on the game pod's node, the volume detaches from the
-  old node and attaches to the new one, and the game pod's containers start when it is mounted.
+  old node and attaches to the new one, and the game pod's containers start when it is mounted. The
+  operator starts the process only once both pods are on one node.
   Websockets and HTTP calls are carried across by the gateway (§5.9). Archives of the local backup
   adapter are on the agent pod's scratch volume and are lost (§10.5).
 - When the game pod is gone the operator removes the node affinity again, without restarting the agent,
   so the agent of a stopped server can be rescheduled anywhere after an eviction or a drain.
+- A `Pending` agent pod holds no work. One whose node affinity no longer matches (pinned to a drained
+  node after its game pod went, or not pinned while a game pod has a node) is deleted, and the
+  StatefulSet recreates it from the current template.
 
 Agent pods run with `agentPriorityClassName` (the chart's PriorityClass `pelican-agent`), above game
 pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there. It

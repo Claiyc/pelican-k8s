@@ -160,11 +160,11 @@ func (h *harness) addPod() {
 		h.t.Logf("fake agent on port %s; proxy tests use a dedicated listener", port)
 	}
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns, UID: "pod-1"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: "pod-1"}}
 	if err := h.c.Create(context.Background(), pod); err != nil {
 		h.t.Fatal(err)
 	}
-	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip, InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started, Ready: true}}}
+	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started, Ready: true}}}
 	if err := h.c.Status().Update(context.Background(), pod); err != nil {
 		h.t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestStateWithoutAgent(t *testing.T) {
 		t.Fatalf("no pod -> missing: %d %s", code, body)
 	}
 	_ = h.st.PatchStatus(context.Background(), uuid, map[string]any{"process": map[string]any{"state": "running"}})
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
 	_ = h.c.Create(context.Background(), pod)
 	code, body, _ = h.call("GET", "/api/servers/"+uuid, "", nodeToken)
 	if code != 200 || !strings.Contains(body, `"state":"running"`) {
@@ -459,13 +459,20 @@ func TestRemoteAPI(t *testing.T) {
 	if h.gs().Spec.Power.Desired != v1alpha1.PowerRunning {
 		t.Fatal("desired must stay Running")
 	}
+	// While the start is not observed yet, a stop belongs to it (a restart
+	// into a new game pod) and leaves desired alone.
+	h.remoteCall("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer)
+	if h.gs().Spec.Power.Desired != v1alpha1.PowerRunning {
+		t.Fatal("a stop for a pending power generation must keep desired=Running")
+	}
+	_ = h.st.PatchStatus(ctx, uuid, map[string]any{"power": map[string]any{"observedGeneration": 1}})
 	h.remoteCall("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer)
 	if h.gs().Spec.Power.Desired != v1alpha1.PowerStopped {
 		t.Fatal("intentional stop must set desired=Stopped")
 	}
 	// ...but not while the pod is terminating (eviction, recreate).
 	_ = h.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
-	pod, _ := h.st.Pod(ctx, uuid)
+	pod, _ := h.st.AgentPod(ctx, uuid)
 	pod.Finalizers = []string{"test/keep"}
 	_ = h.c.Update(ctx, pod)
 	_ = h.c.Delete(ctx, pod)

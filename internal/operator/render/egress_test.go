@@ -13,7 +13,7 @@ import (
 )
 
 // A class without blockedEgressCIDRs blocks link-local and the private and
-// shared ranges, while the DNS, gateway and game-server allow rules remain.
+// shared ranges, while the DNS, shim, gateway and game-server allow rules remain.
 func TestNetworkPolicyBlocksPrivateRangesByDefault(t *testing.T) {
 	np := NetworkPolicy(testInput(t, func(i *Input) { i.Class.Spec.Network = v1alpha1.NetworkSpec{} }))
 	want := []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
@@ -23,11 +23,19 @@ func TestNetworkPolicyBlocksPrivateRangesByDefault(t *testing.T) {
 	if np.Spec.Egress[0].To[0].NamespaceSelector == nil || len(np.Spec.Egress[0].Ports) != 4 {
 		t.Fatalf("dns rule %+v", np.Spec.Egress[0])
 	}
-	if np.Spec.Egress[2].To[0].PodSelector == nil || np.Spec.Egress[2].Ports[0].Port.IntValue() != GatewayPort {
-		t.Fatalf("gateway rule %+v", np.Spec.Egress[2])
+	if np.Spec.Egress[2].To[0].PodSelector == nil || np.Spec.Egress[2].Ports[0].Port.IntValue() != ShimPort {
+		t.Fatalf("shim rule %+v", np.Spec.Egress[2])
 	}
 	if np.Spec.Egress[3].To[0].PodSelector.MatchLabels[v1alpha1.LabelComponent] != "game" {
 		t.Fatalf("game server rule %+v", np.Spec.Egress[3])
+	}
+
+	ap := AgentNetworkPolicy(testInput(t, func(i *Input) { i.Class.Spec.Network = v1alpha1.NetworkSpec{} }))
+	if got := ap.Spec.Egress[1].To[0].IPBlock.Except; !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent except %v, want %v", got, want)
+	}
+	if ap.Spec.Egress[2].To[0].PodSelector == nil || ap.Spec.Egress[2].Ports[0].Port.IntValue() != GatewayPort {
+		t.Fatalf("gateway rule %+v", ap.Spec.Egress[2])
 	}
 
 	// An explicit empty list blocks only link-local.

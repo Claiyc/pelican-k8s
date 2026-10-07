@@ -169,11 +169,11 @@ func (f *fixture) addPod() {
 	f.t.Helper()
 	ctx := context.Background()
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
-	pod.Status = corev1.PodStatus{PodIP: "10.0.0.1", InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
+	pod.Status = corev1.PodStatus{PodIP: "10.0.0.1", ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
 	if err := f.c.Status().Update(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}

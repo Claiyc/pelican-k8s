@@ -18,6 +18,7 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 )
 
 // SetupWithManager registers the reconciler and its watches.
@@ -58,7 +59,8 @@ func (r *GameServerReconciler) SetupWithManager(mgr ctrl.Manager, concurrency in
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Secret{}).
 		Watches(&corev1.Pod{}, byServerLabel, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
-			return o.GetLabels()[v1alpha1.LabelComponent] == "game"
+			c := o.GetLabels()[v1alpha1.LabelComponent]
+			return c == render.ComponentGame || c == render.ComponentAgent
 		}))).
 		Watches(&v1alpha1.GameServerClass{}, byClass).
 		WithOptions(controller.Options{MaxConcurrentReconciles: concurrency}).

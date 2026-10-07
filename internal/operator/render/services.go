@@ -23,7 +23,7 @@ func ExposureService(in *Input) *corev1.Service {
 	svc := &corev1.Service{
 		ObjectMeta: in.Meta(names.ExposureService(in.UUID()), "exposure"),
 		Spec: corev1.ServiceSpec{
-			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: "game"},
+			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: ComponentGame},
 			PublishNotReadyAddresses: true,
 		},
 	}
@@ -70,7 +70,8 @@ func portName(p int32, proto corev1.Protocol) string {
 	return fmt.Sprintf("tcp-%d", p)
 }
 
-// AgentService renders the headless Service for the agent's HTTP and SFTP ports.
+// AgentService renders the headless Service of the agent pod: HTTP, SFTP and
+// the shim port the game pod dials.
 func AgentService(in *Input) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: in.Meta(names.AgentService(in.UUID()), "agent"),
@@ -79,11 +80,12 @@ func AgentService(in *Input) *corev1.Service {
 			// the type against the stored Service, which always carries one.
 			Type:                     corev1.ServiceTypeClusterIP,
 			ClusterIP:                corev1.ClusterIPNone,
-			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: "game"},
+			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: ComponentAgent},
 			PublishNotReadyAddresses: true,
 			Ports: []corev1.ServicePort{
 				{Name: "agent", Port: AgentPort, TargetPort: intstr.FromInt(AgentPort), Protocol: corev1.ProtocolTCP},
 				{Name: "sftp", Port: SFTPPort, TargetPort: intstr.FromInt(SFTPPort), Protocol: corev1.ProtocolTCP},
+				{Name: "shim", Port: ShimPort, TargetPort: intstr.FromInt(ShimPort), Protocol: corev1.ProtocolTCP},
 			},
 		},
 	}

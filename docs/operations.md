@@ -76,6 +76,23 @@ server's pods are recreated (or use `deletionPolicy: Retain` and swap the PVC).
    next start uses the new shim; a running server's game pod is replaced once its
    process is offline.
 
+### From 1.x to 2.0
+
+2.0 runs every server in an agent pod and a game pod. There is no compatibility
+mode: after the upgrade above, the operator deletes each pod of the 1.x layout
+(a `gs-<uuid>-0` with an `agent` container, event `LegacyPodDeleted`) as soon as
+it reconciles the server. A running server is stopped through the 1.x pod's
+shutdown path and started again in the new layout; a stopped server only gets
+its agent pod. Plan the upgrade for a quiet time, and take the steps below
+first:
+
+- Scripts and runbooks that use `kubectl logs gs-<uuid>-0 -c agent` or
+  `kubectl exec gs-<uuid>-0 -c agent` move to `gs-<uuid>-agent-0`.
+- Custom admission policies or SCCs that match the game pods'
+  ServiceAccount `pelican-game` also need `pelican-agent`.
+- Local backups (the `wings` adapter) of a server are lost when its agent pod
+  moves to another node; switch to S3 for durable backups.
+
 Upgrading the Panel is independent; re-run the compatibility checks in
 `test/upstream` when bumping the pinned Wings version.
 
@@ -86,6 +103,7 @@ Upgrading the Panel is independent; re-run the compatibility checks in
 | Node shows an exception in the Panel | `curl -H "Authorization: Bearer <token>" https://wings.../api/system`; the Panel caches system info for 6 minutes (`php artisan cache:clear`) |
 | `AgentReady=False` for long | `kubectl describe pod gs-<uuid>-agent-0`: image pulls, volume attach, agent logs (`failed to load server configuration from gateway, retrying` → NetworkPolicy/DNS) |
 | Server stays in `Starting`, `GamePodReady=False` | `Unschedulable`: no node has room for the game pod (or the agent has in-flight work and its node is full; the requirement lifts when the work ends). `WaitingForVolume`: the volume is still attached to the agent's old node. `ShimNotAttached`: `kubectl describe pod gs-<uuid>-0` for image pulls and the `probe-entrypoint` init container (unknown egg image layout); the shim's log for connection errors to `gs-<uuid>-agent:8082` (NetworkPolicy/DNS) |
+| `AgentRelocating=True` for a long time | `WaitingForWork`: the agent has in-flight work (the message lists it: a transfer, a backup, an install, SFTP activity in the last minute) and moves once it ends. `Relocating`: the new agent pod is `Pending` on the game pod's node; `kubectl describe pod gs-<uuid>-agent-0` shows why (no room even after preemption, a taint) |
 | Install stuck in `InstallPrepared=False` | the agent must reach the gateway's remote API; `prepareTimeoutSeconds` fails it eventually |
 | Install Job never gets a pod | `kubectl describe job`: admission policy or SCC rejection message |
 | Console shows nothing | websocket goes browser → ingress → gateway → agent; check ingress websocket support and `gateway.allowedOrigins` |

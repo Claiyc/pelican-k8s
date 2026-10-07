@@ -30,7 +30,7 @@ type Target struct {
 
 // HTTPBase returns the agent's HTTP base URL.
 func (t Target) HTTPBase() string {
-	return "http://" + net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
+	return render.AgentURL(t.PodIP)
 }
 
 // SFTPAddr returns the agent's SFTP address.
@@ -73,7 +73,7 @@ func NewResolver(s *store.Store, ttl time.Duration) *Resolver {
 
 // Resolve returns the agent target of a server, or ErrUnavailable.
 func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
-	pod, err := r.Store.Pod(ctx, uuid)
+	pod, err := r.Store.AgentPod(ctx, uuid)
 	if err != nil {
 		return nil, err
 	}

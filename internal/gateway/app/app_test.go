@@ -184,7 +184,7 @@ func startedPod(name, ip string) *corev1.Pod {
 	started := true
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Status:     corev1.PodStatus{PodIP: ip, InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}},
+		Status:     corev1.PodStatus{PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}},
 	}
 }
 
@@ -333,7 +333,8 @@ func TestDiagnostics(t *testing.T) {
 	gsReady.Spec.Power.Desired = v1alpha1.PowerRunning
 	gsDown := gameServer(uuid)
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(ready), Namespace: ns}, Data: map[string][]byte{"token_id": []byte("a"), "token": []byte("b")}}
-	g := newGateway(t, testConfig(ps.URL), gsReady, gsDown, startedPod(names.Pod(ready), "10.0.0.5"), secret)
+	game := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(ready), Namespace: ns}, Spec: corev1.PodSpec{NodeName: "node-a"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	g := newGateway(t, testConfig(ps.URL), gsReady, gsDown, startedPod(names.AgentPod(ready), "10.0.0.5"), game, secret)
 
 	out := g.diagnostics(context.Background())
 	for _, want := range []string{
@@ -343,9 +344,9 @@ func TestDiagnostics(t *testing.T) {
 		"servers namespace: " + ns,
 		"panel reachable: yes",
 		"gameservers: 2",
-		ready + " phase=Running process=running desired=Running agent=yes",
+		ready + " phase=Running process=running desired=Running agent=yes game=Running@node-a",
 		uuid + " phase=",
-		"agent=no",
+		"agent=no game=none",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("diagnostics missing %q:\n%s", want, out)

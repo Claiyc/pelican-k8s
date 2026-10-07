@@ -7,49 +7,51 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
+	"github.com/pelican/wings/router/downloader"
 	"github.com/pelican/wings/server"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
+// PrestopShimWait is how long the agent's preStop hook waits for the shim to
+// report that it is terminating too (a drain that takes both pods).
+var PrestopShimWait = 10 * time.Second
+
 // Handler returns the combined handler: /internal/v1/* here, everything else
-// to wings (the gin engine).
+// to wings (the gin engine). File transfers through wings are counted as
+// in-flight work for /internal/v1/activity.
 func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.Handler {
+	act := &Activity{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /internal/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version, "servers": m.Len()})
 	})
-	// The game container's readiness probe: ready only in the state the Panel
-	// shows as "running" (the egg's done line matched), so "starting" and a
-	// stopped server both read as not ready. It only ever feeds pod readiness.
-	mux.HandleFunc("GET /internal/v1/ready", func(w http.ResponseWriter, r *http.Request) {
-		var states []string
-		for _, s := range m.All() {
-			states = append(states, s.Environment.State())
+	// Called by kubelet's preStop hook of the agent container.
+	mux.HandleFunc("/internal/v1/prestop", func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m, reg) })
+	// Called by the operator: the game pod whose shim holds the connection.
+	mux.HandleFunc("GET /internal/v1/shim", authorized(func(w http.ResponseWriter, r *http.Request) {
+		info := shimenv.ShimInfo{}
+		for _, e := range reg.All() {
+			info = e.Shim()
 		}
-		code := http.StatusServiceUnavailable
-		if gameReady(states) {
-			code = http.StatusOK
-		}
-		writeJSON(w, code, map[string]any{"ready": code == http.StatusOK, "states": states})
-	})
-	// Called by kubelet's preStop hooks; returns once the process is offline.
-	mux.HandleFunc("/internal/v1/prestop", func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m) })
+		writeJSON(w, http.StatusOK, info)
+	}))
+	// Called by the operator before it moves the agent pod.
+	mux.HandleFunc("GET /internal/v1/activity", authorized(func(w http.ResponseWriter, r *http.Request) {
+		reasons := act.Reasons(m)
+		writeJSON(w, http.StatusOK, map[string]any{"busy": len(reasons) > 0, "reasons": reasons})
+	}))
 	// Called by the operator when the game container terminated underneath the agent.
-	mux.HandleFunc("POST /internal/v1/exit-state", func(w http.ResponseWriter, r *http.Request) {
-		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(auth), []byte(config.Get().Token.Token)) != 1 {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "You are not authorized to access this endpoint."})
-			return
-		}
+	mux.HandleFunc("POST /internal/v1/exit-state", authorized(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Code      int  `json:"code"`
 			OOMKilled bool `json:"oomKilled"`
@@ -64,23 +66,90 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.Handle("/", wings)
+	}))
+	mux.Handle("/", act.Track(wings))
 	return mux
 }
 
-// gameReady reports whether every server of this agent (exactly one per pod) is
-// running. An agent that has not loaded its server yet is not ready.
-func gameReady(states []string) bool {
-	if len(states) == 0 {
+// authorized guards a route with the agent's own Wings token, as the Panel's
+// calls to Wings are guarded.
+func authorized(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(config.Get().Token.Token)) != 1 {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "You are not authorized to access this endpoint."})
+			return
+		}
+		h(w, r)
+	}
+}
+
+// Activity counts in-flight file requests: uploads, downloads, compress,
+// decompress and the rest of the file API. Remote pulls, restores and
+// installs run in Wings after their request returned and are read from Wings'
+// own state.
+type Activity struct {
+	mu    sync.Mutex
+	files int
+}
+
+// isFileRequest reports whether a request moves server files.
+func isFileRequest(path string) bool {
+	if strings.HasPrefix(path, "/download/") || strings.HasPrefix(path, "/upload/") {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, "/api/servers/")
+	if !ok {
 		return false
 	}
-	for _, st := range states {
-		if st != environment.ProcessRunningState {
-			return false
+	_, sub, _ := strings.Cut(rest, "/")
+	return strings.HasPrefix(sub, "files/")
+}
+
+// Track counts the file requests that pass through h.
+func (a *Activity) Track(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isFileRequest(r.URL.Path) {
+			h.ServeHTTP(w, r)
+			return
+		}
+		a.mu.Lock()
+		a.files++
+		a.mu.Unlock()
+		defer func() {
+			a.mu.Lock()
+			a.files--
+			a.mu.Unlock()
+		}()
+		h.ServeHTTP(w, r)
+	})
+}
+
+// Reasons lists the in-flight work a move of the agent would break.
+func (a *Activity) Reasons(m *server.Manager) []string {
+	set := map[string]bool{}
+	a.mu.Lock()
+	if a.files > 0 {
+		set["files"] = true
+	}
+	a.mu.Unlock()
+	for _, s := range m.All() {
+		if len(downloader.ByServer(s.ID())) > 0 {
+			set["pull"] = true
+		}
+		if s.IsRestoring() {
+			set["restore"] = true
+		}
+		if s.IsInstalling() {
+			set["install"] = true
 		}
 	}
-	return true
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -89,23 +158,59 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager) {
+// prestop returns at once unless the shim reports within PrestopShimWait that
+// its container is being terminated too (a drain takes both pods); then it
+// returns once the process is offline, so the agent sees the shutdown
+// through. Otherwise the process keeps running under the shim until the next
+// agent attaches.
+func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager, reg *shimenv.Registry) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	defer cancel()
-	for _, s := range m.All() {
-		if s.Environment.State() == environment.ProcessOfflineState {
-			continue
+	terminating := func() bool {
+		for _, s := range m.All() {
+			e, ok := reg.Get(s.ID())
+			if ok && e.Shim().Terminating {
+				return true
+			}
 		}
-		s.Log().Info("prestop: stopping server process before pod termination")
-		s.PublishConsoleOutputFromDaemon("Pod is being terminated, stopping the server...")
-		err := s.HandlePowerAction(server.PowerActionStop, 30)
-		if err != nil && (errors.Is(err, server.ErrServerIsInstalling) || errors.Is(err, server.ErrServerIsRestoring) || errors.Is(err, server.ErrServerIsTransferring)) {
-			continue
+		return false
+	}
+	offline := func() bool {
+		for _, s := range m.All() {
+			if s.Environment.State() != environment.ProcessOfflineState {
+				return false
+			}
 		}
-		if err != nil {
-			s.Log().WithField("error", err).Warn("prestop: graceful stop failed, terminating")
-			_ = s.Environment.WaitForStop(ctx, time.Minute, true)
+		return true
+	}
+	if offline() {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": false})
+		return
+	}
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	seen := time.After(PrestopShimWait)
+	for !terminating() && !offline() {
+		select {
+		case <-seen:
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": false})
+			return
+		case <-ctx.Done():
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": false})
+			return
+		case <-t.C:
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	for _, s := range m.All() {
+		s.PublishConsoleOutputFromDaemon("Pod is being terminated, waiting for the server to stop...")
+	}
+	for !offline() {
+		select {
+		case <-ctx.Done():
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": true})
+			return
+		case <-t.C:
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": true})
 }

@@ -1,7 +1,7 @@
 {{- if .Values.networkPolicies.enabled }}
 {{- $ns := include "pelican-k8s.serversNamespace" . }}
 # Default deny for everything in the servers namespace; the operator adds a
-# per-server policy for each game pod (ARCHITECTURE.md 12.4).
+# policy for each agent pod and each game pod (ARCHITECTURE.md 12.4).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

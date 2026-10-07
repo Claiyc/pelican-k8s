@@ -1,6 +1,6 @@
 // Package app wires the gateway: Kubernetes cache, Panel client, the
 // Panel-facing API, the agent-facing remote API, the websocket proxy, the
-// SFTP relay and the drift resync loop.
+// SFTP relay, the drift resync loop and the crash check.
 package app
 
 import (
@@ -26,6 +26,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/config"
+	"github.com/Claiyc/pelican-k8s/internal/gateway/crashwatch"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/metallb"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panelapi"
@@ -140,6 +141,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}()
 	go g.Sync.RunResync(ctx, g.Cfg.ResyncInterval)
 	go g.resetServersState(ctx)
+	go (&crashwatch.Watcher{Store: g.Store, Log: g.Log.With("component", "crashwatch")}).Run(ctx)
 
 	var runErr error
 	select {
@@ -239,7 +241,17 @@ func (g *Gateway) diagnostics(ctx context.Context) string {
 		if _, err := g.Agents.Resolve(ctx, gs.Spec.Panel.UUID); err == nil {
 			ready = "yes"
 		}
-		fmt.Fprintf(&b, "  %s phase=%s process=%s desired=%s agent=%s\n", gs.Spec.Panel.UUID, gs.Status.Phase, gs.Status.Process.State, gs.Spec.Power.Desired, ready)
+		game := "none"
+		if pod, err := g.Store.Pod(ctx, gs.Spec.Panel.UUID); err == nil && pod != nil {
+			game = string(pod.Status.Phase)
+			if !pod.DeletionTimestamp.IsZero() {
+				game = "Terminating"
+			}
+			if pod.Spec.NodeName != "" {
+				game += "@" + pod.Spec.NodeName
+			}
+		}
+		fmt.Fprintf(&b, "  %s phase=%s process=%s desired=%s agent=%s game=%s\n", gs.Spec.Panel.UUID, gs.Status.Phase, gs.Status.Process.State, gs.Spec.Power.Desired, ready, game)
 	}
 	return b.String()
 }

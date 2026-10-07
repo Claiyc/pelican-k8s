@@ -27,7 +27,7 @@ func idleEnv(t *testing.T, dialTimeout time.Duration) *Environment {
 	cfg := environment.NewConfiguration(environment.Settings{}, nil)
 	e := New("idle", cfg, Options{
 		Connect:     func(ctx context.Context) (*protocol.Client, error) { <-ctx.Done(); return nil, ctx.Err() },
-		SocketPath:  filepath.Join(dir, "shim.sock"),
+		Addr:        freeAddr(t),
 		RunLog:      filepath.Join(dir, "console.log"),
 		DialTimeout: dialTimeout,
 	})
@@ -391,7 +391,7 @@ func TestIsConnError(t *testing.T) {
 
 func TestConnectLoopRetriesWithBackoff(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
+	sock := freeAddr(t)
 	ln := listenShim(t, sock)
 	var calls atomic.Int32
 	connect := func(ctx context.Context) (*protocol.Client, error) {
@@ -401,12 +401,12 @@ func TestConnectLoopRetriesWithBackoff(t *testing.T) {
 		return ln.Accept(ctx)
 	}
 	e := New("retry", environment.NewConfiguration(environment.Settings{}, nil), Options{
-		Connect: connect, SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second,
+		Connect: connect, Addr: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second,
 	})
 	defer e.Close()
 	// A shim that connects only after the failed attempts proves that the loop
 	// kept trying.
-	sup := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	sup := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = sup.Run(ctx) }()
@@ -475,7 +475,7 @@ func TestRegistryFactory(t *testing.T) {
 		c.System.LogDirectory = filepath.Join(dir, "log")
 		c.System.CrashDetection.CrashDetectionEnabled = false
 	})
-	ln := listenShim(t, filepath.Join(dir, "shim.sock"))
+	ln := listenShim(t, freeAddr(t))
 	reg := NewRegistry(ln, []string{"INTERNAL_IP=10.1.2.3"}, nil)
 	if _, ok := reg.Get("nope"); ok {
 		t.Fatal("unknown server")
@@ -499,7 +499,7 @@ func TestRegistryFactory(t *testing.T) {
 	if got := e1.stopConfig(); got != pc.Stop {
 		t.Fatalf("stop config %+v", got)
 	}
-	if e1.o.SocketPath != ln.Path() || e1.o.RunLog != filepath.Join(dir, "log", "console", "srv-1.log") {
+	if e1.o.Addr != ln.Addr() || e1.o.RunLog != filepath.Join(dir, "log", "console", "srv-1.log") {
 		t.Fatalf("options %+v", e1.o)
 	}
 	if len(e1.o.ExtraEnv) != 1 || e1.o.ExtraEnv[0] != "INTERNAL_IP=10.1.2.3" {
@@ -545,4 +545,61 @@ func TestWaitForStopReportsParentDeadlineDuringStop(t *testing.T) {
 	if e.State() == environment.ProcessOfflineState {
 		t.Fatal("the process must not have been killed")
 	}
+}
+
+// The game pod is deleted while the process runs: the shim reports
+// terminating and stops the process with the stop configuration the agent
+// sent it, and the agent sees a stop, not a crash. The state the agent pushes
+// drives the shim's readiness file, and the shim's pod UID is reported.
+func TestShimStopsProcessOnTermination(t *testing.T) {
+	dir := t.TempDir()
+	sock := freeAddr(t)
+	ln := listenShim(t, sock)
+	ready := filepath.Join(dir, "ready")
+	sup := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, PodUID: "game-pod-1", ReadyFile: ready, GracePeriod: time.Minute, TermLead: 20 * time.Second,
+		Argv: []string{"/bin/sh", "-c", `echo up; while read l; do [ "$l" = halt ] && exit 0; done`}, Dir: dir, KillGrace: time.Second})
+	supCtx, stopPod := context.WithCancel(context.Background())
+	supDone := make(chan struct{})
+	go func() { _ = sup.Run(supCtx); close(supDone) }()
+	defer stopPod()
+	cfg := environment.NewConfiguration(environment.Settings{}, nil)
+	e := New("s", cfg, Options{Connect: ln.Accept, Addr: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
+	defer e.Close()
+	e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "halt"})
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if info := e.Shim(); !info.Attached || info.PodUID != "game-pod-1" || !info.Running {
+		t.Fatalf("shim info %+v", info)
+	}
+	e.SetState(environment.ProcessRunningState)
+	eventually(t, func() bool { _, err := os.Stat(ready); return err == nil }, "readiness file while running")
+	states := collectStates(t, e)
+
+	start := time.Now()
+	stopPod()
+	waitState(t, e, environment.ProcessOfflineState, 5*time.Second)
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("the stop command did not stop the process")
+	}
+	if got := strings.Join(states(), ","); got != "stopping,offline" {
+		t.Fatalf("states %s", got)
+	}
+	if code, _, _ := e.ExitState(); code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	<-supDone
+	if _, err := os.Stat(ready); err == nil {
+		t.Fatal("readiness file left behind")
+	}
+}
+
+func eventually(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }

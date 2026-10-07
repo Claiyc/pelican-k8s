@@ -3,6 +3,8 @@
 {{- $_ := set $spec "images" (dict "shim" (include "pelican-k8s.image" (dict "root" . "name" "shim")) "agent" (include "pelican-k8s.image" (dict "root" . "name" "agent")) "pullPolicy" .Values.image.pullPolicy) }}
 {{- $_ = set $spec "agentConfigMap" "pelican-agent-config" }}
 {{- $_ = set $spec "serviceAccountName" "pelican-game" }}
+{{- $_ = set $spec "agentServiceAccountName" "pelican-agent" }}
+{{- $_ = set $spec "agentPriorityClassName" .Values.agentPriorityClass.name }}
 {{- if .Values.openshift.enabled }}
 {{- $_ = set $spec.security "useNamespaceUIDRange" true }}
 {{- $_ = set $spec.install "disableSeccomp" true }}

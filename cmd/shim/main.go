@@ -25,8 +25,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `pelican-k8s shim %s
 
 Usage:
-  shim run       --socket PATH [--argv-file PATH] [--dir DIR] [--tmp DIR] [--ring-size N] -- [argv...]
-  shim prepare   --bin PATH --shared DIR --data DIR --uuid UUID
+  shim run       --agent HOST:PORT [--argv-file PATH] [--dir DIR] [--tmp DIR] [--ready-file PATH] [--grace-period D] [--ring-size N] -- [argv...]
+  shim ready     [--file PATH]
+  shim prepare   [--bin PATH --shared DIR] [--data DIR --uuid UUID]
   shim probe     --out PATH [--passwd PATH --group PATH --name NAME --home DIR --uid N --gid N] [-- argv...]
   shim install-run --log PATH --exit PATH [--chown UID:GID --chown-path DIR] -- command args...
   shim version
@@ -44,6 +45,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		err = runCmd(os.Args[2:], logger)
+	case "ready":
+		err = readyCmd(os.Args[2:])
 	case "prepare":
 		err = prepareCmd(os.Args[2:])
 	case "probe":
@@ -85,7 +88,9 @@ func runCmd(args []string, logger *slog.Logger) error {
 
 	flags, rest := splitDashDash(args)
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	socket := fs.String("socket", "/pelican/run/shim.sock", "the agent's unix socket to connect to")
+	agent := fs.String("agent", "127.0.0.1:8082", "the agent's shim address (host:port)")
+	readyFile := fs.String("ready-file", "/pelican/run/ready", "file present while the process is running (empty disables)")
+	gracePeriod := fs.Duration("grace-period", 660*time.Second, "the pod's termination grace period")
 	argvFile := fs.String("argv-file", "/pelican/etc/argv", "JSON array with the image entrypoint, used when no argv follows --")
 	dir := fs.String("dir", "/home/container", "working directory of the process")
 	tmp := fs.String("tmp", "/tmp", "directory emptied before each start (empty disables)")
@@ -95,7 +100,7 @@ func runCmd(args []string, logger *slog.Logger) error {
 	noStats := fs.Bool("no-stats", false, "disable cgroup sampling")
 	_ = fs.Parse(flags)
 
-	o := supervisor.Options{Socket: *socket, Token: []byte(token), Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
+	o := supervisor.Options{Agent: *agent, Token: []byte(token), PodUID: os.Getenv("PELICAN_POD_UID"), ReadyFile: *readyFile, GracePeriod: *gracePeriod, Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
 	if !*noStats {
 		cg := cgroup.New()
 		if cg.Available() {
@@ -107,11 +112,23 @@ func runCmd(args []string, logger *slog.Logger) error {
 	return supervisor.New(o).Run(context.Background())
 }
 
+// readyCmd is the game container's readiness probe: it succeeds while the
+// readiness file exists, that is while the agent reports the process running.
+func readyCmd(args []string) error {
+	fs := flag.NewFlagSet("ready", flag.ExitOnError)
+	file := fs.String("file", "/pelican/run/ready", "readiness file")
+	_ = fs.Parse(args)
+	if _, err := os.Stat(*file); err != nil {
+		return fmt.Errorf("not ready: %w", err)
+	}
+	return nil
+}
+
 func prepareCmd(args []string) error {
 	fs := flag.NewFlagSet("prepare", flag.ExitOnError)
-	bin := fs.String("bin", "/pelican/bin/shim", "destination for the shim binary")
-	shared := fs.String("shared", "/pelican", "shared emptyDir")
-	data := fs.String("data", "/data", "PVC root")
+	bin := fs.String("bin", "", "destination for the shim binary (empty skips the copy)")
+	shared := fs.String("shared", "", "the game pod's /pelican emptyDir (empty skips it)")
+	data := fs.String("data", "", "PVC root to lay out (empty skips it)")
 	uuid := fs.String("uuid", os.Getenv("PELICAN_SERVER_UUID"), "server uuid")
 	_ = fs.Parse(args)
 	return prepare.Layout{Bin: *bin, Shared: *shared, Data: *data, UUID: *uuid}.Run()

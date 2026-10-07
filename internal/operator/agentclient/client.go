@@ -95,6 +95,38 @@ func (c *Client) ExitState(ctx context.Context, code int32, oomKilled bool) erro
 	return c.do(ctx, http.MethodPost, "/internal/v1/exit-state", map[string]any{"code": code, "oomKilled": oomKilled}, nil)
 }
 
+// Shim describes the shim connection the agent holds.
+type Shim struct {
+	Attached    bool   `json:"attached"`
+	PodUID      string `json:"podUID,omitempty"`
+	Running     bool   `json:"running"`
+	Terminating bool   `json:"terminating"`
+}
+
+// Shim returns the agent's view of its shim connection.
+func (c *Client) Shim(ctx context.Context) (*Shim, error) {
+	var out Shim
+	if err := c.do(ctx, http.MethodGet, "/internal/v1/shim", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Activity is the agent's in-flight work.
+type Activity struct {
+	Busy    bool     `json:"busy"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// Activity returns the work a move of the agent pod would break.
+func (c *Client) Activity(ctx context.Context) (*Activity, error) {
+	var out Activity
+	if err := c.do(ctx, http.MethodGet, "/internal/v1/activity", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var r io.Reader
 	if body != nil {

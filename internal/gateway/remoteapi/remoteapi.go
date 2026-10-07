@@ -5,14 +5,17 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelican/wings/remote"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
@@ -38,6 +41,9 @@ type Handler struct {
 	Log    *slog.Logger
 	// Metrics counters (optional).
 	OnUnmatched func(method, path string)
+
+	// statusMu serialises the state posts of one server (striped by UUID).
+	statusMu [32]sync.Mutex
 }
 
 type ctxKey struct{}
@@ -226,16 +232,9 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	sc := body.Data
 	h.Agents.Invalidate(uuid)
-	status := map[string]any{"process": map[string]any{"state": sc.NewState, "since": metav1.Now()}}
-	if err := h.Store.PatchStatus(r.Context(), uuid, status); err != nil {
-		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
-	}
-	if sc.PrevState == v1alpha1.ProcessStopping && sc.NewState == v1alpha1.ProcessOffline {
-		if pod, _ := h.Store.Pod(r.Context(), uuid); pod == nil || pod.DeletionTimestamp.IsZero() {
-			if gs, err := h.Store.Get(r.Context(), uuid); err == nil && gs.Spec.Power.Desired != v1alpha1.PowerStopped {
-				_ = h.Store.PatchSpec(r.Context(), uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}})
-			}
-		}
+	h.recordState(r.Context(), uuid, sc.NewState)
+	if sc.PrevState == v1alpha1.ProcessStopping && sc.NewState == v1alpha1.ProcessOffline && h.intentionalStop(r.Context(), uuid) {
+		_ = h.Store.PatchSpec(r.Context(), uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}})
 	}
 	// Forward with a detached context: the agent's own client timeout must not
 	// cancel the Panel call halfway.
@@ -246,6 +245,55 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	go h.recordUsage(context.WithoutCancel(r.Context()), uuid)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordState writes status.process.state. The agent sends each state change
+// from its own goroutine, so two posts in quick succession (starting, then
+// running) can arrive in either order. The posts of one server are therefore
+// serialised, and each writes the state the agent has now, which makes the
+// last write the latest state. The posted state is the fallback when the
+// agent cannot be asked.
+func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
+	f := fnv.New32a()
+	_, _ = f.Write([]byte(uuid))
+	mu := &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
+	mu.Lock()
+	defer mu.Unlock()
+	state := posted
+	if t, err := h.Agents.Resolve(ctx, uuid); err == nil {
+		if body, err := h.Agents.State(ctx, t, true); err == nil {
+			var st struct {
+				State string `json:"state"`
+			}
+			if json.Unmarshal(body, &st) == nil && st.State != "" {
+				state = st.State
+			}
+		}
+	}
+	status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
+	if err := h.Store.PatchStatus(ctx, uuid, status); err != nil {
+		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
+	}
+}
+
+// intentionalStop reports whether a stopping → offline transition is a stop
+// the Panel should see as the server's new desired state: the stop command
+// typed into the console, a suspension, or a stop the operator issued for
+// desired Stopped. A pod that is terminating (a drain, a recreate) stops the
+// process without changing what the user wants, and so does a stop the
+// operator issued for a pending power generation (a restart into a new game
+// pod under RecreatePending).
+func (h *Handler) intentionalStop(ctx context.Context, uuid string) bool {
+	for _, get := range []func(context.Context, string) (*corev1.Pod, error){h.Store.Pod, h.Store.AgentPod} {
+		if pod, _ := get(ctx, uuid); pod != nil && !pod.DeletionTimestamp.IsZero() {
+			return false
+		}
+	}
+	gs, err := h.Store.Get(ctx, uuid)
+	if err != nil || gs.Spec.Power.Desired == v1alpha1.PowerStopped {
+		return false
+	}
+	return gs.Spec.Power.Generation == gs.Status.Power.ObservedGeneration
 }
 
 // recordUsage samples the agent's utilization into status.usage (throttled by the caller pattern).

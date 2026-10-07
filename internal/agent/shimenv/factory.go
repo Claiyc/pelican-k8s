@@ -31,11 +31,11 @@ func NewRegistry(ln *protocol.Listener, extraEnv []string, logger *slog.Logger) 
 // Factory is the server.EnvironmentFactory registered with the Wings manager.
 func (r *Registry) Factory(s *server.Server, cfg *environment.Configuration) (environment.ProcessEnvironment, error) {
 	e := New(s.ID(), cfg, Options{
-		Connect:    r.ln.Accept,
-		SocketPath: r.ln.Path(),
-		RunLog:     filepath.Join(config.Get().System.LogDirectory, "console", s.ID()+".log"),
-		ExtraEnv:   r.extraEnv,
-		Logger:     r.logger,
+		Connect:  r.ln.Accept,
+		Addr:     r.ln.Addr(),
+		RunLog:   filepath.Join(config.Get().System.LogDirectory, "console", s.ID()+".log"),
+		ExtraEnv: r.extraEnv,
+		Logger:   r.logger,
 	})
 	e.SetImage(s.Config().Container.Image)
 	if pc := s.ProcessConfiguration(); pc != nil {
@@ -50,6 +50,17 @@ func (r *Registry) Factory(s *server.Server, cfg *environment.Configuration) (en
 	r.envs[s.ID()] = e
 	r.mu.Unlock()
 	return e, nil
+}
+
+// All returns every registered environment.
+func (r *Registry) All() []*Environment {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Environment, 0, len(r.envs))
+	for _, e := range r.envs {
+		out = append(out, e)
+	}
+	return out
 }
 
 // Get returns the environment of a server.

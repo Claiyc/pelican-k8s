@@ -120,7 +120,7 @@ func InstallJob(in *Input, gen int64) *batchv1.Job {
 					Containers:                   []corev1.Container{install},
 					Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-							LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: "game"}},
+							LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: ComponentAgent}},
 							TopologyKey:   "kubernetes.io/hostname",
 						}},
 					}},
