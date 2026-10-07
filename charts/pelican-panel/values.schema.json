@@ -1,0 +1,1367 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Claiyc/pelican-k8s/charts/pelican-panel/values.schema.json",
+  "title": "pelican-panel chart values",
+  "description": "Values of the pelican-panel Helm chart, which deploys the unmodified upstream Pelican Panel image (Caddy, PHP-FPM, the queue worker and the scheduler in one container) with optional bundled MariaDB and Redis. Helm validates the merged values (values.yaml, every -f file and every --set) against this schema on install, upgrade, template and lint, before any template renders. Every value is also documented in README.md.",
+  "$comment": "Draft-07 keeps the schema readable by every Helm 3 release (Helm < 3.18 only understands draft-04 to draft-07). Objects the chart models key by key set additionalProperties: false so a misspelt key fails instead of being ignored silently. Cross-field rules (replicaCount > 1, https without a proxy, a redis driver without a host, trustedProxies '*') stay in the `pelican-panel.validate` template helper, whose messages explain the fix. Keep this file in step with values.yaml and the templates.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "$comment": "Helm injects an empty `global` map into the values of every chart; allow it so additionalProperties: false at the root does not reject it.",
+      "description": "Helm's global values. Unused by this chart.",
+      "type": "object"
+    },
+    "replicaCount": {
+      "description": "Panel replicas. Keep 1: the image also runs the Laravel scheduler and keeps cache and session files on local disk. More than 1 needs panel.skipMigrations true and neither panel.cacheStore nor panel.sessionDriver set to file (the chart refuses other combinations), plus a ReadWriteMany volume or no persistence.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 1
+    },
+    "image": {
+      "description": "The Panel image.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "description": "Image repository.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\s:@]+(:[0-9]+)?(/[^\\s:@]+)*$",
+          "default": "ghcr.io/pelican/panel"
+        },
+        "tag": {
+          "description": "Image tag. Empty uses the chart's appVersion.",
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+          "default": "",
+          "examples": ["", "v1.0.0-beta38"]
+        },
+        "pullPolicy": {
+          "description": "imagePullPolicy of the Panel container.",
+          "allOf": [{"$ref": "#/definitions/pullPolicy"}],
+          "default": "IfNotPresent"
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "description": "imagePullSecrets of the Panel, MariaDB and Redis pods, as LocalObjectReferences (`- name: <secret>`).",
+      "allOf": [{"$ref": "#/definitions/localObjectReferences"}],
+      "default": []
+    },
+    "nameOverride": {
+      "description": "Replaces the chart name in resource names and the app.kubernetes.io/name label.",
+      "type": "string",
+      "maxLength": 63,
+      "default": ""
+    },
+    "fullnameOverride": {
+      "description": "Replaces the full `<release>-<chart>` prefix of resource names. Truncated to 63 characters.",
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "default": ""
+    },
+    "commonLabels": {
+      "description": "Labels added to every rendered object.",
+      "allOf": [{"$ref": "#/definitions/labelMap"}],
+      "default": {}
+    },
+    "commonAnnotations": {
+      "description": "Annotations added to every rendered object.",
+      "allOf": [{"$ref": "#/definitions/stringMap"}],
+      "default": {}
+    },
+    "serviceAccount": {
+      "description": "ServiceAccount of the Panel pod.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "description": "Create a ServiceAccount. With false, `name` (or the namespace's `default`) is used as is.",
+          "type": "boolean",
+          "default": true
+        },
+        "name": {
+          "description": "Name of the ServiceAccount. Empty uses the full release name when create is true and `default` otherwise.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "annotations": {
+          "description": "Annotations of the ServiceAccount (workload identity bindings).",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "automountServiceAccountToken": {
+          "description": "Mount the ServiceAccount token. The Panel never calls the Kubernetes API.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "panel": {
+      "description": "Panel configuration. Each key maps to an environment variable the upstream image or Laravel reads; non-secret ones go into a ConfigMap, secret ones into a Secret.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appName": {
+          "description": "`APP_NAME`: branding shown in the UI and in mails.",
+          "type": "string",
+          "minLength": 1,
+          "default": "Pelican"
+        },
+        "url": {
+          "description": "`APP_URL`: the externally reachable URL, scheme included, without a trailing slash. Generated links, assets and the Filament login break when it does not match what browsers use.",
+          "type": "string",
+          "pattern": "^https?://[^\\s/]+(/[^\\s]*[^\\s/])?$",
+          "default": "http://localhost",
+          "examples": ["https://panel.example.com"]
+        },
+        "env": {
+          "description": "`APP_ENV`. Use production for anything reachable by users.",
+          "type": "string",
+          "enum": ["production", "local", "staging", "testing"],
+          "default": "production"
+        },
+        "debug": {
+          "description": "`APP_DEBUG`: show stack traces in the browser. Never enable in production; traces leak configuration.",
+          "type": "boolean",
+          "default": false
+        },
+        "locale": {
+          "description": "`APP_LOCALE`: default UI language, as a language code with an optional region (`en`, `de`, `pt_BR`).",
+          "type": "string",
+          "pattern": "^[a-z]{2,3}([_-][A-Za-z]{2,4})?$",
+          "default": "en"
+        },
+        "installed": {
+          "description": "`APP_INSTALLED`. true makes the entrypoint wait for the database and run `php artisan migrate --force` on every start (the chart-managed, non-interactive install). false serves the web installer instead.",
+          "type": "boolean",
+          "default": true
+        },
+        "skipMigrations": {
+          "description": "`SKIP_MIGRATIONS`: skip migrations on start. Required when replicaCount is above 1, so only one process migrates.",
+          "type": "boolean",
+          "default": false
+        },
+        "behindProxy": {
+          "description": "`BEHIND_PROXY`: Caddy listens on plain :80 with automatic HTTPS off. Required behind an Ingress controller or the OpenShift router.",
+          "type": "boolean",
+          "default": true
+        },
+        "trustedProxies": {
+          "description": "`TRUSTED_PROXIES`: comma-separated IPs or CIDRs whose X-Forwarded-* headers Laravel and Caddy honour. Without it the Filament login redirects to http and every request logs the proxy's IP. `*` and `**` break the bundled Caddy (allowed only with skipCaddy); `0.0.0.0/0,::/0` is the working equivalent. Empty trusts no proxy.",
+          "type": "string",
+          "pattern": "^$|^\\*{1,2}$|^[0-9A-Fa-f:.]+(/[0-9]{1,3})?( *, *[0-9A-Fa-f:.]+(/[0-9]{1,3})?)*$",
+          "default": "0.0.0.0/0,::/0"
+        },
+        "leEmail": {
+          "description": "`LE_EMAIL`: Let's Encrypt account email. Used only when the bundled Caddy terminates TLS itself (behindProxy false and an https url), and required then.",
+          "allOf": [{"$ref": "#/definitions/emailOrEmpty"}],
+          "default": ""
+        },
+        "skipCaddy": {
+          "description": "`SKIP_CADDY`: run PHP-FPM only and expose FastCGI on port 9000 instead of HTTP on 80, for an external FastCGI-capable web server. Disables the probes.",
+          "type": "boolean",
+          "default": false
+        },
+        "cacheStore": {
+          "description": "`CACHE_STORE`. `database` is not offered: the Panel ships no `cache` table migration. redis needs redis.enabled or externalRedis.host.",
+          "type": "string",
+          "enum": ["file", "redis"],
+          "default": "file"
+        },
+        "sessionDriver": {
+          "description": "`SESSION_DRIVER`. database keeps users logged in across pod restarts. redis needs redis.enabled or externalRedis.host.",
+          "type": "string",
+          "enum": ["database", "file", "cookie", "redis"],
+          "default": "database"
+        },
+        "queueConnection": {
+          "description": "`QUEUE_CONNECTION`. sync runs jobs inside the web request. redis needs redis.enabled or externalRedis.host.",
+          "type": "string",
+          "enum": ["database", "redis", "sync"],
+          "default": "database"
+        },
+        "twoFactorRequired": {
+          "description": "`APP_2FA_REQUIRED`: 0 optional, 1 required for admins, 2 required for everyone. Empty leaves it to the Panel setting.",
+          "anyOf": [
+            {"type": "string", "enum": ["", "0", "1", "2"]},
+            {"type": "integer", "enum": [0, 1, 2]}
+          ],
+          "default": ""
+        },
+        "timezone": {
+          "description": "`TZ` of the container (logs, cron). The Panel itself always runs on UTC; users pick a display timezone in their profile.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$",
+          "default": "UTC"
+        },
+        "mail": {
+          "description": "Outgoing mail (password resets, notifications).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mailer": {
+              "description": "`MAIL_MAILER`: the Laravel mail transport. log writes mails to the log, array discards them.",
+              "type": "string",
+              "enum": ["log", "smtp", "sendmail", "mailgun", "postmark", "ses", "ses-v2", "resend", "array", "failover", "roundrobin"],
+              "default": "log"
+            },
+            "host": {
+              "description": "`MAIL_HOST`: SMTP server. Empty leaves it unset.",
+              "type": "string",
+              "default": ""
+            },
+            "port": {
+              "description": "`MAIL_PORT`: SMTP port (25, 465, 587). Empty leaves it unset.",
+              "allOf": [{"$ref": "#/definitions/optionalPort"}],
+              "default": ""
+            },
+            "username": {
+              "description": "`MAIL_USERNAME`. Empty leaves it unset.",
+              "type": "string",
+              "default": ""
+            },
+            "password": {
+              "description": "`MAIL_PASSWORD`, stored in the chart-managed Secret. Ignored when panel.existingSecret is set; use existingSecretMailPasswordKey then.",
+              "type": "string",
+              "default": ""
+            },
+            "scheme": {
+              "description": "`MAIL_SCHEME`: smtps for implicit TLS (port 465), smtp for plain or STARTTLS. Empty leaves it unset.",
+              "type": "string",
+              "enum": ["", "smtp", "smtps"],
+              "default": ""
+            },
+            "fromAddress": {
+              "description": "`MAIL_FROM_ADDRESS`. Empty leaves it unset.",
+              "allOf": [{"$ref": "#/definitions/emailOrEmpty"}],
+              "default": ""
+            },
+            "fromName": {
+              "description": "`MAIL_FROM_NAME`. Empty leaves it unset.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
+        "extraEnv": {
+          "description": "Extra plain environment variables, rendered into the ConfigMap (values are quoted). For upstream variables the chart does not model, such as `FILAMENT_AVATAR_PROVIDER: gravatar`. Never put secrets here.",
+          "type": "object",
+          "propertyNames": {"$ref": "#/definitions/envVarName"},
+          "additionalProperties": {"type": ["string", "number", "boolean"]},
+          "default": {}
+        },
+        "extraEnvVars": {
+          "description": "Extra `env:` entries appended verbatim to the Panel container (valueFrom supported), rendered through `tpl`.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/envVar"},
+          "default": []
+        },
+        "extraEnvFrom": {
+          "description": "Extra `envFrom:` sources appended to the Panel container, rendered through `tpl`.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/envFromSource"},
+          "default": []
+        },
+        "existingSecret": {
+          "description": "Pre-created Secret holding APP_KEY (and optionally the mail password). Takes precedence over appKey and the generated key. Required for GitOps: `helm template` cannot read the cluster, so a generated key changes on every render and invalidates every encrypted value and session.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretAppKeyKey": {
+          "description": "Key in existingSecret holding APP_KEY.",
+          "allOf": [{"$ref": "#/definitions/secretKey"}],
+          "default": "APP_KEY"
+        },
+        "existingSecretMailPasswordKey": {
+          "description": "Key in existingSecret holding MAIL_PASSWORD. Empty sets no mail password from it.",
+          "allOf": [{"$ref": "#/definitions/secretKeyOrEmpty"}],
+          "default": ""
+        },
+        "appKey": {
+          "description": "Explicit APP_KEY, `base64:` followed by 32 random bytes in base64 (`php artisan key:generate --show`, or `echo base64:$(openssl rand -base64 32)`). Stored in the chart-managed Secret. Empty reuses the key already in that Secret, else generates one.",
+          "type": "string",
+          "pattern": "^$|^base64:[A-Za-z0-9+/]{43}=$",
+          "default": ""
+        }
+      }
+    },
+    "database": {
+      "description": "External database. Ignored while mariadb.enabled is true, which points the Panel at the bundled MariaDB.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "description": "`DB_CONNECTION`. sqlite stores the database in the /pelican-data volume and ignores every other key of this block except name.",
+          "type": "string",
+          "enum": ["sqlite", "pgsql", "mysql", "mariadb"],
+          "default": "sqlite"
+        },
+        "host": {
+          "description": "`DB_HOST`. Required for pgsql, mysql and mariadb unless existingSecretHostKey is set.",
+          "type": "string",
+          "default": ""
+        },
+        "port": {
+          "description": "`DB_PORT`. Empty uses 5432 for pgsql and 3306 for mysql and mariadb.",
+          "allOf": [{"$ref": "#/definitions/optionalPort"}],
+          "default": ""
+        },
+        "name": {
+          "description": "`DB_DATABASE`. For sqlite a path, or a file name under the Panel's database/ directory.",
+          "type": "string",
+          "minLength": 1,
+          "default": "panel"
+        },
+        "username": {
+          "description": "`DB_USERNAME`. Ignored when existingSecretUsernameKey is set.",
+          "type": "string",
+          "default": "pelican"
+        },
+        "password": {
+          "description": "`DB_PASSWORD` in clear text, stored in the chart-managed Secret. Prefer existingSecret.",
+          "type": "string",
+          "default": ""
+        },
+        "existingSecret": {
+          "description": "Pre-created Secret with the database credentials, such as the `<cluster>-app` Secret CloudNativePG generates.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretPasswordKey": {
+          "description": "Key in existingSecret holding the password.",
+          "allOf": [{"$ref": "#/definitions/secretKey"}],
+          "default": "password"
+        },
+        "existingSecretUsernameKey": {
+          "description": "Key in existingSecret holding the user name. Empty uses `username`.",
+          "allOf": [{"$ref": "#/definitions/secretKeyOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretDatabaseKey": {
+          "description": "Key in existingSecret holding the database name. Empty uses `name`.",
+          "allOf": [{"$ref": "#/definitions/secretKeyOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretHostKey": {
+          "description": "Key in existingSecret holding the host. Empty uses `host`.",
+          "allOf": [{"$ref": "#/definitions/secretKeyOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretPortKey": {
+          "description": "Key in existingSecret holding the port. Empty uses `port`.",
+          "allOf": [{"$ref": "#/definitions/secretKeyOrEmpty"}],
+          "default": ""
+        }
+      }
+    },
+    "mariadb": {
+      "description": "Bundled single-replica MariaDB StatefulSet for quick starts. Not intended for production; use an external database or CloudNativePG there.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Deploy MariaDB and point the Panel at it, overriding database.connection, host and port.",
+          "type": "boolean",
+          "default": false
+        },
+        "image": {
+          "description": "MariaDB image.",
+          "allOf": [{"$ref": "#/definitions/simpleImage"}],
+          "default": {"repository": "mariadb", "tag": "11.4", "pullPolicy": "IfNotPresent"}
+        },
+        "auth": {
+          "description": "MariaDB credentials.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "database": {
+              "description": "Database created on first start, also used as DB_DATABASE.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_$]+$",
+              "default": "panel"
+            },
+            "username": {
+              "description": "Application user, also used as DB_USERNAME.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "default": "pelican"
+            },
+            "password": {
+              "description": "Application user password. Empty generates one on first install and keeps it (not stable under `helm template`; see panel.existingSecret).",
+              "type": "string",
+              "default": ""
+            },
+            "rootPassword": {
+              "description": "Root password. Empty generates one the same way.",
+              "type": "string",
+              "default": ""
+            },
+            "existingSecret": {
+              "description": "Pre-created Secret with the MariaDB passwords. Replaces password and rootPassword.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+              "default": ""
+            },
+            "existingSecretPasswordKey": {
+              "description": "Key in auth.existingSecret holding the application user password.",
+              "allOf": [{"$ref": "#/definitions/secretKey"}],
+              "default": "mariadb-password"
+            },
+            "existingSecretRootPasswordKey": {
+              "description": "Key in auth.existingSecret holding the root password.",
+              "allOf": [{"$ref": "#/definitions/secretKey"}],
+              "default": "mariadb-root-password"
+            }
+          }
+        },
+        "persistence": {
+          "description": "Volume for /var/lib/mysql.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Use a PVC. With false the data lives in an emptyDir and is lost with the pod.",
+              "type": "boolean",
+              "default": true
+            },
+            "size": {
+              "description": "PVC size.",
+              "allOf": [{"$ref": "#/definitions/storageSize"}],
+              "default": "8Gi"
+            },
+            "storageClass": {
+              "description": "StorageClass. Empty uses the cluster default.",
+              "allOf": [{"$ref": "#/definitions/storageClass"}],
+              "default": ""
+            },
+            "accessMode": {
+              "description": "PVC access mode.",
+              "allOf": [{"$ref": "#/definitions/accessMode"}],
+              "default": "ReadWriteOnce"
+            }
+          }
+        },
+        "resources": {
+          "description": "Resources of the MariaDB container. Empty sets none.",
+          "allOf": [{"$ref": "#/definitions/resourceRequirements"}],
+          "default": {}
+        },
+        "podSecurityContext": {
+          "description": "Pod securityContext of MariaDB. Empty suits OpenShift, where the SCC assigns IDs; set fsGroup and runAsUser on other clusters when the volume is not writable.",
+          "allOf": [{"$ref": "#/definitions/podSecurityContext"}],
+          "default": {}
+        },
+        "securityContext": {
+          "description": "Container securityContext of MariaDB.",
+          "allOf": [{"$ref": "#/definitions/securityContext"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of MariaDB.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of MariaDB.",
+          "allOf": [{"$ref": "#/definitions/tolerations"}],
+          "default": []
+        },
+        "affinity": {
+          "description": "Affinity of MariaDB.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        }
+      }
+    },
+    "redis": {
+      "description": "Bundled single-replica Redis Deployment as cache, session or queue backend. Set panel.cacheStore, sessionDriver or queueConnection to redis to use it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Deploy Redis and point the Panel at it.",
+          "type": "boolean",
+          "default": false
+        },
+        "image": {
+          "description": "Redis image.",
+          "allOf": [{"$ref": "#/definitions/simpleImage"}],
+          "default": {"repository": "redis", "tag": "7-alpine", "pullPolicy": "IfNotPresent"}
+        },
+        "password": {
+          "description": "`REDIS_PASSWORD`, stored in the chart-managed Secret. Empty runs Redis without auth, reachable only through its cluster-internal Service.",
+          "type": "string",
+          "default": ""
+        },
+        "existingSecret": {
+          "description": "Pre-created Secret holding the Redis password. Replaces password.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretPasswordKey": {
+          "description": "Key in existingSecret holding the password.",
+          "allOf": [{"$ref": "#/definitions/secretKey"}],
+          "default": "redis-password"
+        },
+        "resources": {
+          "description": "Resources of the Redis container. Empty sets none.",
+          "allOf": [{"$ref": "#/definitions/resourceRequirements"}],
+          "default": {}
+        },
+        "podSecurityContext": {
+          "description": "Pod securityContext of Redis.",
+          "allOf": [{"$ref": "#/definitions/podSecurityContext"}],
+          "default": {}
+        },
+        "securityContext": {
+          "description": "Container securityContext of Redis.",
+          "allOf": [{"$ref": "#/definitions/securityContext"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of Redis.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of Redis.",
+          "allOf": [{"$ref": "#/definitions/tolerations"}],
+          "default": []
+        },
+        "affinity": {
+          "description": "Affinity of Redis.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        }
+      }
+    },
+    "externalRedis": {
+      "description": "External Redis, used when a redis driver is selected and redis.enabled is false.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "description": "`REDIS_HOST`.",
+          "type": "string",
+          "default": ""
+        },
+        "port": {
+          "description": "`REDIS_PORT`.",
+          "anyOf": [
+            {"$ref": "#/definitions/port"},
+            {"type": "string", "pattern": "^[1-9][0-9]{0,4}$"}
+          ],
+          "default": 6379
+        },
+        "username": {
+          "description": "`REDIS_USERNAME` (Redis 6 ACL user). Empty leaves it unset.",
+          "type": "string",
+          "default": ""
+        },
+        "password": {
+          "description": "`REDIS_PASSWORD`, stored in the chart-managed Secret. Prefer existingSecret.",
+          "type": "string",
+          "default": ""
+        },
+        "existingSecret": {
+          "description": "Pre-created Secret holding the Redis password. Replaces password.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "existingSecretPasswordKey": {
+          "description": "Key in existingSecret holding the password.",
+          "allOf": [{"$ref": "#/definitions/secretKey"}],
+          "default": "redis-password"
+        }
+      }
+    },
+    "persistence": {
+      "description": "Volume for /pelican-data: the .env, the sqlite database, avatars, icons, fonts and plugins.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Use a PVC. With false /pelican-data is an emptyDir, and the Panel loses its .env (and a key generated by the image) on every restart.",
+          "type": "boolean",
+          "default": true
+        },
+        "existingClaim": {
+          "description": "Use this existing PVC instead of creating one.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "size": {
+          "description": "PVC size.",
+          "allOf": [{"$ref": "#/definitions/storageSize"}],
+          "default": "5Gi"
+        },
+        "storageClass": {
+          "description": "StorageClass. Empty uses the cluster default; `-` sets an empty storageClassName (no dynamic provisioning).",
+          "allOf": [{"$ref": "#/definitions/storageClass"}],
+          "default": ""
+        },
+        "accessMode": {
+          "description": "PVC access mode. ReadWriteOnce fits one replica (with strategy Recreate).",
+          "allOf": [{"$ref": "#/definitions/accessMode"}],
+          "default": "ReadWriteOnce"
+        },
+        "annotations": {
+          "description": "Annotations of the PVC.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "retain": {
+          "description": "Keep the PVC when the release is uninstalled (`helm.sh/resource-policy: keep`).",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "service": {
+      "description": "The Panel Service.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "Service type.",
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"],
+          "default": "ClusterIP"
+        },
+        "port": {
+          "description": "Service port. It targets HTTP on 80, or FastCGI on 9000 with panel.skipCaddy.",
+          "allOf": [{"$ref": "#/definitions/port"}],
+          "default": 80
+        },
+        "nodePort": {
+          "description": "Fixed nodePort, used only with type NodePort. Empty lets Kubernetes pick one. Must be inside the cluster's service-node-port-range (30000-32767 by default).",
+          "allOf": [{"$ref": "#/definitions/optionalPort"}],
+          "default": ""
+        },
+        "annotations": {
+          "description": "Annotations of the Service.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        }
+      }
+    },
+    "ingress": {
+      "description": "Ingress for the Panel. Set panel.behindProxy and panel.trustedProxies with it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Create the Ingress.",
+          "type": "boolean",
+          "default": false
+        },
+        "className": {
+          "description": "ingressClassName. Empty uses the cluster's default class.",
+          "type": "string",
+          "default": ""
+        },
+        "annotations": {
+          "description": "Ingress annotations (cert-manager issuer, body size, timeouts).",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "hosts": {
+          "description": "Ingress rules. host is rendered through `tpl`. Every path routes to the Panel Service.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host", "paths"],
+            "properties": {
+              "host": {
+                "description": "Hostname of the rule; should match panel.url.",
+                "type": "string",
+                "minLength": 1
+              },
+              "paths": {
+                "description": "Paths routed to the Panel.",
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": {
+                      "description": "URL path, starting with `/`.",
+                      "type": "string",
+                      "pattern": "^/"
+                    },
+                    "pathType": {
+                      "description": "How path matches. Unset uses Prefix.",
+                      "type": "string",
+                      "enum": ["Prefix", "Exact", "ImplementationSpecific"]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": [{"host": "panel.example.com", "paths": [{"path": "/", "pathType": "Prefix"}]}]
+        },
+        "tls": {
+          "description": "`spec.tls` of the Ingress, rendered through `tpl`.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hosts": {
+                "description": "Hosts covered by the certificate.",
+                "type": "array",
+                "items": {"type": "string", "minLength": 1}
+              },
+              "secretName": {
+                "description": "kubernetes.io/tls Secret holding the certificate. Empty lets the controller use its default certificate.",
+                "type": "string"
+              }
+            }
+          },
+          "default": []
+        }
+      }
+    },
+    "route": {
+      "description": "OpenShift Route for the Panel. Needs the route.openshift.io API.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Create the Route.",
+          "type": "boolean",
+          "default": false
+        },
+        "host": {
+          "description": "Route host, rendered through `tpl`. Empty lets the router generate `<name>-<namespace>.<apps domain>`.",
+          "type": "string",
+          "default": ""
+        },
+        "path": {
+          "description": "Route path. Empty routes every path.",
+          "type": "string",
+          "pattern": "^$|^/",
+          "default": ""
+        },
+        "annotations": {
+          "description": "Route annotations (router timeouts).",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "wildcardPolicy": {
+          "description": "Route wildcard policy.",
+          "type": "string",
+          "enum": ["None", "Subdomain"],
+          "default": "None"
+        },
+        "tls": {
+          "description": "TLS of the Route.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Serve the Route over TLS.",
+              "type": "boolean",
+              "default": true
+            },
+            "termination": {
+              "description": "edge terminates at the router (the Panel serves plain HTTP behind it), passthrough sends TLS to the pod, reencrypt opens a new TLS connection to the pod.",
+              "type": "string",
+              "enum": ["edge", "passthrough", "reencrypt"],
+              "default": "edge"
+            },
+            "insecureEdgeTerminationPolicy": {
+              "description": "What plain HTTP requests get: Redirect to HTTPS, Allow, or None (rejected). Empty leaves it unset.",
+              "type": "string",
+              "enum": ["", "Redirect", "Allow", "None"],
+              "default": "Redirect"
+            }
+          }
+        }
+      }
+    },
+    "openshift": {
+      "description": "OpenShift specifics.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scc": {
+          "description": "SCC grant for the Panel. The image runs as the fixed non-root user www-data (UID 82), which the default restricted-v2 SCC rejects.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Create a RoleBinding granting use of the SCC.",
+              "type": "boolean",
+              "default": false
+            },
+            "name": {
+              "description": "SCC to grant. nonroot-v2 is the least privilege that allows a fixed non-root UID; anyuid also works.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+              "default": "nonroot-v2"
+            },
+            "bindToNamespaceGroup": {
+              "description": "Bind to the group `system:serviceaccounts:<namespace>`, covering every ServiceAccount in the namespace (and so MariaDB and Redis), instead of the Panel's ServiceAccount only.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "podSecurityContext": {
+      "description": "Pod securityContext of the Panel. The defaults run as www-data (82) and add the safe sysctl `net.ipv4.ip_unprivileged_port_start=0`, without which Caddy cannot bind :80 as non-root (NET_BIND_SERVICE cannot help: Kubernetes grants no ambient capabilities). On clusters that assign UIDs, set {} and either keep the sysctl or set panel.skipCaddy.",
+      "allOf": [{"$ref": "#/definitions/podSecurityContext"}],
+      "default": {
+        "runAsUser": 82,
+        "runAsGroup": 82,
+        "fsGroup": 82,
+        "seccompProfile": {"type": "RuntimeDefault"},
+        "sysctls": [{"name": "net.ipv4.ip_unprivileged_port_start", "value": "0"}]
+      }
+    },
+    "securityContext": {
+      "description": "Container securityContext of the Panel. readOnlyRootFilesystem stays false: the image writes caches under /var/www/html/storage.",
+      "allOf": [{"$ref": "#/definitions/securityContext"}],
+      "default": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {"drop": ["ALL"]},
+        "runAsNonRoot": true,
+        "readOnlyRootFilesystem": false
+      }
+    },
+    "resources": {
+      "description": "Resources of the Panel container. The memory and ephemeral-storage limits keep a runaway Panel from taking the node down; raise them for a large installation.",
+      "allOf": [{"$ref": "#/definitions/resourceRequirements"}],
+      "default": {
+        "requests": {"cpu": "200m", "memory": "512Mi", "ephemeral-storage": "256Mi"},
+        "limits": {"memory": "2Gi", "ephemeral-storage": "2Gi"}
+      }
+    },
+    "probes": {
+      "description": "Probes of the Panel container, all HTTP GET /up. Disabled entirely with panel.skipCaddy.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "startup": {
+          "description": "Startup probe, covering the entrypoint's migrate and optimize phase before Caddy listens. The defaults allow about 10 minutes.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"description": "Add the startup probe.", "type": "boolean", "default": true},
+            "initialDelaySeconds": {"description": "Seconds before the first probe.", "type": "integer", "minimum": 0, "default": 10},
+            "periodSeconds": {"description": "Seconds between probes.", "type": "integer", "minimum": 1, "default": 10},
+            "timeoutSeconds": {"description": "Seconds before a probe times out.", "type": "integer", "minimum": 1, "default": 5},
+            "failureThreshold": {"description": "Failed probes before the container is restarted.", "type": "integer", "minimum": 1, "default": 60}
+          }
+        },
+        "readiness": {
+          "description": "Readiness probe: takes the pod out of the Service while it fails.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"description": "Add the readiness probe.", "type": "boolean", "default": true},
+            "periodSeconds": {"description": "Seconds between probes.", "type": "integer", "minimum": 1, "default": 30},
+            "timeoutSeconds": {"description": "Seconds before a probe times out.", "type": "integer", "minimum": 1, "default": 5},
+            "failureThreshold": {"description": "Failed probes before the pod is marked unready.", "type": "integer", "minimum": 1, "default": 3}
+          }
+        },
+        "liveness": {
+          "description": "Liveness probe: restarts the container while it fails.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"description": "Add the liveness probe.", "type": "boolean", "default": true},
+            "periodSeconds": {"description": "Seconds between probes.", "type": "integer", "minimum": 1, "default": 30},
+            "timeoutSeconds": {"description": "Seconds before a probe times out.", "type": "integer", "minimum": 1, "default": 5},
+            "failureThreshold": {"description": "Failed probes before the container is restarted.", "type": "integer", "minimum": 1, "default": 6}
+          }
+        }
+      }
+    },
+    "strategy": {
+      "description": "Deployment strategy. Recreate is required with a ReadWriteOnce volume, which a second pod cannot mount.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "description": "Recreate stops the old pod before starting the new one; RollingUpdate overlaps them.",
+          "type": "string",
+          "enum": ["Recreate", "RollingUpdate"]
+        },
+        "rollingUpdate": {
+          "description": "RollingUpdate parameters. Only valid with type RollingUpdate.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxSurge": {"description": "Extra pods allowed during the update, as a number or percentage.", "allOf": [{"$ref": "#/definitions/intOrPercent"}]},
+            "maxUnavailable": {"description": "Pods allowed to be unavailable during the update, as a number or percentage.", "allOf": [{"$ref": "#/definitions/intOrPercent"}]}
+          }
+        }
+      },
+      "if": {"properties": {"type": {"const": "Recreate"}}},
+      "then": {"not": {"required": ["rollingUpdate"]}},
+      "default": {"type": "Recreate"}
+    },
+    "terminationGracePeriodSeconds": {
+      "description": "Seconds the Panel gets to stop. The upstream queue worker allows jobs up to 3600 s; 120 is a middle ground.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 120
+    },
+    "podAnnotations": {
+      "description": "Annotations of the Panel pod.",
+      "allOf": [{"$ref": "#/definitions/stringMap"}],
+      "default": {}
+    },
+    "podLabels": {
+      "description": "Labels of the Panel pod.",
+      "allOf": [{"$ref": "#/definitions/labelMap"}],
+      "default": {}
+    },
+    "nodeSelector": {
+      "description": "Node selector of the Panel pod.",
+      "allOf": [{"$ref": "#/definitions/stringMap"}],
+      "default": {}
+    },
+    "tolerations": {
+      "description": "Tolerations of the Panel pod.",
+      "allOf": [{"$ref": "#/definitions/tolerations"}],
+      "default": []
+    },
+    "affinity": {
+      "description": "Affinity of the Panel pod.",
+      "allOf": [{"$ref": "#/definitions/affinity"}],
+      "default": {}
+    },
+    "topologySpreadConstraints": {
+      "description": "Topology spread constraints of the Panel pod.",
+      "type": "array",
+      "items": {"$ref": "#/definitions/topologySpreadConstraint"},
+      "default": []
+    },
+    "priorityClassName": {
+      "description": "PriorityClass of the Panel pod. Empty uses the cluster default.",
+      "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+      "default": ""
+    },
+    "extraVolumes": {
+      "description": "Extra volumes of the Panel pod, rendered through `tpl`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {"name": {"description": "Volume name.", "type": "string", "minLength": 1}}
+      },
+      "default": []
+    },
+    "extraVolumeMounts": {
+      "description": "Extra volume mounts of the Panel container, rendered through `tpl`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "mountPath"],
+        "properties": {
+          "name": {"description": "Name of the volume to mount.", "type": "string", "minLength": 1},
+          "mountPath": {"type": "string", "pattern": "^/"},
+          "subPath": {"type": "string"},
+          "readOnly": {"type": "boolean"}
+        }
+      },
+      "default": []
+    },
+    "initContainers": {
+      "description": "Extra init containers of the Panel pod, as Container specs, rendered through `tpl`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "image"],
+        "properties": {
+          "name": {"description": "Container name.", "type": "string", "minLength": 1},
+          "image": {"type": "string", "minLength": 1}
+        }
+      },
+      "default": []
+    }
+  },
+  "definitions": {
+    "dnsLabel": {
+      "description": "An RFC 1123 label: lower-case alphanumerics and '-', starting and ending alphanumeric, at most 63 characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "dnsSubdomain": {
+      "description": "An RFC 1123 subdomain: lower-case alphanumerics, '-' and '.', at most 253 characters (names of most Kubernetes objects).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "dnsSubdomainOrEmpty": {
+      "description": "An RFC 1123 subdomain, or empty for unset.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "secretKey": {
+      "description": "A Secret data key: alphanumerics, '-', '_' and '.'.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[-._a-zA-Z0-9]+$"
+    },
+    "secretKeyOrEmpty": {
+      "description": "A Secret data key, or empty for unset.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[-._a-zA-Z0-9]*$"
+    },
+    "envVarName": {
+      "description": "An environment variable name. Kubernetes accepts any printable ASCII except '='; Laravel reads upper-case names.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[!-<>-~]+$"
+    },
+    "emailOrEmpty": {
+      "description": "An email address, or empty for unset.",
+      "type": "string",
+      "pattern": "^$|^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+    },
+    "stringMap": {
+      "description": "A map of string keys to string values (annotations, node selectors). Quote values YAML would read as numbers or booleans.",
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "labelMap": {
+      "description": "Kubernetes labels: values of at most 63 characters, alphanumerics, '-', '_' and '.', starting and ending alphanumeric, or empty.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 63,
+        "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+      }
+    },
+    "port": {
+      "description": "A TCP/UDP port number.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "optionalPort": {
+      "description": "A port number, as an integer or a numeric string, or empty for unset.",
+      "anyOf": [
+        {"$ref": "#/definitions/port"},
+        {"type": "string", "pattern": "^$|^[1-9][0-9]{0,4}$"}
+      ]
+    },
+    "intOrPercent": {
+      "description": "An integer, or a percentage string such as `25%`.",
+      "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "string", "pattern": "^[0-9]+%$"}
+      ]
+    },
+    "pullPolicy": {
+      "description": "Kubernetes imagePullPolicy.",
+      "type": "string",
+      "enum": ["Always", "IfNotPresent", "Never"]
+    },
+    "simpleImage": {
+      "description": "An image as repository, tag and pull policy.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "description": "Image repository.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\s:@]+(:[0-9]+)?(/[^\\s:@]+)*$"
+        },
+        "tag": {
+          "description": "Image tag.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+        },
+        "pullPolicy": {
+          "description": "imagePullPolicy.",
+          "allOf": [{"$ref": "#/definitions/pullPolicy"}]
+        }
+      }
+    },
+    "localObjectReferences": {
+      "description": "A list of LocalObjectReferences (`- name: <secret>`).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"$ref": "#/definitions/dnsSubdomain"}
+        }
+      }
+    },
+    "quantity": {
+      "description": "A Kubernetes resource quantity: a number with an optional suffix (`100m`, `0.5`, `1`, `512Mi`, `2Gi`, `1e3`).",
+      "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "number", "minimum": 0},
+        {
+          "type": "string",
+          "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+        }
+      ]
+    },
+    "storageSize": {
+      "description": "A PVC size as a Kubernetes quantity string (`5Gi`, `500Mi`).",
+      "type": "string",
+      "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[kMGTPE])?$"
+    },
+    "storageClass": {
+      "description": "A StorageClass name, empty for the cluster default, or `-` for an empty storageClassName.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^-$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "accessMode": {
+      "description": "PersistentVolumeClaim access mode.",
+      "type": "string",
+      "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]
+    },
+    "resourceList": {
+      "description": "A map of resource names (cpu, memory, ephemeral-storage, hugepages-<size>, extended resources) to quantities.",
+      "type": "object",
+      "propertyNames": {"pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"},
+      "additionalProperties": {"$ref": "#/definitions/quantity"}
+    },
+    "resourceRequirements": {
+      "description": "Container resources (`requests`, `limits`, `claims`), rendered verbatim into the container spec.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "description": "Resources the scheduler reserves for the container.",
+          "allOf": [{"$ref": "#/definitions/resourceList"}]
+        },
+        "limits": {
+          "description": "Upper bounds the kubelet enforces. A CPU limit throttles, a memory limit OOM-kills.",
+          "allOf": [{"$ref": "#/definitions/resourceList"}]
+        },
+        "claims": {
+          "description": "Dynamic resource claims of the pod used by this container.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "request": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "seccompProfile": {
+      "description": "A seccomp profile. Localhost needs localhostProfile.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["RuntimeDefault", "Unconfined", "Localhost"]},
+        "localhostProfile": {"type": "string"}
+      }
+    },
+    "appArmorProfile": {
+      "description": "An AppArmor profile. Localhost needs localhostProfile.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["RuntimeDefault", "Unconfined", "Localhost"]},
+        "localhostProfile": {"type": "string"}
+      }
+    },
+    "seLinuxOptions": {
+      "description": "SELinux labels.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user": {"type": "string"},
+        "role": {"type": "string"},
+        "type": {"type": "string"},
+        "level": {"type": "string"}
+      }
+    },
+    "windowsOptions": {
+      "description": "Windows-specific settings; ignored on Linux nodes.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gmsaCredentialSpecName": {"type": "string"},
+        "gmsaCredentialSpec": {"type": "string"},
+        "runAsUserName": {"type": "string"},
+        "hostProcess": {"type": "boolean"}
+      }
+    },
+    "podSecurityContext": {
+      "description": "A Kubernetes PodSecurityContext, rendered verbatim.",
+      "$comment": "Field list of PodSecurityContext as of Kubernetes 1.35.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsUser": {"description": "UID of every container's entrypoint.", "type": "integer", "minimum": 0},
+        "runAsGroup": {"description": "Primary GID of every container's entrypoint.", "type": "integer", "minimum": 0},
+        "runAsNonRoot": {"description": "Refuse to start containers that would run as UID 0.", "type": "boolean"},
+        "fsGroup": {"description": "Supplementary GID owning mounted volumes, which makes them writable for the pod.", "type": "integer", "minimum": 0},
+        "fsGroupChangePolicy": {"description": "When volume ownership is changed to fsGroup.", "type": "string", "enum": ["OnRootMismatch", "Always"]},
+        "supplementalGroups": {"description": "Extra GIDs of the first process of every container.", "type": "array", "items": {"type": "integer", "minimum": 0}},
+        "supplementalGroupsPolicy": {"description": "Whether the image's /etc/group memberships are merged in.", "type": "string", "enum": ["Merge", "Strict"]},
+        "seccompProfile": {"$ref": "#/definitions/seccompProfile"},
+        "appArmorProfile": {"$ref": "#/definitions/appArmorProfile"},
+        "seLinuxOptions": {"$ref": "#/definitions/seLinuxOptions"},
+        "seLinuxChangePolicy": {"description": "How SELinux labels are applied to volumes.", "type": "string", "enum": ["MountOption", "Recursive"]},
+        "windowsOptions": {"$ref": "#/definitions/windowsOptions"},
+        "sysctls": {
+          "description": "Namespaced sysctls set for the pod. Unsafe sysctls must be allowed on the kubelet.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9_]+([./][a-z0-9_-]+)*$"},
+              "value": {"description": "Always a string; quote numbers.", "type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "securityContext": {
+      "description": "A Kubernetes container SecurityContext, rendered verbatim.",
+      "$comment": "Field list of SecurityContext as of Kubernetes 1.35.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowPrivilegeEscalation": {"description": "Allow a process to gain more privileges than its parent (setuid, file capabilities).", "type": "boolean"},
+        "privileged": {"description": "Run as privileged, equivalent to root on the host.", "type": "boolean"},
+        "readOnlyRootFilesystem": {"description": "Mount the container's root filesystem read-only.", "type": "boolean"},
+        "runAsUser": {"description": "UID of the entrypoint.", "type": "integer", "minimum": 0},
+        "runAsGroup": {"description": "Primary GID of the entrypoint.", "type": "integer", "minimum": 0},
+        "runAsNonRoot": {"description": "Refuse to start when the container would run as UID 0.", "type": "boolean"},
+        "procMount": {"description": "/proc mount type.", "type": "string", "enum": ["Default", "Unmasked"]},
+        "capabilities": {
+          "description": "Linux capabilities to add and drop.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "add": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z_]+$"}},
+            "drop": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z_]+$"}}
+          }
+        },
+        "seccompProfile": {"$ref": "#/definitions/seccompProfile"},
+        "appArmorProfile": {"$ref": "#/definitions/appArmorProfile"},
+        "seLinuxOptions": {"$ref": "#/definitions/seLinuxOptions"},
+        "windowsOptions": {"$ref": "#/definitions/windowsOptions"}
+      }
+    },
+    "toleration": {
+      "description": "A pod toleration.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {"description": "Taint key. Empty with operator Exists matches every taint.", "type": "string"},
+        "operator": {"description": "Exists matches any value, Equal the given value. Lt and Gt compare numerically and need the TaintTolerationComparisonOperators feature gate.", "type": "string", "enum": ["Exists", "Equal", "Lt", "Gt"]},
+        "value": {"description": "Taint value. Leave empty with operator Exists.", "type": "string"},
+        "effect": {"description": "Taint effect to match. Empty matches every effect.", "type": "string", "enum": ["", "NoSchedule", "PreferNoSchedule", "NoExecute"]},
+        "tolerationSeconds": {"description": "With effect NoExecute, how long the pod stays bound after the taint appears. Unset tolerates forever.", "type": "integer"}
+      }
+    },
+    "tolerations": {
+      "description": "Pod tolerations.",
+      "type": "array",
+      "items": {"$ref": "#/definitions/toleration"}
+    },
+    "affinity": {
+      "description": "A Kubernetes Affinity, rendered verbatim. The three rule kinds are passed through unchecked.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": {"description": "Rules on node labels.", "type": "object"},
+        "podAffinity": {"description": "Rules attracting the pod to nodes running matching pods.", "type": "object"},
+        "podAntiAffinity": {"description": "Rules keeping the pod away from nodes running matching pods.", "type": "object"}
+      }
+    },
+    "topologySpreadConstraint": {
+      "description": "A Kubernetes TopologySpreadConstraint.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxSkew", "topologyKey", "whenUnsatisfiable"],
+      "properties": {
+        "maxSkew": {"description": "Largest allowed difference in matching pods between topology domains.", "type": "integer", "minimum": 1},
+        "topologyKey": {"description": "Node label defining the domains, such as topology.kubernetes.io/zone.", "type": "string", "minLength": 1},
+        "whenUnsatisfiable": {"description": "DoNotSchedule keeps the pod Pending, ScheduleAnyway only prefers.", "type": "string", "enum": ["DoNotSchedule", "ScheduleAnyway"]},
+        "labelSelector": {"description": "Selects the pods counted. Usually the Panel's own labels.", "type": "object"},
+        "matchLabelKeys": {"description": "Pod label keys whose values are added to labelSelector.", "type": "array", "items": {"type": "string"}},
+        "minDomains": {"description": "Minimum number of eligible domains (DoNotSchedule only).", "type": "integer", "minimum": 1},
+        "nodeAffinityPolicy": {"description": "Whether nodeAffinity and nodeSelector limit the domains.", "type": "string", "enum": ["Honor", "Ignore"]},
+        "nodeTaintsPolicy": {"description": "Whether node taints limit the domains.", "type": "string", "enum": ["Honor", "Ignore"]}
+      }
+    },
+    "envVar": {
+      "description": "A Kubernetes EnvVar: a name with either a value or a valueFrom source.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/definitions/envVarName"},
+        "value": {"description": "Literal value. Always a string; quote numbers and booleans.", "type": "string"},
+        "valueFrom": {
+          "description": "Source of the value.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretKeyRef": {"type": "object", "required": ["name", "key"]},
+            "configMapKeyRef": {"type": "object", "required": ["name", "key"]},
+            "fieldRef": {"type": "object", "required": ["fieldPath"]},
+            "resourceFieldRef": {"type": "object", "required": ["resource"]},
+            "fileKeyRef": {"type": "object"}
+          }
+        }
+      },
+      "not": {"required": ["value", "valueFrom"]}
+    },
+    "envFromSource": {
+      "description": "A Kubernetes EnvFromSource: every key of a ConfigMap or Secret as environment variables.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prefix": {"description": "Prefix added to every variable name.", "type": "string"},
+        "configMapRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {"name": {"type": "string", "minLength": 1}, "optional": {"type": "boolean"}}
+        },
+        "secretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {"name": {"type": "string", "minLength": 1}, "optional": {"type": "boolean"}}
+        }
+      }
+    }
+  }
+}
