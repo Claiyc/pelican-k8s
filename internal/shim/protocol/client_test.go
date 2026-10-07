@@ -428,6 +428,22 @@ func TestAcceptSkipsDeadConnections(t *testing.T) {
 	if _, err := Answer(first, NewEncoder(first), token, "pod-1", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	// The listener finishes each handshake in its own goroutine, so wait for
+	// the first one before dialing the second; otherwise the first could
+	// finish last and become the newer connection.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		ln.mu.Lock()
+		cur := ln.current
+		ln.mu.Unlock()
+		if cur != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first handshake never completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	second, err := net.Dial("tcp", ln.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +454,7 @@ func TestAcceptSkipsDeadConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Wait until the newer connection replaced the older one.
-	deadline := time.Now().Add(3 * time.Second)
+	deadline = time.Now().Add(3 * time.Second)
 	for {
 		ln.mu.Lock()
 		n := len(ln.ready)
