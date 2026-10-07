@@ -198,6 +198,11 @@
           "allOf": [{"$ref": "#/definitions/goDuration"}],
           "default": "15m"
         },
+        "agentWait": {
+          "description": "How long the gateway holds an open console while the server's agent pod is replaced (moved to the game pod's node, recreated with a new template, evicted), as a Go duration (`30s`, `2m`).",
+          "allOf": [{"$ref": "#/definitions/goDuration"}],
+          "default": "120s"
+        },
         "extraCA": {
           "description": "Extra CA certificates trusted for the Panel's TLS (a private CA, the OpenShift router CA). Mounted next to the system bundle.",
           "type": "object",
