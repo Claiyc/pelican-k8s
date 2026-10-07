@@ -480,7 +480,7 @@ func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 		return append(live, v1alpha1.PendingBackup{UUID: backup, StartedAt: nowMeta(), Agent: agent})
 	})
 	if err != nil {
-		h.Log.Warn("cannot record the pending backup", "uuid", uuid, "backup", backup, "error", err)
+		h.Log.Warn("cannot record the pending backup", "uuid", uuid, "error", err)
 	}
 	rec := &statusRecorder{ResponseWriter: w}
 	h.Agents.Proxy(rec, r, t, nil)
@@ -490,7 +490,7 @@ func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 		if err := h.Store.UpdateBackups(ctx, uuid, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup {
 			return withoutBackup(live, backup)
 		}); err != nil {
-			h.Log.Warn("cannot drop the refused backup", "uuid", uuid, "backup", backup, "error", err)
+			h.Log.Warn("cannot drop the refused backup", "uuid", uuid, "error", err)
 		}
 	}
 }
