@@ -276,8 +276,9 @@ func TestRunServesAndShutsDown(t *testing.T) {
 
 	base := fmt.Sprintf("https://localhost:%d", c.apiPort)
 	gateway := &http.Client{Transport: &http.Transport{TLSClientConfig: gwClient}}
-	// Kubelet: trusts nothing in particular and presents no certificate.
-	kubelet := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // kubelet does not verify probe certificates
+	// Kubelet's probes: no client certificate. (Kubelet does not verify the
+	// server either; the test does, so it needs no insecure configuration.)
+	kubelet := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: gwClient.RootCAs}}}
 	res, err := kubelet.Get(base + "/internal/v1/healthz")
 	if err != nil {
 		t.Fatal(err)

@@ -90,7 +90,7 @@ func (kp *KeyPair) GetClientCertificate(*tls.CertificateRequestInfo) (*tls.Certi
 
 // LoadPool reads a PEM CA bundle.
 func LoadPool(path string) (*x509.CertPool, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // the path comes from a flag or a mount the component owns
+	b, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
