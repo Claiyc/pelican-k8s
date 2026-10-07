@@ -1216,6 +1216,36 @@ func TestFreshAgentPodAttachesToRunningProcess(t *testing.T) {
 	}
 }
 
+// A stop the Panel requests while the agent pod is replaced is applied by the
+// new agent pod once it attaches to the running process.
+func TestFreshAgentPodAppliesPendingStop(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	if err := h.c.Delete(context.Background(), h.agentPod()); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2}
+	})
+	h.reconcile(1)
+	h.now = h.now.Add(time.Minute)
+	h.agent.shimRunning = true
+	h.agent.state = "running"
+	h.createAgentPod(true)
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start,power:stop" {
+		t.Fatalf("calls %s", got)
+	}
+	if st := h.gs().Status; st.Power.ObservedGeneration != 2 {
+		t.Fatalf("observed generation %d", st.Power.ObservedGeneration)
+	}
+}
+
 // A fresh game pod is started only once its own shim is attached.
 func TestFreshGamePodWaitsForItsShim(t *testing.T) {
 	gs := newGS()

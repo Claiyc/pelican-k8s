@@ -588,6 +588,21 @@ func TestContainerStatusIntentionalStop(t *testing.T) {
 		t.Fatal("a stop for a pending power generation must not change the desired state")
 	}
 
+	// The stop half of a restart the operator issued is not the user's; a
+	// stop long after the restart is.
+	for _, c := range []struct {
+		ago  time.Duration
+		want v1alpha1.PowerState
+	}{{time.Minute, v1alpha1.PowerRunning}, {restartWindow + time.Minute, v1alpha1.PowerStopped}} {
+		f := newFixture(t, options{})
+		f.withServer(false)
+		_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+		_ = f.st.PatchStatus(ctx, uuid, map[string]any{"power": map[string]any{"lastAction": map[string]any{"action": "restart", "at": metav1.NewTime(time.Now().Add(-c.ago))}}})
+		if got := stop(f); got != c.want {
+			t.Fatalf("restart %s ago: desired %s, want %s", c.ago, got, c.want)
+		}
+	}
+
 	// While either pod is terminating (eviction, drain) the stop is not intentional.
 	for _, name := range []string{names.AgentPod(uuid), names.Pod(uuid)} {
 		f := newFixture(t, options{})

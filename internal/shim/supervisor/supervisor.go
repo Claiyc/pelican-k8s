@@ -177,13 +177,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	defer stopConnecting()
 	go s.connectLoop(connCtx)
 
-	termAt := time.Now()
 	select {
 	case <-ctx.Done():
 	case sig := <-sigs:
-		termAt = time.Now()
 		s.log.Info("shim received signal, shutting down", "signal", sig.String())
 	}
+	termAt := time.Now()
 	// Keep connecting while the process stops: an agent that restarts
 	// meanwhile sees the shutdown through on its new connection.
 	s.shutdown(termAt)

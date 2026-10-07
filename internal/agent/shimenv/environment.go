@@ -69,8 +69,10 @@ type Environment struct {
 	logCallbackMx sync.Mutex
 	logCallback   func([]byte)
 
-	// stateMu orders the state pushes to the shim.
+	// stateMu orders the state pushes to the shim, stopMu the stop
+	// configuration sends.
 	stateMu sync.Mutex
+	stopMu  sync.Mutex
 
 	mu        sync.Mutex
 	client    *protocol.Client
@@ -161,10 +163,14 @@ func (e *Environment) SetStopConfiguration(c remote.ProcessStopConfiguration) {
 	e.stop = c
 	e.metaMu.Unlock()
 	if cl := e.currentClient(); cl != nil {
+		// Ordered, and sending the latest configuration, so that the shim
+		// ends up with it however the sends interleave.
 		go func() {
+			e.stopMu.Lock()
+			defer e.stopMu.Unlock()
 			ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 			defer cancel()
-			if err := cl.Configure(ctx, shimStop(c)); err != nil {
+			if err := cl.Configure(ctx, shimStop(e.stopConfig())); err != nil {
 				e.log.Warn("cannot send the stop configuration to the shim", "error", err)
 			}
 		}()

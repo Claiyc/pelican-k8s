@@ -121,7 +121,7 @@ func TestRunStopsWithTheContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		(&Watcher{Interval: time.Millisecond}).Run(ctx)
+		(&Watcher{Interval: time.Hour}).Run(ctx)
 		close(done)
 	}()
 	cancel()
