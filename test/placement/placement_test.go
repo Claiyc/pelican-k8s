@@ -37,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -49,12 +50,17 @@ import (
 const (
 	serversNS = "pelican-servers"
 	className = "default"
+	// installImage runs the egg's install script. Install containers always
+	// pull their image, as Wings does, so it comes from a registry; the egg
+	// image is only loaded into the kind nodes.
+	installImage = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 
 type env struct {
 	gateway, token, panel, egg string
 	http                       *http.Client
 	c                          client.Client
+	cs                         kubernetes.Interface
 	port                       int
 }
 
@@ -84,6 +90,9 @@ func load(t *testing.T) *env {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 	if e.c, err = client.New(cfg, client.Options{Scheme: scheme}); err != nil {
+		t.Fatal(err)
+	}
+	if e.cs, err = kubernetes.NewForConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 	shared = e
@@ -184,7 +193,7 @@ func (e *env) newServer(t *testing.T, o serverOpts) *server {
 		"skip_egg_scripts":        false,
 		"crash_detection_enabled": false,
 		"build":                   map[string]any{"memory_limit": 128, "swap": 0, "io_weight": 500, "cpu_limit": 0, "threads": nil, "disk_space": 512, "oom_killer": true},
-		"container":               map[string]any{"image": e.egg, "requires_rebuild": false},
+		"container":               map[string]any{"image": "~" + e.egg, "requires_rebuild": false}, // never pull: the egg exists only on the nodes
 		"allocations":             map[string]any{"force_outgoing_ip": false, "default": map[string]any{"ip": ip, "port": e.port}, "mappings": map[string][]int{ip: {e.port}}},
 		"egg":                     map[string]any{"id": "5c7f5e0b-0000-4000-8000-000000000001", "file_denylist": []string{}, "features": map[string][]string{}},
 		"labels":                  map[string]any{},
@@ -197,7 +206,7 @@ func (e *env) newServer(t *testing.T, o serverOpts) *server {
 			"stop":    map[string]any{"type": "command", "value": "stop"},
 			"configs": []any{},
 		},
-		Install: fakepanel.InstallScript{ContainerImage: e.egg, Entrypoint: "sh", Script: "#!/bin/sh\necho installed\n"},
+		Install: fakepanel.InstallScript{ContainerImage: installImage, Entrypoint: "sh", Script: "#!/bin/sh\necho installed\n"},
 	}
 	body, _ := json.Marshal(srv)
 	if code, out := e.do(t, http.MethodPut, e.panel, "/_fake/servers/"+uuid, "application/json", strings.NewReader(string(body))); code != http.StatusNoContent {
@@ -239,15 +248,26 @@ func (s *server) delete() {
 	})
 }
 
-// dump logs what a failure needs: the GameServer status and both pods.
+// dump logs what a failure needs: the GameServer status, both pods and the
+// end of their containers' logs.
 func (s *server) dump() {
 	if gs := s.gs(); gs != nil {
 		b, _ := json.MarshalIndent(gs.Status, "", "  ")
 		s.t.Logf("status of %s:\n%s", gs.Name, b)
 	}
 	for _, p := range []*corev1.Pod{s.agentPod(), s.gamePod()} {
-		if p != nil {
-			s.t.Logf("pod %s: node %q, phase %s, affinity %+v, conditions %+v", p.Name, p.Spec.NodeName, p.Status.Phase, p.Spec.Affinity, p.Status.Conditions)
+		if p == nil {
+			continue
+		}
+		s.t.Logf("pod %s: node %q, phase %s, affinity %+v, conditions %+v", p.Name, p.Spec.NodeName, p.Status.Phase, p.Spec.Affinity, p.Status.Conditions)
+		for _, c := range p.Spec.Containers {
+			tail := int64(80)
+			b, err := s.e.cs.CoreV1().Pods(serversNS).GetLogs(p.Name, &corev1.PodLogOptions{Container: c.Name, TailLines: &tail}).DoRaw(context.Background())
+			if err != nil {
+				s.t.Logf("logs of %s/%s: %v", p.Name, c.Name, err)
+				continue
+			}
+			s.t.Logf("logs of %s/%s:\n%s", p.Name, c.Name, b)
 		}
 	}
 }
@@ -546,7 +566,10 @@ func TestBusyAgentHoldsTheGamePod(t *testing.T) {
 	s.sameNode()
 }
 
-// With preferAgentNode off the game pod has no pod affinity at all.
+// With preferAgentNode off the game pod has no pod affinity at all. The first
+// start right after the install may still see the agent's in-flight work
+// (which requires the agent's node), so the check is on the game pod of a
+// second start.
 func TestNoAgentNodePreference(t *testing.T) {
 	e := load(t)
 	cls := &v1alpha1.GameServerClass{ObjectMeta: metav1.ObjectMeta{Name: className}}
@@ -560,6 +583,10 @@ func TestNoAgentNodePreference(t *testing.T) {
 	t.Cleanup(func() { setPref(true) })
 	s := e.newServer(t, serverOpts{})
 	s.waitAgent()
+	s.power("start")
+	s.waitRunning()
+	s.power("stop")
+	s.waitGamePodGone()
 	s.power("start")
 	game := s.waitRunning()
 	if a := game.Spec.Affinity; a != nil && a.PodAffinity != nil {
@@ -771,7 +798,7 @@ func (c *console) auth() {
 	tok, err := jwt.Sign(map[string]any{
 		"iss": c.e.panel, "aud": []string{c.e.gateway}, "jti": fmt.Sprintf("placement-%d", now.UnixNano()),
 		"iat": now.Unix(), "nbf": now.Add(-5 * time.Minute).Unix(), "exp": now.Add(10 * time.Minute).Unix(),
-		"server_uuid": c.uuid, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "unique_id": fmt.Sprintf("u%d", now.UnixNano()),
+		"server_uuid": c.uuid, "user_uuid": "0f5e4d3c-2b1a-4c9d-8e7f-6a5b4c3d2e1f", "unique_id": fmt.Sprintf("u%d", now.UnixNano()), "scope": "websocket",
 		"permissions": []string{"websocket.connect", "control.console"},
 	}, jwt.NewHS256([]byte(c.e.token)))
 	if err != nil {

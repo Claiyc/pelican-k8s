@@ -20,7 +20,9 @@ RUN=${RUN:-.}
 TOKEN_ID=placement
 TOKEN=placement-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')
 EGG=pelican-k8s/placement-egg:$TAG
-SHARED=/tmp/pelican-placement-shared
+# The host directory the workers share, and the kind config that mounts it.
+SHARED=$(mktemp -d)
+KIND_CONFIG=$(mktemp)
 export KUBECONFIG=${KUBECONFIG:-$HOME/.kube/kind-$CLUSTER}
 
 PHASE=
@@ -43,14 +45,15 @@ cleanup() {
   pkill -f "port-forward svc/pelican-k8s-gateway" 2>/dev/null || true
   pkill -f "port-forward svc/fakepanel" 2>/dev/null || true
   if [[ "${KEEP:-0}" != 1 ]]; then "$KIND" delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
+  rm -f "$KIND_CONFIG"
   exit $rc
 }
 trap cleanup EXIT
 
 log "kind cluster $CLUSTER ($KIND_IMAGE, three workers)"
 "$KIND" delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
-mkdir -p "$SHARED" && chmod 0777 "$SHARED"
-"$KIND" create cluster --name "$CLUSTER" --image "$KIND_IMAGE" --config hack/kind-placement.yaml --wait 180s
+sed "s|SHARED_DIR|$SHARED|" hack/kind-placement.yaml >"$KIND_CONFIG"
+"$KIND" create cluster --name "$CLUSTER" --image "$KIND_IMAGE" --config "$KIND_CONFIG" --wait 180s
 kubectl get nodes -o wide
 
 log "storage without node affinity (local-path shared mode)"

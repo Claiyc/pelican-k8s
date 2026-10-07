@@ -327,7 +327,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `GET /servers?page=` | One-item list: `{settings, process_configuration}` assembled from `spec.panel` and the `gs-<uuid>-env` Secret (§9.4); `build.memory_limit: 0` becomes the class `unlimitedMemoryMiB` and the default allocation IP becomes `0.0.0.0` |
 | `GET /servers/{uuid}` | Same object; `404` for any other UUID |
 | `POST /servers/reset` | `204`, dropped (the gateway sends the node reset itself, §8.9) |
-| `POST /servers/{uuid}/container/status` | Write `status.process.state`; set `spec.power.desired=Stopped` (and `kill: false`) when `previous_state` is `stopping` and `new_state` is `offline`, unless the game pod or the agent pod is terminating; refresh `status.usage`; forward to the Panel |
+| `POST /servers/{uuid}/container/status` | Write `status.process.state` (the agent's state on a fresh poll, below); set `spec.power.desired=Stopped` (and `kill: false`) when `previous_state` is `stopping` and `new_state` is `offline`, unless the game pod or the agent pod is terminating; refresh `status.usage`; forward to the Panel |
 | `GET /servers/{uuid}/install` | Install script of `spec.install.generation` from ConfigMap `gs-<uuid>-install-<gen>`, with `spec.install.image` and `entrypoint`; `404` if the ConfigMap is missing |
 | `POST /servers/{uuid}/install/prepared` | Record `status.install.preparedGeneration` and `result: Running`; answer with the generation and `strict_exit_code` (§8.2) |
 | `GET /servers/{uuid}/install/state?generation=` | The Job outcome recorded by the operator, polled by the installer |
@@ -344,7 +344,10 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 `GET /api/servers/:s` and the list endpoint are served from a per-replica cache filled by polling the
 agent's `GET /api/servers/:s` (state plus utilization) on demand: 2 s TTL, 900 ms poll timeout. A
 `container/status` post or a server delete invalidates the entry. State changes go to `status.process`
-when the agent posts them; after each post the gateway also refreshes `status.usage` from a fresh poll.
+when the agent posts them. The agent sends each change from its own goroutine, so `starting` can arrive
+after `running`; each gateway replica therefore handles one server's posts one at a time and writes the
+state a fresh poll of the agent returns, or the posted state when the agent cannot be polled. After
+each post the gateway also refreshes `status.usage` from a fresh poll.
 
 ### 5.9 Agent pod replacement
 

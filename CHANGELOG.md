@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 - A process that exits without Wings restarting it leaves the server stopped: after a minute offline the gateway sets `desired: Stopped` and the game pod goes, as the Panel shows it.
 - New conditions `GamePodReady` and `AgentRelocating`; `status.game` records the game pod and its node, `status.agent.node` the agent's.
 
+### Fixed
+- A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now handles one server's posts one at a time and records the state the agent reports on a fresh poll.
+
 ### Added
 - Open consoles survive an agent pod replacement: the gateway holds the browser's websocket for up to `gateway.agentWait` (default `120s`), moves it to the new agent and asks the Panel for a fresh token. File-manager and other HTTP calls wait up to 10 s for the new agent.
 - `tls.enabled` (default `false`) encrypts the traffic between the gateway, the operator, the agents and the shims with TLS 1.3 from an internal CA the operator keeps in Secret `<release>-ca` (#76). The gateway and the operator present client certificates to agents in addition to the agent token, the agent's remote API calls verify the gateway, and the shim verifies its agent. The operator issues and renews the certificates (`gs-<uuid>-tls`, `<release>-gateway-tls`); the components reload them without a restart.
