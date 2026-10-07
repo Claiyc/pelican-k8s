@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -49,6 +52,14 @@ const (
 	// GameCAFile is the CA bundle the shim verifies the agent with.
 	GameCAFile = "/pelican/tls/ca.crt"
 )
+
+// AgentURL is the base URL of the agent API on a pod IP without TLS: plain
+// HTTP on the pod network, each request carrying the agent's token, the port
+// admitted only from pelican-k8s pods by the agent pod's NetworkPolicy (12.4).
+// With TLS callers use https and a name from pki.AgentHost instead (12.6).
+func AgentURL(ip string) string {
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, strconv.Itoa(AgentPort))}).String()
+}
 
 // Input is everything needed to render the owned objects.
 type Input struct {

@@ -720,3 +720,14 @@ func volume(vols []corev1.Volume, name string) *corev1.Volume {
 	}
 	return nil
 }
+
+func TestAgentURL(t *testing.T) {
+	for ip, want := range map[string]string{
+		"10.0.0.5": "http://10.0.0.5:8080",
+		"fd00::5":  "http://[fd00::5]:8080",
+	} {
+		if got := AgentURL(ip); got != want {
+			t.Errorf("AgentURL(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}

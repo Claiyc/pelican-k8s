@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -613,9 +614,9 @@ func (r *GameServerReconciler) newAgent(base, token string) AgentAPI {
 // to the address, or HTTPS to a name its certificate carries.
 func (r *GameServerReconciler) agentBase(ip, uuid, namespace string) string {
 	if r.tls() {
-		return "https://" + net.JoinHostPort(pki.AgentHost(ip, uuid, namespace), strconv.Itoa(render.AgentPort))
+		return (&url.URL{Scheme: "https", Host: net.JoinHostPort(pki.AgentHost(ip, uuid, namespace), strconv.Itoa(render.AgentPort))}).String()
 	}
-	return "http://" + net.JoinHostPort(ip, strconv.Itoa(render.AgentPort))
+	return render.AgentURL(ip)
 }
 
 func (r *GameServerReconciler) agentToken(s *scope) (string, error) {

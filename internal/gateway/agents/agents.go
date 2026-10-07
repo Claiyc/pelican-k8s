@@ -47,18 +47,19 @@ func (t Target) host() string {
 
 // HTTPBase returns the agent's HTTP base URL.
 func (t Target) HTTPBase() string {
-	if t.TLS {
-		return "https://" + t.host()
-	}
-	return "http://" + t.host()
+	return t.base("http", "https")
 }
 
 // WSBase returns the agent's websocket base URL.
 func (t Target) WSBase() string {
+	return t.base("ws", "wss")
+}
+
+func (t Target) base(plain, secure string) string {
 	if t.TLS {
-		return "wss://" + t.host()
+		return (&url.URL{Scheme: secure, Host: t.host()}).String()
 	}
-	return "ws://" + t.host()
+	return (&url.URL{Scheme: plain, Host: t.host()}).String()
 }
 
 // SFTPAddr returns the agent's SFTP address.
