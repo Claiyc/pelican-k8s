@@ -150,9 +150,12 @@ All servers live in the one servers namespace.
      and on the agent's Wings API alike. Nothing else issues power, sync or install calls.
    - `spec.power.desired` takes the place of Wings' `states.json`: `Running` on `start`/`restart`,
      `Stopped` when the process reaches `offline` through `stopping` (power `stop`/`kill`, the stop
-     command typed into the console, suspension, a start that fails before the process runs). A crash leaves it at `Running`, so Wings' crash handler
-     and pod recreation both restore a running server, and a server stopped from the console stays
-     stopped after a node reboot.
+     command typed into the console, suspension, a start that fails before the process runs). A crash leaves it at `Running` while Wings' crash
+     handler restarts the process, and pod recreation restores a running server. When the crash handler
+     does not restart it (crash detection off, a clean exit, a second crash within 60 s), the process
+     stays `offline`, the Panel shows the server as offline, and the gateway sets `Stopped` (§8.3). So
+     `desired` always matches what the Panel shows once the process has settled, and a server that is
+     off stays off after a node reboot.
 4. **Wings' code, Kubernetes' plumbing.** The agent is a small `main` that imports Wings as a module,
    registers a shim-backed environment and a Job-backed installer through the hooks, and otherwise
    runs Wings' router, websocket and SFTP server.
@@ -184,7 +187,8 @@ for agents) and `:2022` (SFTP).
    gateway forwards only what belongs to that server (§5.7).
 5. Record **observed process state** in `status.process` from the agents' `container/status` posts,
    and serve the Panel's latency-sensitive reads (`GET /api/servers/:s` has a 1 s timeout) from a short
-   per-replica cache (§5.8).
+   per-replica cache (§5.8). Set `spec.power.desired` to `Stopped` for a process that stayed offline
+   after a crash (§8.3).
 6. Answer **node-level** endpoints (`/api/system*`, list servers) from cluster data and configuration.
 7. Keep CRs in line with the Panel (resync, §13) and send the Panel's once-per-boot server reset (§8.9).
 
@@ -985,9 +989,9 @@ older than the one it wrote.
 
 A process that is `offline` while `desired: Running` is not restarted by the operator unless the spec
 changes or a pod is fresh: crash restarts, including Wings' rule that gives up when the previous crash
-was less than 60 s ago, belong to Wings' crash handler in the agent. The game pod stays for as long as
-`desired` is `Running`, so a server that Wings gave up on keeps its pod and its requests until it is
-started or stopped.
+was less than 60 s ago, belong to Wings' crash handler in the agent. When that handler leaves the
+process offline, the gateway sets `desired: Stopped` after a minute (§8.3) and the game pod goes, like
+after any other stop.
 
 ### 7.7 Placement
 
@@ -1170,6 +1174,14 @@ sequenceDiagram
 - **Crash:** `exited` (from the shim, or relayed by the operator from a container-level termination) ⇒
   agent `offline` ⇒ Wings `handleServerCrash` ⇒ auto-restart within Wings' timeout rules, in the same
   game pod. `power.desired` stays `Running` and the operator does not intervene (§7.6).
+- **Crash without restart:** Wings leaves the process offline when crash detection is off, when the
+  exit was clean (and `detect_clean_exit_as_crash` is off), or when the previous crash was less than
+  60 s ago; the Panel then shows the server as offline. Every 15 s the gateway looks for servers
+  with `desired: Running` whose process has been `offline` for 60 s (`status.process.since`), whose
+  last power action is observed, and whose current agent and game pods are the ones the operator
+  last drove and are not terminating. It sets `desired: Stopped` for them, and the operator removes
+  the game pod. The pod conditions keep a start in progress, a drain or a lost pod from being taken
+  for a settled crash.
 
 ### 8.4 Files, downloads and uploads
 
@@ -1506,7 +1518,7 @@ enforce the workload shapes:
 | Server configuration (image, limits, allocations, egg config) | **Panel database** | CR `spec.panel` (written only by the gateway) |
 | Egg variables | **Panel database** | Secret `gs-<uuid>-env` (written only by the gateway) |
 | Cluster policy (storage, exposure, security) | `GameServerClass` | — |
-| Desired power state | CR `spec.power` (gateway: Panel and websocket power actions, and intentional stops derived from `container/status`, §4.2; editable with kubectl) | — |
+| Desired power state | CR `spec.power` (gateway: Panel and websocket power actions, intentional stops derived from `container/status`, and crashes Wings did not restart, §4.2; editable with kubectl) | — |
 | Actual process state | **Agent** (Wings state machine over the shim) | `status.process` (written by the gateway), gateway state cache, Panel |
 | Last power action taken | CR `status.power` (operator) | — |
 | Whether a game pod exists | Derived from `spec.power.desired` and `status.process.state` (operator, §7.6) | game StatefulSet replicas |

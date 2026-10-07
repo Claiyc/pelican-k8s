@@ -37,6 +37,12 @@ shipped.
   backup, restore, install or active SFTP session.
 - **Agent priority class above game pods**, so the agent always fits on the game pod's node.
 - **No live migration.** Moving a running server is stop, reschedule, start.
+- **No migration path from 1.x.** 2.0 is a major release. The operator replaces every 1.x pod at
+  upgrade; a running server is stopped through the 1.x `preStop` path and started in the new layout.
+  There is no fallback to the old pod in the gateway or the operator.
+- **`desired` follows the Panel.** Under Wings a crash that is not restarted leaves the server
+  offline, in the Panel and in `states.json`. The gateway therefore sets `desired: Stopped` when a
+  process has stayed offline for a minute, and the game pod goes.
 - **Storage is a class choice.** Network block storage gives mobility; node-local storage pins the
   pair to the volume's node and needs no special handling.
 
@@ -87,13 +93,16 @@ game pod has a required pod affinity to the agent pod.
   for "terminating"; diagnostics.
 - `charts/pelican-k8s`: ServiceAccount `pelican-agent`, admission policy binding, OpenShift SCC
   binding, PriorityClass `pelican-agent`, default class values.
-- **Migration of existing servers** (see §5, open decision 1).
+- Upgrade from 1.x: the operator deletes every pod of the old layout (a `gs-<uuid>-0` with an
+  `agent` container) as soon as it runs; no compatibility code.
 
 ### Step 4: a game pod per run
 
 - Game StatefulSet replicas follow `spec.power.desired` and `status.process.state` (§7.6).
 - Start: render the template (digest resolved now), scale to 1, wait for the shim, issue `start`.
 - Stop: scale to 0 once the process is `offline` and `desired` is `Stopped`.
+- `internal/gateway`: the 15 s check that sets `desired: Stopped` for a process that stayed offline
+  for a minute after a crash (ARCHITECTURE.md §8.3).
 - Resize and `RecreatePending` only when a game pod exists; drop the paths that recreate a stopped
   server's pod.
 - Tests: reconciler tests for every row of the §7.6 tables; e2e start, stop, console stop,
@@ -107,9 +116,15 @@ game pod has a required pod affinity to the agent pod.
   let the StatefulSet recreate; remove the affinity when the game pod is gone.
 - `internal/gateway/sftprelay`: write `status.agent.sftpActiveAt`.
 - Tests: reconciler tests with a fake client for same node, other node, busy agent, busy agent on a
-  full node, lost agent pod, lost game pod, drain. A two-worker kind cluster covers scheduling but
-  not the volume move, because kind's local-path volumes are node-local; the volume move needs a
-  manual run on a multi-node cluster with network block storage (Longhorn or Ceph).
+  full node, lost agent pod, lost game pod, drain.
+- e2e: a kind cluster with two workers and a StorageClass whose volumes are not bound to a node.
+  kind's default local-path volumes carry node affinity, so the pair could never move; configure
+  the local-path provisioner with a shared directory (`sharedFileSystemPath`) that is mounted into
+  every kind node, or use an in-cluster NFS CSI driver. That exercises the whole flow: scheduling,
+  the agent following, sessions, starts on a full node.
+- Not covered by kind: the detach and attach of a real block device (timing, a volume that is
+  still attached to the old node). Run that once by hand on a multi-node cluster with Longhorn or
+  Ceph.
 
 ### Release
 
@@ -132,31 +147,22 @@ the Panel UI reconnects by itself. ARCHITECTURE.md §5.9 describes the behaviour
 
 ## 5. Open decisions and things to verify
 
-1. **Migrating 1.x servers (decision needed).** A 1.x pod holds agent and game together.
-   - *Recommended:* migrate each server when its process is offline, as every pod template change
-     works today. Until then the gateway and the operator fall back to the 1.x pod (`gs-<uuid>-0`
-     with an `agent` container) for routing and power calls. The fallback is removed one minor
-     release later.
-   - *Alternative:* no fallback; the upgrade stops every running server once through the 1.x
-     `preStop` path and starts it in the new layout. Less code, one restart per server.
-2. **Panel UI and `token expiring`.** Part 2 relies on the frontend answering `token expiring` with
+1. **Panel UI and `token expiring`.** Part 2 relies on the frontend answering `token expiring` with
    a fresh `auth` on the same socket. Confirm against the pinned Panel before building it; if it
    does not, the gateway has to ask for the token another way or the socket has to reconnect.
-3. **What `/internal/v1/activity` can see.** In-flight HTTP file requests are countable with
+2. **What `/internal/v1/activity` can see.** In-flight HTTP file requests are countable with
    middleware in the agent's `ServeMux`. Remote pulls, backups and restores run in Wings after the
    request returned; check what Wings exports for them (`downloader`, server flags) before adding
    a hook to the fork.
-4. **A server Wings gave up on** (`desired: Running`, process `offline`) keeps its game pod and its
-   requests. Decide whether the operator should set `desired: Stopped` after a while.
-5. **Agent preemption.** The agent's priority class lets a 128 Mi agent pod preempt a game pod of
+3. **Agent preemption.** The agent's priority class lets a 128 Mi agent pod preempt a game pod of
    another server on a full node. Check that this is acceptable, or reserve agent headroom per
    node instead.
-6. **Drain ordering.** The agent's `preStop` gives the shim 10 s to report `terminating`. Measure
+4. **Drain ordering.** The agent's `preStop` gives the shim 10 s to report `terminating`. Measure
    how far apart `kubectl drain` and the eviction API delete the two pods.
-7. **Start latency.** Measure scheduling, image check, init containers and, on a move, detach and
+5. **Start latency.** Measure scheduling, image check, init containers and, on a move, detach and
    attach (Longhorn, Ceph) against the 1.x start.
-8. **Volume ownership on every start.** `fsGroupChangePolicy: OnRootMismatch` should make the game
+6. **Volume ownership on every start.** `fsGroupChangePolicy: OnRootMismatch` should make the game
    pod's mount cheap; confirm on a large volume, and on OpenShift that both pods get the same
    SELinux MCS label (the install Job already shares the volume this way).
-9. **Agent SFTP host key.** Confirm it is on the PVC and survives an agent move; otherwise the
+7. **Agent SFTP host key.** Confirm it is on the PVC and survives an agent move; otherwise the
    pinned `status.agent.sftpHostKey` has to be reset on relocation.

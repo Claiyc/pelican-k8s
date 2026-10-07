@@ -29,7 +29,7 @@ Status fields worth knowing:
 | Field | Written by | Meaning |
 |---|---|---|
 | `status.process.state` | gateway | `offline`, `starting`, `running`, `stopping` as reported by Wings |
-| `spec.power.desired` | gateway | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`, a crash leaves `Running` |
+| `spec.power.desired` | gateway | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`; a crash leaves `Running` while Wings restarts the process and becomes `Stopped` after a minute when it does not |
 | `status.power.observedGeneration` | operator | Last `spec.power.generation` acted on |
 | `status.install.*` | both | Requested/prepared generation, Job name, result |
 | `status.conditions` | operator (`Orphaned`: gateway) | `VolumeReady`, `ExposureReady`, `AgentReady`, `GamePodReady`, `AgentRelocating`, `InstallPrepared`, `Installed`, `ResizePending`, `RecreatePending`, `NodeLost`, `Orphaned`, `DiskShrinkRefused` |
@@ -49,6 +49,7 @@ owned by the gateway and overwritten on the next Panel sync.
 | Panel changes the image | a stopped server uses it at the next start. A running one gets `RecreatePending`, and its game pod is replaced once the process is offline (a restart while pending replaces it first) |
 | Game pod deleted / node drained | the shim runs the stop command or signal itself and waits for the process before it exits; the new game pod starts the server again if `desired: Running` |
 | Game container OOM-killed | kubelet restarts the container; the operator relays the exit to the agent; Wings' crash handler restarts the process (unless the previous crash was < 60 s ago) |
+| Process crashes and Wings does not restart it (second crash within 60 s, clean exit, crash detection off) | the Panel shows the server as offline; after a minute `desired` becomes `Stopped` and the game pod is removed |
 | Agent container restarts, or the agent pod is replaced | the game keeps running; the shim reconnects and the agent re-attaches. Open consoles stay connected through the gateway |
 | Agent moves to another node | only before a start, and never while it has in-flight work (transfers, backups, installs, active SFTP). Consoles stay connected; idle SFTP sessions reconnect; local-adapter backups are lost |
 | Gateway restarts | live console and SFTP sessions drop and reconnect; no state is lost |
