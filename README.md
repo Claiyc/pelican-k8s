@@ -38,10 +38,6 @@ Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
 | **agent** | [Wings](https://github.com/pelican/wings) as a Go library, one pod per server: files, SFTP, console and backups whether the game runs or not |
 | **shim** | Entrypoint of the game pod: PTY, signals, exit codes, stats and the console buffer |
 
-A stopped server costs its agent pod (50m CPU, 128Mi memory by default) and
-its volume. Starting it creates the game pod, which the scheduler places like
-any other workload.
-
 [ARCHITECTURE.md](ARCHITECTURE.md) describes how the system works.
 
 ## Quick start
@@ -105,7 +101,6 @@ kubectl -n pelican-servers describe gameserver gs-<uuid>   # conditions and even
 | [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and tested platforms |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
 | [docs/development.md](docs/development.md) | Building, testing, the code map, the Wings fork and its hooks, release process |
-| [V2-PLAN.md](V2-PLAN.md) | Temporary: the work that brings the code in line with the split-pod design these documents describe |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
 | [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Wings ⇄ Panel protocol reference |
 

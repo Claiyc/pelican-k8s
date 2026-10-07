@@ -2,7 +2,7 @@ name: CodeQL
 
 on:
   push:
-    branches: [master, main, v2]
+    branches: [master, main]
   # A draft release PR runs nothing; see ci.yaml.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]

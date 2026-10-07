@@ -206,7 +206,12 @@ func (e *Environment) SetState(state string) {
 
 // pushState tells a connected shim the current state, which keeps its
 // readiness file in line with what the Panel shows. The calls are ordered so
-// that the shim always ends up with the latest state.
+// that the shim always ends up with the latest state. The push runs on its own
+// goroutine under the environment's context, not the caller's: SetState has no
+// context (Wings fixes its signature) and the push must outlive the request
+// that changed the state.
+//
+//nolint:contextcheck // see above
 func (e *Environment) pushState() {
 	c := e.currentClient()
 	if c == nil {
