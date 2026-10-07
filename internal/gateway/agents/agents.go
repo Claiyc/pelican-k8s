@@ -32,7 +32,7 @@ type Target struct {
 
 // HTTPBase returns the agent's HTTP base URL.
 func (t Target) HTTPBase() string {
-	return "http://" + net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
+	return render.AgentURL(t.PodIP)
 }
 
 // SFTPAddr returns the agent's SFTP address.

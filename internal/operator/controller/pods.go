@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -393,7 +392,7 @@ func (r *GameServerReconciler) reconcileAgentPod(s *scope, lost *bool) error {
 	if err != nil {
 		return err
 	}
-	s.agent = r.newAgent("http://"+ip+":"+strconv.Itoa(render.AgentPort), token)
+	s.agent = r.newAgent(render.AgentURL(ip), token)
 	r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionTrue, "Ready", "")
 	return nil
 }
