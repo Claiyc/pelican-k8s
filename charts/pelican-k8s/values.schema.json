@@ -84,10 +84,37 @@
       "additionalProperties": false,
       "properties": {
         "replicas": {
-          "description": "Gateway replicas. Replicas are active/active behind the Service; websocket and SFTP sessions are per replica and drop when their replica stops.",
+          "description": "Gateway replicas. Replicas are active/active behind the Service; two keep the Panel connected through a node drain or a rollout. Websocket and SFTP sessions are per replica and drop when their replica stops; clients reconnect to another.",
           "type": "integer",
           "minimum": 0,
-          "default": 1
+          "default": 2
+        },
+        "podAntiAffinity": {
+          "description": "Spread gateway replicas across nodes (topology kubernetes.io/hostname). soft prefers different nodes and still schedules on a single-node cluster; hard requires them, so replicas beyond the node count stay Pending; none adds no rule. A non-empty affinity replaces this rule.",
+          "type": "string",
+          "enum": ["soft", "hard", "none"],
+          "default": "soft"
+        },
+        "affinity": {
+          "description": "Affinity of the gateway pods. When non-empty it replaces the podAntiAffinity rule.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of the gateway pods.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of the gateway pods.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/toleration"},
+          "default": []
+        },
+        "podDisruptionBudget": {
+          "description": "PodDisruptionBudget of the gateway keeping at most maxUnavailable replicas down during voluntary disruptions (drains, cluster upgrades). A drain evicts one replica, waits until its replacement runs elsewhere, then evicts the next. With one replica the eviction is allowed at once.",
+          "allOf": [{"$ref": "#/definitions/podDisruptionBudget"}],
+          "default": {"enabled": true, "maxUnavailable": 1}
         },
         "panelURL": {
           "description": "Base URL of the Panel as the gateway reaches it, scheme included, without a trailing path. Also the websocket Origin the gateway accepts. Required: rendering fails while it is empty.",
@@ -323,10 +350,37 @@
       "additionalProperties": false,
       "properties": {
         "replicas": {
-          "description": "Operator replicas. With leaderElect one replica reconciles and the others stand by.",
+          "description": "Operator replicas. With leaderElect one replica holds the Lease and reconciles; the others stand by and take over when it releases the Lease on shutdown or the Lease expires. Lease election needs no quorum, so two replicas are enough.",
           "type": "integer",
           "minimum": 0,
-          "default": 1
+          "default": 2
+        },
+        "podAntiAffinity": {
+          "description": "Spread operator replicas across nodes (topology kubernetes.io/hostname). soft prefers different nodes and still schedules on a single-node cluster; hard requires them, so replicas beyond the node count stay Pending; none adds no rule. A non-empty affinity replaces this rule.",
+          "type": "string",
+          "enum": ["soft", "hard", "none"],
+          "default": "soft"
+        },
+        "affinity": {
+          "description": "Affinity of the operator pods. When non-empty it replaces the podAntiAffinity rule.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of the operator pods.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of the operator pods.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/toleration"},
+          "default": []
+        },
+        "podDisruptionBudget": {
+          "description": "PodDisruptionBudget of the operator keeping at most maxUnavailable replicas down during voluntary disruptions (drains, cluster upgrades). A drain evicts one replica, waits until its replacement runs elsewhere, then evicts the next. With one replica the eviction is allowed at once.",
+          "allOf": [{"$ref": "#/definitions/podDisruptionBudget"}],
+          "default": {"enabled": true, "maxUnavailable": 1}
         },
         "concurrency": {
           "description": "GameServers reconciled in parallel (--concurrency).",
@@ -703,6 +757,36 @@
         "tolerationSeconds": {
           "description": "With effect NoExecute, how long the pod stays bound after the taint appears. Unset tolerates forever.",
           "type": "integer"
+        }
+      }
+    },
+    "affinity": {
+      "description": "A Kubernetes Affinity, rendered verbatim. The three rule kinds are passed through unchecked.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": {"description": "Rules on node labels.", "type": "object"},
+        "podAffinity": {"description": "Rules attracting the pod to nodes running matching pods.", "type": "object"},
+        "podAntiAffinity": {"description": "Rules keeping the pod away from nodes running matching pods.", "type": "object"}
+      }
+    },
+    "podDisruptionBudget": {
+      "description": "A chart-managed PodDisruptionBudget.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Create the PodDisruptionBudget. Set false on single-node clusters: with two replicas on the only node, a drain waits for a second node.",
+          "type": "boolean",
+          "default": true
+        },
+        "maxUnavailable": {
+          "description": "Replicas that may be down at once, as a number or a percentage such as `50%`. maxUnavailable rather than minAvailable, so replicas: 1 can still be drained.",
+          "anyOf": [
+            {"type": "integer", "minimum": 0},
+            {"type": "string", "pattern": "^([0-9]|[1-9][0-9]|100)%$"}
+          ],
+          "default": 1
         }
       }
     },
