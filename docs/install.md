@@ -66,7 +66,7 @@ What the chart creates:
 
 - namespace `pelican-servers` (Pod Security `baseline`, default-deny NetworkPolicy)
 - CRDs `gameservers.pelican-k8s.io` and `gameserverclasses.pelican-k8s.io`
-- gateway and operator Deployments with scoped RBAC
+- gateway and operator Deployments with scoped RBAC, two replicas each, spread across nodes where possible, each with a PodDisruptionBudget
 - ConfigMap `pelican-agent-config` (the agent's Wings `config.yml`)
 - `GameServerClass/default`
 - `ValidatingAdmissionPolicy` objects enforcing the restricted shape of game pods and the volume allow-list of install Jobs

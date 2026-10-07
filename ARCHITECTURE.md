@@ -1329,9 +1329,14 @@ enforce the workload shapes:
 | Component | Replicas |
 |---|---|
 | Panel | 1 (web, queue worker and scheduler in the upstream image) |
-| Gateway | 1 (`gateway.replicas`). Websocket and SSH connections are per replica and drop on a rollout. Every replica verifies SFTP session credentials (§5.6), so SFTP works with any replica count |
-| Operator | 1, with leader election |
+| Gateway | 2 (`gateway.replicas`), active/active behind the Service. The gateway keeps no state of its own: tokens, denylists and sessions live in the agents and the cluster, the SFTP host key in a shared Secret. Websocket and SSH connections are per replica and drop when their replica stops; clients reconnect to another. Every replica verifies SFTP session credentials (§5.6), so SFTP works with any replica count |
+| Operator | 2 (`operator.replicas`), one leader through the Lease `pelican-operator.pelican-k8s.io`. Lease election needs no quorum, so one standby is enough. The leader releases the Lease on shutdown and the standby takes over at once; when the leader dies without releasing it, the standby waits for the Lease to expire (15 s) |
 | Game servers | 1 pod each (StatefulSet). On a **NotReady node** the pod stays `Terminating` and the StatefulSet does not replace it. With `failover.forceDeleteAfter` set, the operator sets `NodeLost` and force-deletes the pod after that duration, so it reschedules and the RWO volume reattaches; this is safe only when the storage layer fences the old node or the node is confirmed down |
+
+Gateway and operator replicas are spread across nodes with a preferred pod anti-affinity on
+`kubernetes.io/hostname` (`podAntiAffinity: soft`), so a single-node cluster runs both replicas on
+its one node with no extra setting; `hard` makes spreading a requirement. A PodDisruptionBudget with
+`maxUnavailable: 1` per component keeps one replica up through drains without ever blocking one.
 
 **Load:**
 - Agents make short remote-API calls (state changes, activity every 60 s); the gateway polls state on

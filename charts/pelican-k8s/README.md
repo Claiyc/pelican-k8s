@@ -33,7 +33,11 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `serversNamespace.name` | `pelican-servers` | Namespace holding `GameServer` objects and game pods |
 | `serversNamespace.create` | `true` | Create the namespace (kept on uninstall) |
 | `serversNamespace.podSecurityLevel` | `baseline` | Pod Security Admission level (`privileged` for HostPort exposure) |
-| `gateway.replicas` / `operator.replicas` | `1` / `1` | Replica counts (the operator runs with leader election) |
+| `gateway.replicas` / `operator.replicas` | `2` / `2` | Replica counts. Gateway replicas are active/active; operator replicas elect one leader through a Lease, the other is a standby |
+| `gateway.podAntiAffinity` / `operator.podAntiAffinity` | `soft` / `soft` | Spread replicas across nodes: `soft` prefers different nodes and still schedules on a single node, `hard` requires them (replicas beyond the node count stay Pending), `none` adds no rule |
+| `gateway.affinity` / `operator.affinity` | `{}` | Pod affinity; when set it replaces the `podAntiAffinity` rule |
+| `gateway.nodeSelector` / `.tolerations`, `operator.nodeSelector` / `.tolerations` | `{}` / `[]` | Node placement |
+| `gateway.podDisruptionBudget.enabled` / `.maxUnavailable` (same for `operator`) | `true` / `1` | PodDisruptionBudget limiting voluntary disruptions; `maxUnavailable` never blocks a drain, even with one replica |
 | `gateway.panelURL` | required | Panel base URL, also the accepted websocket `Origin` |
 | `gateway.nodeTokenID` / `gateway.nodeToken` | required unless `existingSecret` | Node credentials from the Panel (`token_id` / `token`) |
 | `gateway.existingSecret` | `""` | Secret with keys `token_id` and `token` instead of the values above |

@@ -52,3 +52,60 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- printf "%s-node-token" (include "pelican-k8s.gatewayName" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Pod scheduling for a gateway or operator Deployment: affinity (an explicit
+`affinity` value, else the podAntiAffinity preset on the hostname), node
+selector and tolerations. Call with (dict "values" .Values.<component> "name"
+<app.kubernetes.io/name> "root" .).
+*/}}
+{{- define "pelican-k8s.scheduling" -}}
+{{- $v := .values -}}
+{{- $term := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" .name "app.kubernetes.io/instance" .root.Release.Name)) -}}
+{{- if $v.affinity }}
+affinity: {{- toYaml $v.affinity | nindent 2 }}
+{{- else if eq $v.podAntiAffinity "soft" }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm: {{- toYaml $term | nindent 10 }}
+{{- else if eq $v.podAntiAffinity "hard" }}
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - {{ toYaml $term | indent 8 | trim }}
+{{- else if ne $v.podAntiAffinity "none" }}
+{{- fail (printf "podAntiAffinity must be soft, hard or none, got %q" $v.podAntiAffinity) }}
+{{- end }}
+{{- with $v.nodeSelector }}
+nodeSelector: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with $v.tolerations }}
+tolerations: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+PodDisruptionBudget for a gateway or operator Deployment. Same arguments as
+pelican-k8s.scheduling plus "fullname".
+*/}}
+{{- define "pelican-k8s.pdb" -}}
+{{- if .values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .fullname }}
+  namespace: {{ .root.Release.Namespace }}
+  labels:
+    {{- include "pelican-k8s.labels" .root | nindent 4 }}
+    app.kubernetes.io/name: {{ .name }}
+spec:
+  maxUnavailable: {{ .values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .name }}
+      app.kubernetes.io/instance: {{ .root.Release.Name }}
+{{- end }}
+{{- end -}}
