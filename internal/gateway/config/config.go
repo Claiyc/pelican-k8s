@@ -52,6 +52,9 @@ type Config struct {
 	SFTPKeyOnly bool
 	// StateCacheTTL bounds how often an agent is polled for GET /api/servers/:s.
 	StateCacheTTL time.Duration
+	// AgentWait is how long an open console is held while the server's agent
+	// pod is replaced (ARCHITECTURE.md 5.9).
+	AgentWait time.Duration
 	// Timezone is passed to install Jobs as TZ.
 	Timezone string
 }
@@ -79,6 +82,7 @@ func FromEnv() (*Config, error) {
 		Timezone:          envOr("TZ", "UTC"),
 		ResyncInterval:    15 * time.Minute,
 		StateCacheTTL:     2 * time.Second,
+		AgentWait:         2 * time.Minute,
 	}
 	if v := os.Getenv("PELICAN_GW_RESYNC_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -86,6 +90,13 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("PELICAN_GW_RESYNC_INTERVAL: %w", err)
 		}
 		c.ResyncInterval = d
+	}
+	if v := os.Getenv("PELICAN_GW_AGENT_WAIT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("PELICAN_GW_AGENT_WAIT: %w", err)
+		}
+		c.AgentWait = d
 	}
 	if v := os.Getenv("PELICAN_GW_METALLB_MAX_ADDRESSES"); v != "" {
 		n, err := strconv.Atoi(v)

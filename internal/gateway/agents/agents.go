@@ -26,6 +26,8 @@ type Target struct {
 	PodIP   string
 	TokenID string
 	Token   string
+	// PodUID identifies the agent pod, so a caller can tell a replacement.
+	PodUID string
 }
 
 // HTTPBase returns the agent's HTTP base URL.
@@ -44,6 +46,11 @@ type Resolver struct {
 	Store *store.Store
 	// Transport is shared by all proxied requests.
 	Transport *http.Transport
+
+	// HTTPWait is how long Wait holds a request for an agent that is being
+	// replaced (ARCHITECTURE.md 5.9); Poll is how often it looks.
+	HTTPWait time.Duration
+	Poll     time.Duration
 
 	cacheMu sync.Mutex
 	cache   map[string]cachedState
@@ -66,8 +73,10 @@ func NewResolver(s *store.Store, ttl time.Duration) *Resolver {
 			ResponseHeaderTimeout: 20 * time.Minute, // compress/decompress can take up to 15 min
 			DisableCompression:    true,
 		},
-		cache: map[string]cachedState{},
-		ttl:   ttl,
+		HTTPWait: 10 * time.Second,
+		Poll:     500 * time.Millisecond,
+		cache:    map[string]cachedState{},
+		ttl:      ttl,
 	}
 }
 
@@ -85,7 +94,38 @@ func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token}, nil
+	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token, PodUID: string(pod.UID)}, nil
+}
+
+// Wait is Resolve for HTTP calls: while the agent pod is not ready (being
+// replaced, starting) it retries for up to HTTPWait before returning
+// ErrUnavailable.
+func (r *Resolver) Wait(ctx context.Context, uuid string) (*Target, error) {
+	t, err := r.Resolve(ctx, uuid)
+	if !errors.Is(err, ErrUnavailable) || r.HTTPWait <= 0 {
+		return t, err
+	}
+	poll := r.Poll
+	if poll <= 0 {
+		poll = 500 * time.Millisecond
+	}
+	deadline := time.NewTimer(r.HTTPWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(poll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ErrUnavailable
+		case <-deadline.C:
+			return nil, ErrUnavailable
+		case <-tick.C:
+			t, err = r.Resolve(ctx, uuid)
+			if !errors.Is(err, ErrUnavailable) {
+				return t, err
+			}
+		}
+	}
 }
 
 // Proxy forwards the request to the agent with the agent token. The path and

@@ -114,6 +114,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(f.agent.Close)
 
 	res := agents.NewResolver(st, time.Millisecond)
+	res.HTTPWait, res.Poll = 50*time.Millisecond, 10*time.Millisecond
 	agentAddr := strings.TrimPrefix(f.agent.URL, "http://")
 	res.Transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, agentAddr)

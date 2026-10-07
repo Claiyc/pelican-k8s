@@ -80,6 +80,8 @@ spec:
             {{- end }}
             - name: PELICAN_GW_RESYNC_INTERVAL
               value: {{ .Values.gateway.resyncInterval | quote }}
+            - name: PELICAN_GW_AGENT_WAIT
+              value: {{ .Values.gateway.agentWait | quote }}
             - name: PELICAN_GW_SFTP_HOSTKEY_SECRET
               value: {{ .Values.gateway.sftp.hostKeySecret | quote }}
             - name: PELICAN_GW_SFTP_KEY_ONLY
