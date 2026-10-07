@@ -102,9 +102,10 @@ YAML
 kubectl -n pelican rollout status deploy/fakepanel --timeout=2m
 
 log "pelican-k8s (chart)"
+PANEL_URL=http://fakepanel.pelican.svc # NOSONAR: the fake Panel is plain HTTP inside the throwaway cluster
 helm install pelican-k8s charts/pelican-k8s -n pelican-system --create-namespace \
   --set image.registry=pelican-k8s --set image.tag="$TAG" --set image.pullPolicy=Never \
-  --set gateway.panelURL=http://fakepanel.pelican.svc --set gateway.nodeTokenID="$TOKEN_ID" --set gateway.nodeToken="$TOKEN" \
+  --set gateway.panelURL="$PANEL_URL" --set gateway.nodeTokenID="$TOKEN_ID" --set gateway.nodeToken="$TOKEN" \
   --set gateway.sftp.service.type=ClusterIP \
   --set defaultClass.spec.exposure.mode=NodePort \
   --set defaultClass.spec.storage.storageClassName=standard --set defaultClass.spec.storage.scratch.type=EmptyDir \

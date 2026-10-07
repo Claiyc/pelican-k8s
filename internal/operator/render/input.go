@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -41,6 +44,13 @@ const (
 	PartOfValue = "pelican-k8s"
 	LabelName   = "app.kubernetes.io/name"
 )
+
+// AgentURL is the base URL of the agent API on a pod IP. The API is plain HTTP
+// on the pod network: each request carries the agent's token, and the agent
+// pod's NetworkPolicy admits the port only from pelican-k8s pods (12.4).
+func AgentURL(ip string) string {
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, strconv.Itoa(AgentPort))}).String()
+}
 
 // Input is everything needed to render the owned objects.
 type Input struct {

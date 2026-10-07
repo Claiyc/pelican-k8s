@@ -59,7 +59,7 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 		if ready, ip := agentReady(agentPod); ready {
 			sec := &corev1.Secret{}
 			if err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.AgentSecret(uuid)}, sec); err == nil {
-				agent := r.newAgent(fmt.Sprintf("http://%s:%d", ip, render.AgentPort), string(sec.Data["token"]))
+				agent := r.newAgent(render.AgentURL(ip), string(sec.Data["token"]))
 				ctx, cancel := contextWithTimeout(s, 60*time.Second)
 				if policy == v1alpha1.DeletionDelete {
 					if err := agent.Delete(ctx, uuid); err != nil {
