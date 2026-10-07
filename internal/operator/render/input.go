@@ -19,20 +19,16 @@ import (
 
 // Well-known ports and paths shared by the components.
 const (
-	AgentPort     = 8080
-	SFTPPort      = 2022
-	GatewayPort   = 8081
-	ShimPort      = 8082
-	ArgvFile      = "/pelican/etc/argv"
-	PasswdFile    = "/pelican/etc/passwd"
-	GroupFile     = "/pelican/etc/group"
-	ContainerHome = "/home/container"
-	AgentRoot     = "/var/lib/pelican"
-	ScratchDir    = "/scratch"
-	// AgentTLSDir is where the agent's certificate Secret is mounted.
-	AgentTLSDir = "/etc/pelican-tls"
-	// GameCAFile is the CA bundle the shim verifies the agent with.
-	GameCAFile     = "/pelican/tls/ca.crt"
+	AgentPort      = 8080
+	SFTPPort       = 2022
+	GatewayPort    = 8081
+	ShimPort       = 8082
+	ArgvFile       = "/pelican/etc/argv"
+	PasswdFile     = "/pelican/etc/passwd"
+	GroupFile      = "/pelican/etc/group"
+	ContainerHome  = "/home/container"
+	AgentRoot      = "/var/lib/pelican"
+	ScratchDir     = "/scratch"
 	GameContainer  = "game"
 	AgentContainer = "agent"
 	// ShimTokenKey is the key of the shim token in the ShimSecret.
@@ -44,6 +40,14 @@ const (
 	LabelPartOf = "app.kubernetes.io/part-of"
 	PartOfValue = "pelican-k8s"
 	LabelName   = "app.kubernetes.io/name"
+)
+
+// Where the certificates are mounted when TLS is on (ARCHITECTURE.md 12.5).
+const (
+	// AgentTLSDir holds the agent's certificate Secret.
+	AgentTLSDir = "/etc/pelican-tls"
+	// GameCAFile is the CA bundle the shim verifies the agent with.
+	GameCAFile = "/pelican/tls/ca.crt"
 )
 
 // Input is everything needed to render the owned objects.
