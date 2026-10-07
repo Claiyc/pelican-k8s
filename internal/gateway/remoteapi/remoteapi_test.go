@@ -105,6 +105,7 @@ func newFixture(t *testing.T, o options) *fixture {
 	t.Cleanup(f.agent.Close)
 
 	res := agents.NewResolver(st, time.Millisecond)
+	res.HTTPWait, res.Poll = 300*time.Millisecond, 10*time.Millisecond
 	// Every pod IP resolves to the fake agent, whatever port is dialled.
 	agentAddr := strings.TrimPrefix(f.agent.URL, "http://")
 	res.Transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -511,9 +512,25 @@ func TestContainerStatusOutOfOrder(t *testing.T) {
 		t.Fatal("the posted change was not forwarded to the Panel")
 	}
 
-	// Without a ready agent the posted state is recorded.
+	// An agent that posts before its pod reports ready is still asked.
 	ctx := context.Background()
 	pod, _ := f.st.AgentPod(ctx, uuid)
+	ip := pod.Status.PodIP
+	pod.Status.PodIP = ""
+	_ = f.c.Status().Update(ctx, pod)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		p, _ := f.st.AgentPod(ctx, uuid)
+		p.Status.PodIP = ip
+		_ = f.c.Status().Update(ctx, p)
+	}()
+	post("offline", "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
+		t.Fatalf("process state %q from an agent that became ready, want running", got)
+	}
+
+	// Without a ready agent the posted state is recorded.
+	pod, _ = f.st.AgentPod(ctx, uuid)
 	pod.Status.PodIP = ""
 	_ = f.c.Status().Update(ctx, pod)
 	post("running", "stopping")

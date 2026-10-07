@@ -260,7 +260,10 @@ func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
 	mu.Lock()
 	defer mu.Unlock()
 	state := posted
-	if t, err := h.Agents.Resolve(ctx, uuid); err == nil {
+	// The agent posts right after it booted, possibly before its pod reports
+	// Ready; Wait gives it the same grace as a proxied call, so a late post
+	// cannot record a state the agent has already left.
+	if t, err := h.Agents.Wait(ctx, uuid); err == nil {
 		if body, err := h.Agents.State(ctx, t, true); err == nil {
 			var st struct {
 				State string `json:"state"`
