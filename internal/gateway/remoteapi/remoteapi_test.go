@@ -3,6 +3,7 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,6 +61,8 @@ type fixture struct {
 	srv      *httptest.Server
 	agent    *httptest.Server
 	agentHit chan string
+	// agentState is the process state the fake agent reports.
+	agentState atomic.Value
 }
 
 type options struct {
@@ -93,9 +97,10 @@ func newFixture(t *testing.T, o options) *fixture {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	f := &fixture{t: t, c: c, st: st, fp: fp, agentHit: make(chan string, 16)}
+	f.agentState.Store("running")
 	f.agent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.agentHit <- r.Method + " " + r.URL.Path
-		_, _ = w.Write([]byte(`{"state":"running","utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`))
+		_, _ = fmt.Fprintf(w, `{"state":%q,"utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`, f.agentState.Load())
 	}))
 	t.Cleanup(f.agent.Close)
 
@@ -441,6 +446,7 @@ func TestContainerStatusRecordsAndForwards(t *testing.T) {
 	if err := f.st.PatchSpec(context.Background(), uuid, map[string]any{"power": map[string]any{"desired": "Running"}}); err != nil {
 		t.Fatal(err)
 	}
+	f.agentState.Store("starting")
 	code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"offline","new_state":"starting"}}`, bearer)
 	if code != 204 {
 		t.Fatalf("code = %d", code)
@@ -455,14 +461,16 @@ func TestContainerStatusRecordsAndForwards(t *testing.T) {
 	if gs.Spec.Power.Desired != v1alpha1.PowerRunning {
 		t.Fatal("a normal transition must not change the desired power state")
 	}
-	// The usage sample comes from the agent.
-	select {
-	case hit := <-f.agentHit:
-		if hit != "GET /api/servers/"+uuid {
-			t.Fatalf("agent hit %q", hit)
+	// The state is read back from the agent, and the usage sample comes from it.
+	for range 2 {
+		select {
+		case hit := <-f.agentHit:
+			if hit != "GET /api/servers/"+uuid {
+				t.Fatalf("agent hit %q", hit)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("state and usage were not read from the agent")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("usage was not sampled from the agent")
 	}
 	waitFor(t, func() bool {
 		u := f.gs().Status.Usage
@@ -478,6 +486,39 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not reached in time")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The agent posts each state change from its own goroutine, so "starting"
+// can arrive after "running". The status keeps the agent's current state.
+func TestContainerStatusOutOfOrder(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	post := func(prev, next string) {
+		t.Helper()
+		body := fmt.Sprintf(`{"data":{"previous_state":%q,"new_state":%q}}`, prev, next)
+		if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
+			t.Fatalf("code = %d", code)
+		}
+	}
+	f.agentState.Store("running")
+	post("starting", "running")
+	post("offline", "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
+		t.Fatalf("process state %q after a late starting post, want running", got)
+	}
+	if !f.fp.WaitForState(uuid, "starting", time.Second) {
+		t.Fatal("the posted change was not forwarded to the Panel")
+	}
+
+	// Without a ready agent the posted state is recorded.
+	ctx := context.Background()
+	pod, _ := f.st.AgentPod(ctx, uuid)
+	pod.Status.PodIP = ""
+	_ = f.c.Status().Update(ctx, pod)
+	post("running", "stopping")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessStopping {
+		t.Fatalf("process state %q without an agent, want stopping", got)
 	}
 }
 

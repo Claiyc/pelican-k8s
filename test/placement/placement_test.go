@@ -37,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -59,6 +60,7 @@ type env struct {
 	gateway, token, panel, egg string
 	http                       *http.Client
 	c                          client.Client
+	cs                         kubernetes.Interface
 	port                       int
 }
 
@@ -88,6 +90,9 @@ func load(t *testing.T) *env {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 	if e.c, err = client.New(cfg, client.Options{Scheme: scheme}); err != nil {
+		t.Fatal(err)
+	}
+	if e.cs, err = kubernetes.NewForConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 	shared = e
@@ -243,15 +248,26 @@ func (s *server) delete() {
 	})
 }
 
-// dump logs what a failure needs: the GameServer status and both pods.
+// dump logs what a failure needs: the GameServer status, both pods and the
+// end of their containers' logs.
 func (s *server) dump() {
 	if gs := s.gs(); gs != nil {
 		b, _ := json.MarshalIndent(gs.Status, "", "  ")
 		s.t.Logf("status of %s:\n%s", gs.Name, b)
 	}
 	for _, p := range []*corev1.Pod{s.agentPod(), s.gamePod()} {
-		if p != nil {
-			s.t.Logf("pod %s: node %q, phase %s, affinity %+v, conditions %+v", p.Name, p.Spec.NodeName, p.Status.Phase, p.Spec.Affinity, p.Status.Conditions)
+		if p == nil {
+			continue
+		}
+		s.t.Logf("pod %s: node %q, phase %s, affinity %+v, conditions %+v", p.Name, p.Spec.NodeName, p.Status.Phase, p.Spec.Affinity, p.Status.Conditions)
+		for _, c := range p.Spec.Containers {
+			tail := int64(80)
+			b, err := s.e.cs.CoreV1().Pods(serversNS).GetLogs(p.Name, &corev1.PodLogOptions{Container: c.Name, TailLines: &tail}).DoRaw(context.Background())
+			if err != nil {
+				s.t.Logf("logs of %s/%s: %v", p.Name, c.Name, err)
+				continue
+			}
+			s.t.Logf("logs of %s/%s:\n%s", p.Name, c.Name, b)
 		}
 	}
 }
@@ -550,7 +566,10 @@ func TestBusyAgentHoldsTheGamePod(t *testing.T) {
 	s.sameNode()
 }
 
-// With preferAgentNode off the game pod has no pod affinity at all.
+// With preferAgentNode off the game pod has no pod affinity at all. The first
+// start right after the install may still see the agent's in-flight work
+// (which requires the agent's node), so the check is on the game pod of a
+// second start.
 func TestNoAgentNodePreference(t *testing.T) {
 	e := load(t)
 	cls := &v1alpha1.GameServerClass{ObjectMeta: metav1.ObjectMeta{Name: className}}
@@ -564,6 +583,10 @@ func TestNoAgentNodePreference(t *testing.T) {
 	t.Cleanup(func() { setPref(true) })
 	s := e.newServer(t, serverOpts{})
 	s.waitAgent()
+	s.power("start")
+	s.waitRunning()
+	s.power("stop")
+	s.waitGamePodGone()
 	s.power("start")
 	game := s.waitRunning()
 	if a := game.Spec.Affinity; a != nil && a.PodAffinity != nil {
