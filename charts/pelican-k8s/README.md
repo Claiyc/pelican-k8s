@@ -25,6 +25,14 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 
 ## Values
 
+`values.schema.json` describes every value with its type, allowed values and
+default. Helm checks the merged values against it on `install`, `upgrade`,
+`template` and `lint`, so a misspelt key, a wrong type or an unsupported value
+fails before anything renders. Editors with YAML language support (VS Code
+with the Red Hat YAML extension, JetBrains IDEs) complete and check a values
+file against it when the file starts with
+`# yaml-language-server: $schema=<path or URL of values.schema.json>`.
+
 | Key | Default | Description |
 |---|---|---|
 | `image.registry` | `ghcr.io/claiyc/pelican-k8s` | Registry holding the `shim`, `agent`, `gateway` and `operator` images |
