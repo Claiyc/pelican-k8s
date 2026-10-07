@@ -255,4 +255,3 @@ func TestImageChangeWhileStopped(t *testing.T) {
 		t.Fatalf("calls %s", got)
 	}
 }
-

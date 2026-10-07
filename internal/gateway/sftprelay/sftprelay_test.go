@@ -350,6 +350,77 @@ func TestRelayPasswordLogin(t *testing.T) {
 	}
 }
 
+// A session that moves data marks the agent busy, so the operator does not
+// move the agent pod under it.
+func TestRelayRecordsSftpActivity(t *testing.T) {
+	e := newRelayEnv(t, relayOpts{})
+	c, err := e.connect("alice."+srvUUID[:8], ssh.Password("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echoThroughRelay(t, c)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		gs, err := e.store.Get(context.Background(), srvUUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at := gs.Status.Agent.SftpActiveAt; at != nil && time.Since(at.Time) < time.Minute {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("status.agent.sftpActiveAt not recorded")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestActivityMarkerThrottles(t *testing.T) {
+	e := newRelayEnv(t, relayOpts{})
+	start := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	now := start
+	e.relay.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	set := func(d time.Duration) { mu.Lock(); now = start.Add(d); mu.Unlock() }
+	activeAt := func() time.Time {
+		gs, err := e.store.Get(context.Background(), srvUUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gs.Status.Agent.SftpActiveAt == nil {
+			return time.Time{}
+		}
+		return gs.Status.Agent.SftpActiveAt.UTC()
+	}
+	waitFor := func(want time.Time) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !activeAt().Equal(want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("sftpActiveAt = %v, want %v", activeAt(), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	mark := e.relay.activityMarker(context.Background(), srvUUID)
+	mark()
+	waitFor(start)
+
+	// A write inside the interval is not recorded.
+	set(10 * time.Second)
+	mark()
+	time.Sleep(100 * time.Millisecond)
+	if got := activeAt(); !got.Equal(start) {
+		t.Fatalf("write inside the interval recorded %v", got)
+	}
+
+	set(31 * time.Second)
+	mark()
+	waitFor(start.Add(31 * time.Second))
+}
+
 func TestRelayPinsAgentHostKey(t *testing.T) {
 	e := newRelayEnv(t, relayOpts{})
 	user := "alice." + srvUUID[:8]

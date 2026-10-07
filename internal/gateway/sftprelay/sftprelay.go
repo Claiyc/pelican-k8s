@@ -25,6 +25,7 @@ import (
 
 	"github.com/pelican/wings/remote"
 	"golang.org/x/crypto/ssh"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -136,6 +137,10 @@ type Relay struct {
 
 	// dial overrides how agents are reached (tests; the agent port is fixed).
 	dial func(network, addr string) (net.Conn, error)
+	// activityEvery throttles the status.agent.sftpActiveAt writes of a
+	// session (default 30s); now is the clock (tests).
+	activityEvery time.Duration
+	now           func() time.Time
 	// TrustedProxyIPs, when the listener sits behind a PROXY-protocol-less LB, is unused; client IPs are the TCP peer.
 }
 
@@ -229,6 +234,7 @@ func (r *Relay) handle(ctx context.Context, nconn net.Conn, conf *ssh.ServerConf
 	}
 	defer func() { _ = agentConn.Close() }()
 
+	mark := r.activityMarker(ctx, uuid)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for ch := range chans {
@@ -248,7 +254,7 @@ func (r *Relay) handle(ctx context.Context, nconn net.Conn, conf *ssh.ServerConf
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			relayChannel(clientCh, clientReqs, agentCh, agentReqs)
+			relayChannel(clientCh, clientReqs, agentCh, agentReqs, mark)
 		}()
 	}
 }
@@ -293,9 +299,53 @@ func (r *Relay) dialAgent(ctx context.Context, t *agents.Target, user, cred stri
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
+// activityMarker returns the function a session calls whenever it moves data.
+// It records status.agent.sftpActiveAt at most every activityEvery, so the
+// operator does not move the agent pod under a transfer (ARCHITECTURE.md 7.7).
+func (r *Relay) activityMarker(ctx context.Context, uuid string) func() {
+	every := r.activityEvery
+	if every <= 0 {
+		every = 30 * time.Second
+	}
+	now := r.now
+	if now == nil {
+		now = time.Now
+	}
+	var mu sync.Mutex
+	var last time.Time
+	return func() {
+		t := now()
+		mu.Lock()
+		if !last.IsZero() && t.Sub(last) < every {
+			mu.Unlock()
+			return
+		}
+		last = t
+		mu.Unlock()
+		go func() {
+			if err := r.Store.PatchStatus(context.WithoutCancel(ctx), uuid, map[string]any{"agent": map[string]any{"sftpActiveAt": metav1.NewTime(t)}}); err != nil {
+				r.Log.Warn("sftp: recording activity failed", "uuid", uuid, "error", err)
+			}
+		}()
+	}
+}
+
+// activeWriter calls mark for every write that moves data.
+type activeWriter struct {
+	w    io.Writer
+	mark func()
+}
+
+func (a activeWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		a.mark()
+	}
+	return a.w.Write(p)
+}
+
 // relayChannel forwards requests and bytes between a client session channel
-// and the agent session channel.
-func relayChannel(client ssh.Channel, clientReqs <-chan *ssh.Request, agent ssh.Channel, agentReqs <-chan *ssh.Request) {
+// and the agent session channel; mark is called whenever data moves.
+func relayChannel(client ssh.Channel, clientReqs <-chan *ssh.Request, agent ssh.Channel, agentReqs <-chan *ssh.Request, mark func()) {
 	defer client.Close()
 	defer agent.Close()
 	go func() {
@@ -321,12 +371,12 @@ func relayChannel(client ssh.Channel, clientReqs <-chan *ssh.Request, agent ssh.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(agent, client)
+		_, _ = io.Copy(activeWriter{agent, mark}, client)
 		_ = agent.CloseWrite()
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(client, agent)
+		_, _ = io.Copy(activeWriter{client, mark}, agent)
 		_ = client.CloseWrite()
 	}()
 	wg.Wait()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -69,10 +70,157 @@ func legacyPod(pod *corev1.Pod) bool {
 	return false
 }
 
-// place decides the pods' affinity toward each other (section 7.7).
+// sftpIdleAfter is how long after the last relayed SFTP data the agent counts
+// as idle.
+const sftpIdleAfter = time.Minute
+
+// place pins the agent pod to the game pod's node while a game pod has one and
+// is not going (ARCHITECTURE.md 7.7). Without a game pod the agent may run
+// anywhere; the StatefulSet is OnDelete, so the change leaves a running agent
+// pod alone.
 func (r *GameServerReconciler) place(s *scope) {
-	s.in.GameAffinity = render.GameAffinityRequired
 	s.in.AgentNode = ""
+	if s.pod != nil && s.pod.DeletionTimestamp.IsZero() {
+		s.in.AgentNode = s.pod.Spec.NodeName
+	}
+}
+
+// placeGame picks the game pod's affinity toward the agent pod: required while
+// the agent has in-flight work, so the work is not broken by a move, preferred
+// or none otherwise as the class says.
+func (r *GameServerReconciler) placeGame(s *scope) {
+	s.work = r.agentWork(s)
+	switch {
+	case len(s.work) > 0:
+		s.in.GameAffinity = render.GameAffinityRequired
+	case s.class.Spec.Scheduling.PrefersAgentNode():
+		s.in.GameAffinity = render.GameAffinityPreferred
+	default:
+		s.in.GameAffinity = render.GameAffinityNone
+	}
+}
+
+// agentWork lists the in-flight work a move of the agent pod would break. An
+// agent pod without a node, or one already going, has none.
+func (r *GameServerReconciler) agentWork(s *scope) []string {
+	pod, gs := s.agentPod, s.gs
+	if pod == nil || pod.Spec.NodeName == "" || !pod.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	var work []string
+	if len(gs.Status.Backups.Pending) > 0 {
+		work = append(work, "backup")
+	}
+	if gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration && gs.Status.Install.Result != v1alpha1.InstallFailed {
+		work = append(work, "install")
+	}
+	if at := gs.Status.Agent.SftpActiveAt; at != nil && s.now.Sub(at.Time) < sftpIdleAfter {
+		work = append(work, "sftp")
+	}
+	if s.agent != nil {
+		act, err := s.agent.Activity(s.ctx)
+		switch {
+		case err != nil:
+			// Unknown work is treated as work: a move is only ever delayed.
+			work = append(work, "unknown")
+		case act.Busy && len(act.Reasons) == 0:
+			work = append(work, "agent")
+		case act.Busy:
+			work = append(work, act.Reasons...)
+		}
+	}
+	return work
+}
+
+// relocate moves the agent pod to the game pod's node and replaces pending
+// pods whose placement no longer applies (ARCHITECTURE.md 7.7).
+func (r *GameServerReconciler) relocate(s *scope) error {
+	game := s.pod
+	if game != nil && game.DeletionTimestamp.IsZero() && game.Spec.NodeName == "" && requiresAgentNode(game) && s.in.GameAffinity != render.GameAffinityRequired {
+		r.event(s, corev1.EventTypeNormal, "Replace", "replacing pending game pod %s: the agent has no in-flight work any more", game.Name)
+		if err := r.deletePod(s, game); err != nil {
+			return err
+		}
+		s.pod = nil
+	}
+
+	// The game pod's node, unless the game pod went in this reconcile.
+	node := ""
+	if s.pod != nil && s.pod.DeletionTimestamp.IsZero() {
+		node = s.pod.Spec.NodeName
+	}
+	agent := s.agentPod
+	if agent == nil || !agent.DeletionTimestamp.IsZero() {
+		if node == "" {
+			r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionFalse, "NoGamePod", "")
+		}
+		return nil
+	}
+	if agent.Spec.NodeName == "" {
+		// A pending agent pod holds no work; one bound to the wrong node, or
+		// to none while it should follow the game pod, is replaced.
+		if pinnedNode(agent) != node {
+			r.event(s, corev1.EventTypeNormal, "Replace", "replacing pending agent pod %s: its node affinity is out of date", agent.Name)
+			if err := r.deletePod(s, agent); err != nil {
+				return err
+			}
+			s.agentPod, s.agent = nil, nil
+		}
+		if node == "" {
+			r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionFalse, "NoGamePod", "")
+		}
+		return nil
+	}
+	switch {
+	case node == "":
+		r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionFalse, "NoGamePod", "")
+	case agent.Spec.NodeName == node:
+		r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionFalse, "SameNode", "")
+	case len(s.work) > 0:
+		r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionTrue, "WaitingForWork",
+			fmt.Sprintf("the agent pod moves from %s to %s once its in-flight work ends (%s)", agent.Spec.NodeName, node, strings.Join(s.work, ", ")))
+		s.requeue = requeueFast
+	default:
+		r.setCondition(s, v1alpha1.ConditionAgentRelocating, metav1.ConditionTrue, "Relocating",
+			fmt.Sprintf("moving the agent pod from %s to %s", agent.Spec.NodeName, node))
+		r.event(s, corev1.EventTypeNormal, "AgentRelocating", "deleting agent pod %s on %s to move it to the game pod's node %s", agent.Name, agent.Spec.NodeName, node)
+		if err := r.deletePod(s, agent); err != nil {
+			return err
+		}
+		s.agentPod, s.agent = nil, nil
+	}
+	return nil
+}
+
+func (r *GameServerReconciler) deletePod(s *scope, pod *corev1.Pod) error {
+	if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	s.requeue = requeueFast
+	return nil
+}
+
+// requiresAgentNode reports a pod with a required pod affinity.
+func requiresAgentNode(pod *corev1.Pod) bool {
+	a := pod.Spec.Affinity
+	return a != nil && a.PodAffinity != nil && len(a.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution) > 0
+}
+
+// pinnedNode returns the node a pod's required node affinity names, if it
+// names exactly one by name.
+func pinnedNode(pod *corev1.Pod) string {
+	a := pod.Spec.Affinity
+	if a == nil || a.NodeAffinity == nil || a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return ""
+	}
+	for _, t := range a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		for _, m := range t.MatchFields {
+			if m.Key == "metadata.name" && m.Operator == corev1.NodeSelectorOpIn && len(m.Values) == 1 {
+				return m.Values[0]
+			}
+		}
+	}
+	return ""
 }
 
 // ensureAgentStatefulSet applies the agent StatefulSet: one replica from the
@@ -186,6 +334,7 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 	if err := r.reconcileAgentPod(s, &lost); err != nil {
 		return err
 	}
+	r.placeGame(s)
 	if err := r.ensureGameStatefulSet(s); err != nil {
 		return err
 	}
@@ -210,9 +359,12 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "AgentTemplateChanged", "agent pod template changed; the agent pod is recreated once the process is offline")
 	default:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionFalse, "UpToDate", "")
-		return nil
+		return r.relocate(s)
 	}
-	return r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate)
+	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate); err != nil {
+		return err
+	}
+	return r.relocate(s)
 }
 
 // reconcileAgentPod tracks the agent pod and connects to its agent once ready.
@@ -365,11 +517,7 @@ func (r *GameServerReconciler) recreate(s *scope, restart, agent, game bool) err
 
 func (r *GameServerReconciler) deleteForRecreate(s *scope, pod *corev1.Pod, kind string) error {
 	r.event(s, corev1.EventTypeNormal, "Recreate", "deleting the %s pod to apply the new template", kind)
-	if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	s.requeue = requeueFast
-	return nil
+	return r.deletePod(s, pod)
 }
 
 // serverState returns the agent's process state, asking once per reconcile.

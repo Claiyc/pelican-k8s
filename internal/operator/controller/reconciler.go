@@ -104,7 +104,9 @@ type scope struct {
 	// state caches the agent's process state for this reconcile.
 	state *agentclient.State
 	// shim is the agent's view of the shim connection, when asked.
-	shim    *agentclient.Shim
+	shim *agentclient.Shim
+	// work is the agent's in-flight work (ARCHITECTURE.md 7.7).
+	work    []string
 	now     metav1.Time
 	requeue time.Duration
 }

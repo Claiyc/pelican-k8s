@@ -697,8 +697,8 @@ status:
     - type: VolumeReady          # PVC bound
     - type: ExposureReady        # Service has its address (reasons include HostPort, NoAllocation, Pending, PortOutOfRange, AllocationIPNotOnNode)
     - type: AgentReady           # agent container started and ready
-    - type: GamePodReady         # game pod scheduled and its shim attached to the agent; False (NotRequested) while the server is off, otherwise Unschedulable, WaitingForVolume or ShimNotAttached
-    - type: AgentRelocating      # the agent pod is being moved to the game pod's node (§7.7)
+    - type: GamePodReady         # game pod scheduled and its shim attached to the agent; False (NotRequested) while the server is off, otherwise NoPod, Unschedulable, WaitingForVolume, AgentNotReady, Starting, ShimNotAttached or Terminating
+    - type: AgentRelocating      # True while the agent pod moves to the game pod's node: WaitingForWork, Relocating; False: SameNode, NoGamePod (§7.7)
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
     - type: Installed            # True once a generation finished; reason Succeeded or Failed
     - type: ResizePending        # in-place resize of the game pod deferred, infeasible or needing a recreate
@@ -1023,6 +1023,9 @@ into the agent StatefulSet's template.
   adapter are on the agent pod's scratch volume and are lost (§10.5).
 - When the game pod is gone the operator removes the node affinity again, without restarting the agent,
   so the agent of a stopped server can be rescheduled anywhere after an eviction or a drain.
+- A `Pending` agent pod holds no work. One whose node affinity no longer matches (pinned to a drained
+  node after its game pod went, or not pinned while a game pod has a node) is deleted, and the
+  StatefulSet recreates it from the current template.
 
 Agent pods run with `agentPriorityClassName` (the chart's PriorityClass `pelican-agent`), above game
 pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there. It
