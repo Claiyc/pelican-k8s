@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -27,10 +28,12 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/agentclient"
+	"github.com/Claiyc/pelican-k8s/internal/operator/certs"
 	"github.com/Claiyc/pelican-k8s/internal/operator/imageresolve"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // AgentAPI is the subset of the agent client the reconciler uses.
@@ -68,6 +71,11 @@ type GameServerReconciler struct {
 	Now func() time.Time
 	// DefaultClass is used when spec.className is empty.
 	DefaultClass string
+	// PKI, when set, turns on TLS between the components: every agent gets a
+	// certificate Secret, and the operator calls agents over HTTPS with its
+	// client certificate through AgentTransport (ARCHITECTURE.md 12.5).
+	PKI            *pki.Issuer
+	AgentTransport http.RoundTripper
 }
 
 const (
@@ -240,7 +248,7 @@ func (r *GameServerReconciler) loadClassAndSettings(s *scope) error {
 			envExists = false
 		}
 	}
-	s.in = &render.Input{GS: s.gs, Class: cls, Settings: st, UID: uid, SystemNamespace: r.SystemNamespace, EnvSecretExists: envExists}
+	s.in = &render.Input{GS: s.gs, Class: cls, Settings: st, UID: uid, SystemNamespace: r.SystemNamespace, EnvSecretExists: envExists, TLS: r.PKI != nil}
 	return nil
 }
 
@@ -277,9 +285,51 @@ func (r *GameServerReconciler) ensureAgentSecret(s *scope) error {
 	}); err != nil {
 		return err
 	}
-	return r.ensureSecret(s, names.ShimSecret(s.in.UUID()), func() *corev1.Secret {
+	if err := r.ensureSecret(s, names.ShimSecret(s.in.UUID()), func() *corev1.Secret {
 		return render.ShimSecret(s.in, randomHex(32))
-	})
+	}); err != nil {
+		return err
+	}
+	return r.ensureTLSSecret(s)
+}
+
+// ensureTLSSecret issues the agent's certificate and renews it before it
+// expires. The agent reads the renewed files from its volume without a
+// restart.
+func (r *GameServerReconciler) ensureTLSSecret(s *scope) error {
+	if r.PKI == nil {
+		return nil
+	}
+	leaf := certs.Leaf{CommonName: names.AgentService(s.in.UUID()), DNSNames: pki.AgentDNSNames(s.in.UUID(), s.gs.Namespace), Usage: pki.Server}
+	sec := &corev1.Secret{}
+	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.TLSSecret(s.in.UUID())}, sec)
+	if apierrors.IsNotFound(err) {
+		data, _, err := leaf.Data(r.PKI.CA, nil, r.now())
+		if err != nil {
+			return err
+		}
+		desired := render.TLSSecret(s.in, data)
+		if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
+			return err
+		}
+		if err := r.Create(s.ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	data, changed, err := leaf.Data(r.PKI.CA, sec.Data, r.now())
+	if err != nil || !changed {
+		return err
+	}
+	sec.Data = data
+	if err := r.Update(s.ctx, sec); err != nil {
+		return err
+	}
+	r.event(s, corev1.EventTypeNormal, "CertificateRenewed", "agent certificate renewed")
+	return nil
 }
 
 func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {

@@ -28,7 +28,7 @@ func server(t *testing.T, status int, resp string) (*Client, *seen) {
 		_, _ = w.Write([]byte(resp))
 	}))
 	t.Cleanup(srv.Close)
-	return New(srv.URL+"/", "tok"), s
+	return New(srv.URL+"/", "tok", nil), s
 }
 
 func TestHealthy(t *testing.T) {
@@ -40,11 +40,11 @@ func TestHealthy(t *testing.T) {
 	if c.Healthy(context.Background()) {
 		t.Fatal("503 must be unhealthy")
 	}
-	c = New("http://127.0.0.1:1", "t")
+	c = New("http://127.0.0.1:1", "t", nil)
 	if c.Healthy(context.Background()) {
 		t.Fatal("unreachable must be unhealthy")
 	}
-	c = New("http://bad host", "t")
+	c = New("http://bad host", "t", nil)
 	if c.Healthy(context.Background()) {
 		t.Fatal("bad URL must be unhealthy")
 	}
@@ -152,11 +152,11 @@ func TestErrors(t *testing.T) {
 	if errors.Is(err, ErrConflict) || errors.Is(err, ErrUnavailable) {
 		t.Fatal("500 must not map to a sentinel")
 	}
-	c = New("http://127.0.0.1:1", "t")
+	c = New("http://127.0.0.1:1", "t", nil)
 	if err := c.Sync(ctx, "u"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable: %v", err)
 	}
-	c = New("http://bad host", "t")
+	c = New("http://bad host", "t", nil)
 	if err := c.Sync(ctx, "u"); err == nil {
 		t.Fatal("bad URL must error")
 	}

@@ -79,6 +79,20 @@ func TestTargetAddresses(t *testing.T) {
 	if got := v6.SFTPAddr(); got != "[fd00::5]:2022" {
 		t.Errorf("SFTPAddr v6 = %q", got)
 	}
+	if got := v4.WSBase(); got != "ws://10.1.2.3:8080" {
+		t.Errorf("WSBase = %q", got)
+	}
+	secure := Target{UUID: testUUID, PodIP: "10.1.2.3", Namespace: testNS, TLS: true}
+	host := "10-1-2-3.gs-" + testUUID + "-agent." + testNS + ".svc:8080"
+	if got := secure.HTTPBase(); got != "https://"+host {
+		t.Errorf("HTTPBase TLS = %q", got)
+	}
+	if got := secure.WSBase(); got != "wss://"+host {
+		t.Errorf("WSBase TLS = %q", got)
+	}
+	if got := secure.SFTPAddr(); got != "10.1.2.3:2022" {
+		t.Errorf("SFTPAddr TLS = %q", got)
+	}
 }
 
 func TestResolve(t *testing.T) {
@@ -111,7 +125,7 @@ func TestResolve(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := Target{UUID: testUUID, PodIP: "10.0.0.1", TokenID: "tid", Token: "tok"}
+				want := Target{UUID: testUUID, PodIP: "10.0.0.1", TokenID: "tid", Token: "tok", Namespace: testNS}
 				if *got != want {
 					t.Fatalf("target = %+v, want %+v", *got, want)
 				}

@@ -22,7 +22,7 @@ func dialAndAnswer(t *testing.T, addr string, token []byte) (net.Conn, error) {
 
 func listen(t *testing.T, token string) *Listener {
 	t.Helper()
-	ln, err := Listen("127.0.0.1:0", []byte(token), nil)
+	ln, err := Listen("127.0.0.1:0", []byte(token), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

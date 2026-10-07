@@ -38,7 +38,7 @@ func TestShimRunHelper(t *testing.T) {
 func TestGameCannotReadShimToken(t *testing.T) {
 	const token = "shim-token-under-test"
 	dir := t.TempDir()
-	ln, err := protocol.Listen("127.0.0.1:0", []byte(token), nil)
+	ln, err := protocol.Listen("127.0.0.1:0", []byte(token), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

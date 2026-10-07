@@ -56,7 +56,7 @@ func startSupervisorListener(t *testing.T, argv []string, reap bool) (*protocol.
 func startWith(t *testing.T, o Options) (*protocol.Client, *safeBuf, context.CancelFunc, *protocol.Listener) {
 	t.Helper()
 	dir := t.TempDir()
-	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil)
+	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestRunRequiresToken(t *testing.T) {
 // agent's handshake: the agent never hands its connection out.
 func TestImpostorIsNotAccepted(t *testing.T) {
 	dir := t.TempDir()
-	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil)
+	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

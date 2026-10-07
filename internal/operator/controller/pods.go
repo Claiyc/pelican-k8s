@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/operator/agentclient"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // loadPods reads the agent pod and the game pod. A pod of the 1.x layout, a
@@ -393,7 +395,7 @@ func (r *GameServerReconciler) reconcileAgentPod(s *scope, lost *bool) error {
 	if err != nil {
 		return err
 	}
-	s.agent = r.newAgent("http://"+ip+":"+strconv.Itoa(render.AgentPort), token)
+	s.agent = r.newAgent(r.agentBase(ip, s.in.UUID(), s.gs.Namespace), token)
 	r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionTrue, "Ready", "")
 	return nil
 }
@@ -604,7 +606,16 @@ func (r *GameServerReconciler) newAgent(base, token string) AgentAPI {
 	if r.NewAgent != nil {
 		return r.NewAgent(base, token)
 	}
-	return agentclient.New(base, token)
+	return agentclient.New(base, token, r.AgentTransport)
+}
+
+// agentBase returns the base URL of the agent at pod address ip: plain HTTP
+// to the address, or HTTPS to a name its certificate carries.
+func (r *GameServerReconciler) agentBase(ip, uuid, namespace string) string {
+	if r.PKI != nil {
+		return "https://" + net.JoinHostPort(pki.AgentHost(ip, uuid, namespace), strconv.Itoa(render.AgentPort))
+	}
+	return "http://" + net.JoinHostPort(ip, strconv.Itoa(render.AgentPort))
 }
 
 func (r *GameServerReconciler) agentToken(s *scope) (string, error) {

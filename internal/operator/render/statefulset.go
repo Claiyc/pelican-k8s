@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 )
 
@@ -209,6 +211,15 @@ func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
 		Resources: agentResources(cls.Resources.Agent),
 	}
 
+	if in.TLS {
+		agent.Args = append(agent.Args, "--tls-dir", AgentTLSDir)
+		for _, p := range []*corev1.Probe{agent.StartupProbe, agent.LivenessProbe} {
+			p.HTTPGet.Scheme = corev1.URISchemeHTTPS
+		}
+		agent.Lifecycle.PreStop.HTTPGet.Scheme = corev1.URISchemeHTTPS
+		agent.VolumeMounts = append(agent.VolumeMounts, corev1.VolumeMount{Name: "tls", MountPath: AgentTLSDir, ReadOnly: true})
+	}
+
 	spec := podSpec(in)
 	spec.ServiceAccountName = sa
 	spec.PriorityClassName = priority
@@ -219,6 +230,9 @@ func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "agent-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: agentCfg}}}},
 		scratchVolume(cls.Storage, pvcSize),
+	}
+	if in.TLS {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: names.TLSSecret(uuid)}}})
 	}
 	if in.AgentNode != "" {
 		spec.Affinity = &corev1.Affinity{NodeAffinity: nodeNameAffinity([]string{in.AgentNode})}
@@ -293,7 +307,13 @@ func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 		)
 	}
 	agentAddr := fmt.Sprintf("%s:%d", names.AgentService(uuid), ShimPort)
-	gameCmd := []string{"/pelican/bin/shim", "run", "--agent", agentAddr, "--argv-file", ArgvFile, "--dir", ContainerHome, "--grace-period", fmt.Sprintf("%ds", gracePeriod(cls)), "--"}
+	gameCmd := []string{"/pelican/bin/shim", "run", "--agent", agentAddr, "--argv-file", ArgvFile, "--dir", ContainerHome, "--grace-period", fmt.Sprintf("%ds", gracePeriod(cls))}
+	if in.TLS {
+		// Only the CA bundle: the agent's key never enters the game pod.
+		gameCmd = append(gameCmd, "--agent-ca", GameCAFile)
+		gameMounts = append(gameMounts, corev1.VolumeMount{Name: "agent-ca", MountPath: path.Dir(GameCAFile), ReadOnly: true})
+	}
+	gameCmd = append(gameCmd, "--")
 	game := corev1.Container{
 		Name:            GameContainer,
 		Image:           in.Image,
@@ -344,6 +364,12 @@ func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 		dataVolume(uuid),
 		{Name: "pelican", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: resource.NewQuantity(int64(tmpMiB)*1024*1024, resource.BinarySI)}}},
+	}
+	if in.TLS {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "agent-ca", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: names.TLSSecret(uuid),
+			Items:      []corev1.KeyToPath{{Key: pki.CAFile, Path: path.Base(GameCAFile)}},
+		}}})
 	}
 	affinity := &corev1.Affinity{}
 	if len(in.NodeNames) > 0 {

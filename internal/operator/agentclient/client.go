@@ -20,9 +20,10 @@ type Client struct {
 	http  *http.Client
 }
 
-// New returns a client for the agent at base (http://<pod ip>:8080).
-func New(base, token string) *Client {
-	return &Client{base: strings.TrimSuffix(base, "/"), token: token, http: &http.Client{Timeout: 20 * time.Second}}
+// New returns a client for the agent at base (http://<pod ip>:8080, or an
+// https URL built with pki.AgentHost). transport may be nil for the default.
+func New(base, token string, transport http.RoundTripper) *Client {
+	return &Client{base: strings.TrimSuffix(base, "/"), token: token, http: &http.Client{Timeout: 20 * time.Second, Transport: transport}}
 }
 
 // ErrConflict is returned for HTTP 409 (e.g. reinstall during a power action).

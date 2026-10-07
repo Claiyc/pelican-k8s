@@ -8,6 +8,7 @@ package supervisor
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/shim/cgroup"
 	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 	"github.com/Claiyc/pelican-k8s/internal/shim/ringbuf"
@@ -41,6 +43,10 @@ type Options struct {
 	Token []byte
 	// PodUID is sent to the agent in the handshake.
 	PodUID string
+	// AgentCA, when set, is the CA bundle the agent's certificate must chain
+	// to: the connection is TLS, verified against the host name in Agent. It
+	// is read on every dial, so a renewed bundle needs no restart.
+	AgentCA string
 	// ReadyFile is present exactly while the agent reports the process as
 	// running; the container's readiness probe checks it. Empty disables it.
 	ReadyFile string
@@ -316,8 +322,7 @@ func (s *Supervisor) reaper(ctx context.Context) {
 func (s *Supervisor) connectLoop(ctx context.Context) {
 	backoff := 100 * time.Millisecond
 	for ctx.Err() == nil {
-		d := net.Dialer{Timeout: protocol.HandshakeTimeout}
-		c, err := d.DialContext(ctx, "tcp", s.o.Agent)
+		c, err := s.dial(ctx)
 		if err == nil {
 			enc := protocol.NewEncoder(c)
 			var dec *protocol.Decoder
@@ -348,6 +353,33 @@ func (s *Supervisor) connectLoop(ctx context.Context) {
 			backoff *= 2
 		}
 	}
+}
+
+// dial connects to the agent, over TLS when AgentCA is set.
+func (s *Supervisor) dial(ctx context.Context) (net.Conn, error) {
+	d := net.Dialer{Timeout: protocol.HandshakeTimeout}
+	c, err := d.DialContext(ctx, "tcp", s.o.Agent)
+	if err != nil || s.o.AgentCA == "" {
+		return c, err
+	}
+	host, _, err := net.SplitHostPort(s.o.Agent)
+	if err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	roots, err := pki.LoadPool(s.o.AgentCA)
+	if err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: host})
+	hctx, cancel := context.WithTimeout(ctx, protocol.HandshakeTimeout)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("tls: %w", err)
+	}
+	return tc, nil
 }
 
 func (s *Supervisor) serve(c net.Conn, enc *protocol.Encoder, dec *protocol.Decoder) {

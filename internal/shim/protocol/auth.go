@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -146,8 +147,10 @@ type Listener struct {
 }
 
 // Listen listens on the TCP address addr (host:port) and starts accepting
-// connections.
-func Listen(addr string, token []byte, log *slog.Logger) (*Listener, error) {
+// connections. With tlsConfig set, connections are TLS: the shim verifies the
+// agent's certificate, and the token handshake runs inside the encrypted
+// connection.
+func Listen(addr string, token []byte, tlsConfig *tls.Config, log *slog.Logger) (*Listener, error) {
 	if len(token) == 0 {
 		return nil, errors.New("protocol: empty shim token")
 	}
@@ -157,6 +160,11 @@ func Listen(addr string, token []byte, log *slog.Logger) (*Listener, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", addr, err)
+	}
+	if tlsConfig != nil {
+		// The TLS handshake runs on the first read of the token handshake,
+		// under its deadline.
+		ln = tls.NewListener(ln, tlsConfig)
 	}
 	l := &Listener{ln: ln, token: token, log: log, ready: make(chan *Client, 4), closed: make(chan struct{})}
 	go l.acceptLoop()

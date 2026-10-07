@@ -19,16 +19,20 @@ import (
 
 // Well-known ports and paths shared by the components.
 const (
-	AgentPort      = 8080
-	SFTPPort       = 2022
-	GatewayPort    = 8081
-	ShimPort       = 8082
-	ArgvFile       = "/pelican/etc/argv"
-	PasswdFile     = "/pelican/etc/passwd"
-	GroupFile      = "/pelican/etc/group"
-	ContainerHome  = "/home/container"
-	AgentRoot      = "/var/lib/pelican"
-	ScratchDir     = "/scratch"
+	AgentPort     = 8080
+	SFTPPort      = 2022
+	GatewayPort   = 8081
+	ShimPort      = 8082
+	ArgvFile      = "/pelican/etc/argv"
+	PasswdFile    = "/pelican/etc/passwd"
+	GroupFile     = "/pelican/etc/group"
+	ContainerHome = "/home/container"
+	AgentRoot     = "/var/lib/pelican"
+	ScratchDir    = "/scratch"
+	// AgentTLSDir is where the agent's certificate Secret is mounted.
+	AgentTLSDir = "/etc/pelican-tls"
+	// GameCAFile is the CA bundle the shim verifies the agent with.
+	GameCAFile     = "/pelican/tls/ca.crt"
 	GameContainer  = "game"
 	AgentContainer = "agent"
 	// ShimTokenKey is the key of the shim token in the ShimSecret.
@@ -67,6 +71,9 @@ type Input struct {
 	// AgentNode, when set, is the only node the agent pod may run on: the
 	// game pod's node.
 	AgentNode string
+	// TLS secures the agent's HTTP API and the shim connection with the
+	// certificate in names.TLSSecret (ARCHITECTURE.md 12.5).
+	TLS bool
 }
 
 // UUID returns the server UUID.

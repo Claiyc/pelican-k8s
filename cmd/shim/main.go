@@ -25,7 +25,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `pelican-k8s shim %s
 
 Usage:
-  shim run       --agent HOST:PORT [--argv-file PATH] [--dir DIR] [--tmp DIR] [--ready-file PATH] [--grace-period D] [--ring-size N] -- [argv...]
+  shim run       --agent HOST:PORT [--agent-ca PATH] [--argv-file PATH] [--dir DIR] [--tmp DIR] [--ready-file PATH] [--grace-period D] [--ring-size N] -- [argv...]
   shim ready     [--file PATH]
   shim prepare   [--bin PATH --shared DIR] [--data DIR --uuid UUID]
   shim probe     --out PATH [--passwd PATH --group PATH --name NAME --home DIR --uid N --gid N] [-- argv...]
@@ -89,6 +89,7 @@ func runCmd(args []string, logger *slog.Logger) error {
 	flags, rest := splitDashDash(args)
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	agent := fs.String("agent", "127.0.0.1:8082", "the agent's shim address (host:port)")
+	agentCA := fs.String("agent-ca", "", "CA bundle; connect to the agent over TLS and verify its certificate for the --agent host")
 	readyFile := fs.String("ready-file", "/pelican/run/ready", "file present while the process is running (empty disables)")
 	gracePeriod := fs.Duration("grace-period", 660*time.Second, "the pod's termination grace period")
 	argvFile := fs.String("argv-file", "/pelican/etc/argv", "JSON array with the image entrypoint, used when no argv follows --")
@@ -100,7 +101,7 @@ func runCmd(args []string, logger *slog.Logger) error {
 	noStats := fs.Bool("no-stats", false, "disable cgroup sampling")
 	_ = fs.Parse(flags)
 
-	o := supervisor.Options{Agent: *agent, Token: []byte(token), PodUID: os.Getenv("PELICAN_POD_UID"), ReadyFile: *readyFile, GracePeriod: *gracePeriod, Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
+	o := supervisor.Options{Agent: *agent, Token: []byte(token), PodUID: os.Getenv("PELICAN_POD_UID"), AgentCA: *agentCA, ReadyFile: *readyFile, GracePeriod: *gracePeriod, Argv: rest, ArgvFile: *argvFile, Dir: *dir, TmpDir: *tmp, RingSize: *ring, StatsInterval: *stats, KillGrace: *grace, Stdout: os.Stdout, Logger: logger}
 	if !*noStats {
 		cg := cgroup.New()
 		if cg.Available() {

@@ -38,7 +38,7 @@ func freeAddr(t *testing.T) string {
 // listenShim is the agent's shim listener at addr.
 func listenShim(t *testing.T, sock string) *protocol.Listener {
 	t.Helper()
-	ln, err := protocol.Listen(sock, testToken, nil)
+	ln, err := protocol.Listen(sock, testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 func TestReattachAfterAgentRestart(t *testing.T) {
 	dir := t.TempDir()
 	sock := freeAddr(t)
-	ln1, err := protocol.Listen(sock, testToken, nil)
+	ln1, err := protocol.Listen(sock, testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

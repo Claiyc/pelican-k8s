@@ -57,6 +57,10 @@ type Config struct {
 	AgentWait time.Duration
 	// Timezone is passed to install Jobs as TZ.
 	Timezone string
+	// TLSDir, when set, holds the gateway's certificate, key and the internal
+	// CA (pki.CertFile, pki.KeyFile, pki.CAFile): the remote API serves TLS
+	// and calls to agents are HTTPS with a client certificate.
+	TLSDir string
 }
 
 // FromEnv builds a Config from environment variables (PELICAN_GW_*).
@@ -80,6 +84,7 @@ func FromEnv() (*Config, error) {
 		SFTPHostKeySecret: envOr("PELICAN_GW_SFTP_HOSTKEY_SECRET", "pelican-gateway-sftp-hostkey"),
 		SFTPKeyOnly:       os.Getenv("PELICAN_GW_SFTP_KEY_ONLY") == "true",
 		Timezone:          envOr("TZ", "UTC"),
+		TLSDir:            os.Getenv("PELICAN_GW_TLS_DIR"),
 		ResyncInterval:    15 * time.Minute,
 		StateCacheTTL:     2 * time.Second,
 		AgentWait:         2 * time.Minute,

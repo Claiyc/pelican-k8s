@@ -22,6 +22,13 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
+// Paths kubelet calls: the probes and the preStop hook. They carry no token
+// and, with TLS, no client certificate.
+const (
+	HealthzPath = "/internal/v1/healthz"
+	PreStopPath = "/internal/v1/prestop"
+)
+
 // PrestopShimWait is how long the agent's preStop hook waits for the shim to
 // report that it is terminating too (a drain that takes both pods).
 var PrestopShimWait = 10 * time.Second
@@ -32,11 +39,11 @@ var PrestopShimWait = 10 * time.Second
 func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.Handler {
 	act := &Activity{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /internal/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+HealthzPath, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version, "servers": m.Len()})
 	})
 	// Called by kubelet's preStop hook of the agent container.
-	mux.HandleFunc("/internal/v1/prestop", func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m, reg) })
+	mux.HandleFunc(PreStopPath, func(w http.ResponseWriter, r *http.Request) { prestop(w, r, m, reg) })
 	// Called by the operator: the game pod whose shim holds the connection.
 	mux.HandleFunc("GET /internal/v1/shim", authorized(func(w http.ResponseWriter, r *http.Request) {
 		info := shimenv.ShimInfo{}
@@ -213,4 +220,17 @@ func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager, reg *shi
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": true})
+}
+
+// RequireClientCert rejects requests without a verified client certificate,
+// except the ones kubelet makes (HealthzPath, PreStopPath). The gateway and
+// the operator present one; the bearer token is still checked behind it.
+func RequireClientCert(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == HealthzPath || r.URL.Path == PreStopPath || (r.TLS != nil && len(r.TLS.VerifiedChains) > 0) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "a client certificate is required"})
+	})
 }

@@ -4,6 +4,7 @@ package agents
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // Target is a resolved agent.
@@ -28,11 +30,35 @@ type Target struct {
 	Token   string
 	// PodUID identifies the agent pod, so a caller can tell a replacement.
 	PodUID string
+	// Namespace is the agent pod's namespace.
+	Namespace string
+	// TLS selects HTTPS and WSS to a name the agent's certificate carries
+	// (pki.AgentHost); the resolver's transport dials the pod address.
+	TLS bool
+}
+
+// host returns the agent's host and port.
+func (t Target) host() string {
+	if t.TLS {
+		return net.JoinHostPort(pki.AgentHost(t.PodIP, t.UUID, t.Namespace), strconv.Itoa(render.AgentPort))
+	}
+	return net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
 }
 
 // HTTPBase returns the agent's HTTP base URL.
 func (t Target) HTTPBase() string {
-	return "http://" + net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
+	if t.TLS {
+		return "https://" + t.host()
+	}
+	return "http://" + t.host()
+}
+
+// WSBase returns the agent's websocket base URL.
+func (t Target) WSBase() string {
+	if t.TLS {
+		return "wss://" + t.host()
+	}
+	return "ws://" + t.host()
 }
 
 // SFTPAddr returns the agent's SFTP address.
@@ -51,6 +77,11 @@ type Resolver struct {
 	// replaced (ARCHITECTURE.md 5.9); Poll is how often it looks.
 	HTTPWait time.Duration
 	Poll     time.Duration
+
+	// tls, when set, is the client configuration toward agents: their
+	// certificates are verified against the internal CA and the gateway
+	// presents its own (ARCHITECTURE.md 12.5).
+	tls *tls.Config
 
 	cacheMu sync.Mutex
 	cache   map[string]cachedState
@@ -80,6 +111,17 @@ func NewResolver(s *store.Store, ttl time.Duration) *Resolver {
 	}
 }
 
+// EnableTLS makes every call to an agent HTTPS with the client configuration
+// c. Call it before the resolver is used.
+func (r *Resolver) EnableTLS(c *tls.Config) {
+	r.tls = c
+	r.Transport.TLSClientConfig = c
+	r.Transport.DialContext = pki.AgentDialer(r.Transport.DialContext)
+}
+
+// TLSConfig returns the client configuration toward agents, nil without TLS.
+func (r *Resolver) TLSConfig() *tls.Config { return r.tls }
+
 // Resolve returns the agent target of a server, or ErrUnavailable.
 func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 	pod, err := r.Store.AgentPod(ctx, uuid)
@@ -94,7 +136,7 @@ func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token, PodUID: string(pod.UID)}, nil
+	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token, PodUID: string(pod.UID), Namespace: pod.Namespace, TLS: r.tls != nil}, nil
 }
 
 // Wait is Resolve for HTTP calls: while the agent pod is not ready (being

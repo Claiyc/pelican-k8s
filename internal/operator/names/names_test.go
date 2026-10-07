@@ -10,6 +10,7 @@ func TestNames(t *testing.T) {
 		{EnvSecret(u), "gs-" + u + "-env"},
 		{AgentSecret(u), "gs-" + u + "-agent"},
 		{ShimSecret(u), "gs-" + u + "-shim"},
+		{TLSSecret(u), "gs-" + u + "-tls"},
 		{StatefulSet(u), "gs-" + u},
 		{Pod(u), "gs-" + u + "-0"},
 		{AgentStatefulSet(u), "gs-" + u + "-agent"},
