@@ -37,7 +37,7 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `gateway.podAntiAffinity` / `operator.podAntiAffinity` | `soft` / `soft` | Spread replicas across nodes: `soft` prefers different nodes and still schedules on a single node, `hard` requires them (replicas beyond the node count stay Pending), `none` adds no rule |
 | `gateway.affinity` / `operator.affinity` | `{}` | Pod affinity; when set it replaces the `podAntiAffinity` rule |
 | `gateway.nodeSelector` / `.tolerations`, `operator.nodeSelector` / `.tolerations` | `{}` / `[]` | Node placement |
-| `gateway.podDisruptionBudget.enabled` / `.maxUnavailable` (same for `operator`) | `true` / `1` | PodDisruptionBudget limiting voluntary disruptions; a drain evicts one replica at a time and waits for its replacement to run elsewhere; with one replica it is evicted at once |
+| `gateway.podDisruptionBudget.enabled` / `.maxUnavailable` (same for `operator`) | `true` / `1` | PodDisruptionBudget limiting voluntary disruptions; a drain evicts one replica at a time and waits for its replacement to run elsewhere; with one replica it is evicted at once. Set `enabled: false` on single-node clusters |
 | `gateway.panelURL` | required | Panel base URL, also the accepted websocket `Origin` |
 | `gateway.nodeTokenID` / `gateway.nodeToken` | required unless `existingSecret` | Node credentials from the Panel (`token_id` / `token`) |
 | `gateway.existingSecret` | `""` | Secret with keys `token_id` and `token` instead of the values above |

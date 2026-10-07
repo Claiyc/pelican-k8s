@@ -1339,7 +1339,7 @@ its one node with no extra setting; `hard` makes spreading a requirement. A PodD
 `maxUnavailable: 1` per component keeps one replica up through drains: the drain evicts one replica,
 waits until its replacement runs on another node, then evicts the next. With one replica the PDB
 allows the eviction at once; on a single-node cluster with two replicas the drain waits for a second
-node, so set `replicas: 1` there if the node is drained for maintenance.
+node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
 
 **Load:**
 - Agents make short remote-API calls (state changes, activity every 60 s); the gateway polls state on
