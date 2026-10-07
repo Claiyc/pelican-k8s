@@ -192,7 +192,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	go func() {
 		done <- Run(ctx, Options{
 			ConfigPath: writeConfig(t, dir, c),
-			ShimSocket: filepath.Join(dir, "shim.sock"),
+			ShimListen: "127.0.0.1:0",
 			ShimToken:  "s",
 			Ready:      ready,
 		})
@@ -223,14 +223,22 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatalf("healthz: %d %+v", res.StatusCode, health)
 	}
 
-	// The game is not running: not ready, and the agent never auto-starts it.
-	res, err = http.Get(base + "/internal/v1/ready")
+	// No shim has connected, and the agent never auto-starts the game.
+	req, _ := http.NewRequest("GET", base+"/internal/v1/shim", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	res, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var shim struct {
+		Attached bool `json:"attached"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&shim); err != nil {
+		t.Fatal(err)
+	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("ready: %d", res.StatusCode)
+	if res.StatusCode != http.StatusOK || shim.Attached {
+		t.Fatalf("shim: %d %+v", res.StatusCode, shim)
 	}
 
 	// The Wings API is reachable behind the same listener and requires the token.

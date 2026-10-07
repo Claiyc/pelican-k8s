@@ -31,6 +31,10 @@ type fixture struct {
 	manager *server.Manager
 	srv     *server.Server
 	env     *shimenv.Environment
+	// terminate plays the deletion of the game pod: the shim gets SIGTERM.
+	terminate context.CancelFunc
+	// wings, when set, serves the requests that fall through to Wings.
+	wings http.HandlerFunc
 }
 
 // newFixture wires the handler to a real Wings manager holding one server
@@ -50,13 +54,12 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 	c.System.CrashDetection.CrashDetectionEnabled = false
 	config.Set(c)
 
-	sock := filepath.Join(dir, "shim.sock")
-	ln, err := protocol.Listen(sock, []byte(shimToken), nil)
+	ln, err := protocol.Listen("127.0.0.1:0", []byte(shimToken), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
-	sup := supervisor.New(supervisor.Options{Socket: sock, Token: []byte(shimToken), Argv: argv, Dir: dir, KillGrace: time.Second})
+	sup := supervisor.New(supervisor.Options{Agent: ln.Addr(), Token: []byte(shimToken), PodUID: "game-pod", Argv: argv, Dir: dir, KillGrace: time.Second, GracePeriod: time.Minute})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = sup.Run(ctx) }()
 	t.Cleanup(cancel)
@@ -90,10 +93,16 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 		t.Fatal(err)
 	}
 
+	f := &fixture{manager: m, srv: s, env: env, terminate: cancel}
 	wings := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f.wings != nil {
+			f.wings(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusTeapot)
 	})
-	return &fixture{handler: Handler(wings, m, reg), manager: m, srv: s, env: env}
+	f.handler = Handler(wings, m, reg)
+	return f
 }
 
 func (f *fixture) do(method, path, auth, body string) *httptest.ResponseRecorder {
@@ -152,35 +161,6 @@ func TestHealthzAndFallthrough(t *testing.T) {
 	}
 }
 
-func TestReady(t *testing.T) {
-	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
-	for _, tc := range []struct {
-		state string
-		code  int
-	}{
-		{environment.ProcessOfflineState, http.StatusServiceUnavailable},
-		{environment.ProcessStartingState, http.StatusServiceUnavailable},
-		{environment.ProcessRunningState, http.StatusOK},
-	} {
-		f.env.SetState(tc.state)
-		rec := f.do("GET", "/internal/v1/ready", "", "")
-		got := decode(t, rec)
-		if rec.Code != tc.code || got["ready"] != (tc.code == http.StatusOK) {
-			t.Errorf("state %s: %d %v", tc.state, rec.Code, got)
-		}
-		if states, _ := got["states"].([]any); len(states) != 1 || states[0] != tc.state {
-			t.Errorf("state %s: reported %v", tc.state, got["states"])
-		}
-	}
-
-	empty := Handler(http.NotFoundHandler(), server.NewEmptyManager(nil), nil)
-	rec := httptest.NewRecorder()
-	empty.ServeHTTP(rec, httptest.NewRequest("GET", "/internal/v1/ready", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("no server loaded must not be ready, got %d", rec.Code)
-	}
-}
-
 func TestExitStateAuthAndBody(t *testing.T) {
 	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
 	for name, auth := range map[string]string{"missing": "", "wrong": "Bearer nope", "no prefix": "nope"} {
@@ -226,44 +206,133 @@ func TestPrestopOfflineServerIsLeftAlone(t *testing.T) {
 	}
 }
 
-func TestPrestopStopsRunningServer(t *testing.T) {
+// The agent pod alone is deleted: the shim does not report terminating, so the
+// hook returns after PrestopShimWait and the process keeps running under the
+// shim for the next agent.
+func TestPrestopLeavesProcessRunningWhenOnlyTheAgentGoes(t *testing.T) {
+	defer func(d time.Duration) { PrestopShimWait = d }(PrestopShimWait)
+	PrestopShimWait = 300 * time.Millisecond
 	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGTERM"})
 	if err := f.env.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	f.env.SetState(environment.ProcessRunningState)
 
+	start := time.Now()
 	rec := f.do("POST", "/internal/v1/prestop", "", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("prestop: %d", rec.Code)
+	if rec.Code != http.StatusOK || decode(t, rec)["waited"] != false {
+		t.Fatalf("prestop: %d %s", rec.Code, rec.Body.String())
 	}
-	// prestop returns once the process is gone.
+	if time.Since(start) < PrestopShimWait {
+		t.Fatal("prestop did not give the shim time to report terminating")
+	}
+	if got := f.env.State(); got != environment.ProcessRunningState {
+		t.Fatalf("the agent's preStop must not stop the process, state %s", got)
+	}
+}
+
+// A drain takes both pods: the shim reports terminating and stops the process
+// by itself; the hook returns once the process is offline.
+func TestPrestopWaitsWhileTheShimStopsTheProcess(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGTERM"})
+	if err := f.env.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.env.SetState(environment.ProcessRunningState)
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		f.terminate()
+	}()
+	rec := f.do("POST", "/internal/v1/prestop", "", "")
+	if rec.Code != http.StatusOK || decode(t, rec)["waited"] != true {
+		t.Fatalf("prestop: %d %s", rec.Code, rec.Body.String())
+	}
 	if got := f.env.State(); got != environment.ProcessOfflineState {
 		t.Fatalf("state after prestop: %s", got)
 	}
 }
 
-func TestPrestopSkipsServersBusyWithLifecycleOperations(t *testing.T) {
-	for name, set := range map[string]func(*server.Server){
-		"installing":   func(s *server.Server) { s.SetInstalling(true) },
-		"transferring": func(s *server.Server) { s.SetTransferring(true) },
-		"restoring":    func(s *server.Server) { s.SetRestoring(true) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{Type: remote.ProcessStopSignal, Value: "SIGTERM"})
-			if err := f.env.Start(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			f.env.SetState(environment.ProcessRunningState)
-			set(f.srv)
+func TestShimRoute(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
+	if rec := f.do("GET", "/internal/v1/shim", "Bearer nope", ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("wrong token: %d", rec.Code)
+	}
+	got := decode(t, f.do("GET", "/internal/v1/shim", "Bearer "+apiToken, ""))
+	if got["attached"] != true || got["podUID"] != "game-pod" || got["running"] != false {
+		t.Fatalf("idle shim: %v", got)
+	}
+	if err := f.env.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := decode(t, f.do("GET", "/internal/v1/shim", "Bearer "+apiToken, "")); got["running"] != true {
+		t.Fatalf("running shim: %v", got)
+	}
+}
 
-			rec := f.do("POST", "/internal/v1/prestop", "", "")
-			if rec.Code != http.StatusOK {
-				t.Fatalf("prestop: %d", rec.Code)
-			}
-			if got := f.env.State(); got != environment.ProcessRunningState {
-				t.Fatalf("a busy server must not be stopped, state %s", got)
-			}
-		})
+func TestActivityRoute(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
+	if rec := f.do("GET", "/internal/v1/activity", "", ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("missing token: %d", rec.Code)
+	}
+	reasons := func() (bool, string) {
+		got := decode(t, f.do("GET", "/internal/v1/activity", "Bearer "+apiToken, ""))
+		var rs []string
+		for _, r := range got["reasons"].([]any) {
+			rs = append(rs, r.(string))
+		}
+		return got["busy"].(bool), strings.Join(rs, ",")
+	}
+	if busy, rs := reasons(); busy || rs != "" {
+		t.Fatalf("idle agent: %v %q", busy, rs)
+	}
+
+	// A file request in flight.
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	f.wings = func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}
+	done := make(chan struct{})
+	go func() {
+		f.do("POST", "/api/servers/"+serverID+"/files/decompress", "", "")
+		close(done)
+	}()
+	<-entered
+	if busy, rs := reasons(); !busy || rs != "files" {
+		t.Fatalf("decompress in flight: %v %q", busy, rs)
+	}
+	close(release)
+	<-done
+	if busy, _ := reasons(); busy {
+		t.Fatal("still busy after the request ended")
+	}
+
+	f.srv.SetRestoring(true)
+	f.srv.SetInstalling(true)
+	if busy, rs := reasons(); !busy || rs != "install,restore" {
+		t.Fatalf("restore and install: %v %q", busy, rs)
+	}
+}
+
+func TestIsFileRequest(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/download/file":                      true,
+		"/download/backup":                    true,
+		"/upload/file":                        true,
+		"/api/servers/x/files/compress":       true,
+		"/api/servers/x/files/list-directory": true,
+		"/api/servers/x/ws":                   false,
+		"/api/servers/x/power":                false,
+		"/api/servers/x/backup":               false,
+		"/api/servers":                        false,
+		"/api/servers/files/x":                false,
+		"/internal/v1/healthz":                false,
+	} {
+		if got := isFileRequest(path); got != want {
+			t.Errorf("isFileRequest(%q) = %v", path, got)
+		}
 	}
 }

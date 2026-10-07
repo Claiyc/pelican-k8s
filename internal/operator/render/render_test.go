@@ -151,7 +151,7 @@ func TestStatefulSetTemplate(t *testing.T) {
 	}
 	// Readiness tracks the game process; a stopped server must never be
 	// restarted or blocked for being unready.
-	if game.ReadinessProbe == nil || game.ReadinessProbe.HTTPGet == nil || game.ReadinessProbe.HTTPGet.Path != "/internal/v1/ready" || game.ReadinessProbe.HTTPGet.Port.IntValue() != 8080 {
+	if game.ReadinessProbe == nil || game.ReadinessProbe.Exec == nil || strings.Join(game.ReadinessProbe.Exec.Command, " ") != "/pelican/bin/shim ready" {
 		t.Fatalf("readiness probe %+v", game.ReadinessProbe)
 	}
 	if game.LivenessProbe != nil || game.StartupProbe != nil {
@@ -160,8 +160,9 @@ func TestStatefulSetTemplate(t *testing.T) {
 	if sts.Spec.PodManagementPolicy != "Parallel" || sts.Spec.MinReadySeconds != 0 {
 		t.Fatalf("an unready pod must not block the StatefulSet: %+v", sts.Spec)
 	}
-	if game.Lifecycle.PreStop.HTTPGet.Path != "/internal/v1/prestop" || game.Lifecycle.PreStop.HTTPGet.Port.IntValue() != 8080 {
-		t.Fatalf("prestop %+v", game.Lifecycle)
+	// The shim stops the process itself on SIGTERM.
+	if game.Lifecycle != nil {
+		t.Fatalf("the game container must not have a lifecycle hook: %+v", game.Lifecycle)
 	}
 	if game.Resources.Limits.Memory().Value() != 4300*1024*1024 {
 		t.Fatalf("resources %+v", game.Resources)
@@ -203,9 +204,9 @@ func TestStatefulSetTemplate(t *testing.T) {
 	}
 }
 
-// The agent listens on the shim socket; the game container mounts its
-// directory read-only so the game process cannot replace the socket, and both
-// containers get the shim token, the game container nothing of the agent's.
+// The shim dials the agent over TCP and writes its readiness file to
+// /pelican/run; both containers get the shim token, the game container
+// nothing of the agent's.
 func TestShimSocketIsolation(t *testing.T) {
 	spec := StatefulSet(testInput(t, nil)).Spec.Template.Spec
 	agent, game := spec.InitContainers[2], spec.Containers[0]
@@ -217,10 +218,10 @@ func TestShimSocketIsolation(t *testing.T) {
 		}
 		return nil
 	}
-	if m := runMount(game); m == nil || !m.ReadOnly || m.SubPath != "run" {
+	if m := runMount(game); m == nil || m.ReadOnly || m.SubPath != "run" {
 		t.Fatalf("game /pelican/run mount %+v", m)
 	}
-	if m := runMount(agent); m == nil || m.ReadOnly || m.SubPath != "run" {
+	if m := runMount(agent); m != nil {
 		t.Fatalf("agent /pelican/run mount %+v", m)
 	}
 	shimToken := func(c corev1.Container) bool {

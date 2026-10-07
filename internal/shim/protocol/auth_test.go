@@ -2,26 +2,26 @@ package protocol
 
 import (
 	"context"
+	"errors"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-// dialAndAnswer plays the shim: connect, answer the challenge with token.
-func dialAndAnswer(t *testing.T, path string, token []byte) (net.Conn, error) {
+// dialAndAnswer plays the shim: connect and run the shim side of the handshake.
+func dialAndAnswer(t *testing.T, addr string, token []byte) (net.Conn, error) {
 	t.Helper()
-	conn, err := net.Dial("unix", path)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Answer(conn, NewEncoder(conn), token, 2*time.Second)
+	_, err = Answer(conn, NewEncoder(conn), token, "pod-1", 2*time.Second)
 	return conn, err
 }
 
 func listen(t *testing.T, token string) *Listener {
 	t.Helper()
-	ln, err := Listen(filepath.Join(t.TempDir(), "shim.sock"), []byte(token), nil)
+	ln, err := Listen("127.0.0.1:0", []byte(token), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func accept(t *testing.T, ln *Listener, within time.Duration) (*Client, error) {
 
 func TestListenerAcceptsTheTokenHolder(t *testing.T) {
 	ln := listen(t, "secret")
-	conn, err := dialAndAnswer(t, ln.Path(), []byte("secret"))
+	conn, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +66,9 @@ func TestListenerAcceptsTheTokenHolder(t *testing.T) {
 // can connect to the socket) is rejected and never handed to the agent.
 func TestListenerRejectsWrongToken(t *testing.T) {
 	ln := listen(t, "secret")
-	conn, err := dialAndAnswer(t, ln.Path(), []byte("guess"))
-	if err != nil {
-		t.Fatal(err) // the shim side cannot tell; the agent closes the connection
+	conn, err := dialAndAnswer(t, ln.Addr(), []byte("guess"))
+	if err == nil {
+		t.Fatal("the shim side completed a handshake the agent rejected")
 	}
 	defer conn.Close()
 	if c, err := accept(t, ln, 300*time.Millisecond); err == nil {
@@ -84,13 +84,13 @@ func TestListenerRejectsWrongToken(t *testing.T) {
 func TestListenerSilentPeerDoesNotBlock(t *testing.T) {
 	ln := listen(t, "secret")
 	for range 3 {
-		silent, err := net.Dial("unix", ln.Path())
+		silent, err := net.Dial("tcp", ln.Addr())
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer silent.Close()
 	}
-	conn, err := dialAndAnswer(t, ln.Path(), []byte("secret"))
+	conn, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestListenerSilentPeerDoesNotBlock(t *testing.T) {
 // A newer authenticated connection (a restarted shim) replaces the older one.
 func TestListenerNewestWins(t *testing.T) {
 	ln := listen(t, "secret")
-	first, err := dialAndAnswer(t, ln.Path(), []byte("secret"))
+	first, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestListenerNewestWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := dialAndAnswer(t, ln.Path(), []byte("secret"))
+	second, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,77 @@ func TestAnswerRejectsMalformedChallenge(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 	go func() { _ = NewEncoder(b).Encode(&Message{Type: TypeChallenge, Data: []byte("short")}) }()
-	if _, err := Answer(a, NewEncoder(a), []byte("secret"), time.Second); err == nil {
+	if _, err := Answer(a, NewEncoder(a), []byte("secret"), "pod", time.Second); err == nil {
 		t.Fatal("short challenge answered")
+	}
+}
+
+// The shim learns that the agent holds the token too: a listener with the
+// wrong token (anything that is not the agent) gets no commands through.
+func TestShimRejectsAgentWithoutToken(t *testing.T) {
+	ln := listen(t, "not-the-token")
+	conn, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
+	defer conn.Close()
+	if err == nil {
+		t.Fatal("handshake with an agent that does not hold the token succeeded")
+	}
+}
+
+// A peer that replays the shim's own proof as the agent's is rejected: the
+// proofs are bound to the role that computed them.
+func TestShimRejectsReflectedProof(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	token := []byte("secret")
+	go func() {
+		enc, dec := NewEncoder(b), NewDecoder(b)
+		challenge := make([]byte, challengeSize)
+		_ = enc.Encode(&Message{Type: TypeChallenge, Data: challenge})
+		var m Message
+		if dec.Decode(&m) != nil {
+			return
+		}
+		_ = enc.Encode(&Message{Type: TypeAuth, Data: m.Data})
+	}()
+	if _, err := Answer(a, NewEncoder(a), token, "pod", time.Second); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("reflected proof: %v", err)
+	}
+}
+
+// The agent learns the shim's pod UID from the handshake, and the pod UID is
+// covered by the proof.
+func TestHandshakeCarriesPodUID(t *testing.T) {
+	ln := listen(t, "secret")
+	conn, err := net.Dial("tcp", ln.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := Answer(conn, NewEncoder(conn), []byte("secret"), "8c1f-uid", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	c, err := accept(t, ln, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PodUID() != "8c1f-uid" {
+		t.Fatalf("PodUID = %q", c.PodUID())
+	}
+
+	// A proof computed for one pod UID does not hold for another.
+	x, y := net.Pipe()
+	defer x.Close()
+	defer y.Close()
+	go func() {
+		enc, dec := NewEncoder(y), NewDecoder(y)
+		var m Message
+		if dec.Decode(&m) != nil {
+			return
+		}
+		_ = enc.Encode(&Message{Type: TypeAuth, Data: Proof([]byte("secret"), roleShim, m.Data, "pod-a"), Challenge: make([]byte, challengeSize), PodUID: "pod-b"})
+	}()
+	if _, err := Challenge(x, []byte("secret"), time.Second); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("pod UID swapped after the proof: %v", err)
 	}
 }

@@ -132,10 +132,11 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 		Image:           cls.Images.Agent,
 		ImagePullPolicy: pullPolicy,
 		RestartPolicy:   &always,
-		Args:            []string{"--config", "/etc/pelican/config.yml", "--shim-socket", ShimSocket},
+		Args:            []string{"--config", "/etc/pelican/config.yml", "--shim-listen", fmt.Sprintf(":%d", ShimPort)},
 		Ports: []corev1.ContainerPort{
 			{Name: "agent", ContainerPort: AgentPort, Protocol: corev1.ProtocolTCP},
 			{Name: "sftp", ContainerPort: SFTPPort, Protocol: corev1.ProtocolTCP},
+			{Name: "shim", ContainerPort: ShimPort, Protocol: corev1.ProtocolTCP},
 		},
 		StartupProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 2, FailureThreshold: 60},
 		LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 10, FailureThreshold: 6},
@@ -152,7 +153,6 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: AgentRoot},
 			{Name: "scratch", MountPath: ScratchDir},
-			{Name: "pelican", MountPath: "/pelican/run", SubPath: "run"},
 			{Name: "agent-config", MountPath: "/etc/pelican", ReadOnly: true},
 			{Name: "tmp", MountPath: "/tmp"},
 		},
@@ -164,9 +164,8 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 		{Name: "data", MountPath: "/etc/machine-id", SubPath: "machine-id", ReadOnly: true},
 		{Name: "pelican", MountPath: "/pelican/bin", SubPath: "bin", ReadOnly: true},
 		{Name: "pelican", MountPath: "/pelican/etc", SubPath: "etc", ReadOnly: true},
-		// The agent listens on the shim socket here. Read-only, the game
-		// process cannot replace it; connecting still works.
-		{Name: "pelican", MountPath: "/pelican/run", SubPath: "run", ReadOnly: true},
+		// The shim's readiness file.
+		{Name: "pelican", MountPath: "/pelican/run", SubPath: "run"},
 		{Name: "tmp", MountPath: "/tmp"},
 	}
 	if generatePasswd {
@@ -175,7 +174,7 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			corev1.VolumeMount{Name: "pelican", MountPath: "/etc/group", SubPath: "etc/group", ReadOnly: true},
 		)
 	}
-	gameCmd := []string{"/pelican/bin/shim", "run", "--socket", ShimSocket, "--argv-file", ArgvFile, "--dir", ContainerHome, "--"}
+	gameCmd := []string{"/pelican/bin/shim", "run", "--agent", fmt.Sprintf("127.0.0.1:%d", ShimPort), "--argv-file", ArgvFile, "--dir", ContainerHome, "--grace-period", fmt.Sprintf("%ds", grace), "--"}
 	game := corev1.Container{
 		Name:            GameContainer,
 		Image:           in.Image,
@@ -190,20 +189,19 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			{ResourceName: corev1.ResourceMemory, RestartPolicy: corev1.NotRequired},
 		},
 		// Ready means what the Panel calls "running" (the agent saw the egg's
-		// done line), so a stopped or still starting server shows 1/2 instead of
-		// looking healthy. Readiness never restarts anything: only
-		// liveness and startup probes do, and the game container must never get
-		// either (a stopped server would be killed in a loop). Nothing else may
-		// depend on it: both Services publish not-ready addresses, the operator
-		// judges the agent by its own container status, and the StatefulSet is
-		// OnDelete + Parallel so an unready pod never blocks a recreate.
+		// done line and told the shim), so a starting or stopping server is
+		// not ready. Readiness never restarts anything: only liveness and
+		// startup probes do, and the game container must never get either.
+		// Nothing else may depend on it: the Services publish not-ready
+		// addresses and the StatefulSet is OnDelete + Parallel, so an unready
+		// pod never blocks a recreate. There is no preStop hook: on SIGTERM
+		// the shim stops the process itself with the stop configuration.
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/ready", Port: intstr.FromInt(AgentPort)}},
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/pelican/bin/shim", "ready"}}},
 			PeriodSeconds:    5,
 			TimeoutSeconds:   3,
 			FailureThreshold: 1,
 		},
-		Lifecycle:       &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/prestop", Port: intstr.FromInt(AgentPort)}}},
 		SecurityContext: restricted,
 		Env: []corev1.EnvVar{
 			{Name: "HOME", Value: ContainerHome},

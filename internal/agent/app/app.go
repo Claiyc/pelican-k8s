@@ -34,8 +34,8 @@ import (
 // Options configure the agent.
 type Options struct {
 	ConfigPath string
-	// ShimSocket is the unix socket the agent listens on for the shim.
-	ShimSocket string
+	// ShimListen is the TCP address the agent listens on for the shim.
+	ShimListen string
 	// ShimToken is the secret the shim proves on every connection.
 	ShimToken string
 	Logger    *slog.Logger
@@ -45,7 +45,7 @@ type Options struct {
 
 // Run boots the agent and blocks until ctx is cancelled or a fatal error occurs.
 func Run(ctx context.Context, o Options) error {
-	configPath, socket, logger := o.ConfigPath, o.ShimSocket, o.Logger
+	configPath, shimListen, logger := o.ConfigPath, o.ShimListen, o.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -89,19 +89,18 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("initialize activity database: %w", err)
 	}
 
-	extraEnv := []string{}
-	if ip := os.Getenv("PELICAN_POD_IP"); ip != "" {
-		extraEnv = append(extraEnv, "INTERNAL_IP="+ip)
-	}
 	if o.ShimToken == "" {
 		return errors.New("the shim token is not set")
 	}
-	shimListener, err := protocol.Listen(socket, []byte(o.ShimToken), logger.With("component", "shim-socket"))
+	if shimListen == "" {
+		shimListen = ":8082"
+	}
+	shimListener, err := protocol.Listen(shimListen, []byte(o.ShimToken), logger.With("component", "shim-listener"))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = shimListener.Close() }()
-	registry := shimenv.NewRegistry(shimListener, extraEnv, logger)
+	registry := shimenv.NewRegistry(shimListener, nil, logger)
 	gw := gatewayclient.New(cfg.PanelLocation, cfg.Token.ID, cfg.Token.Token)
 	inst := &installer.Installer{Gateway: gw, Root: cfg.System.RootDirectory, LogDir: cfg.System.LogDirectory, Logger: logger}
 

@@ -26,7 +26,7 @@ func EnvSecret(uuid string) string { return Prefix + uuid + "-env" }
 // AgentSecret holds the agent's Wings token.
 func AgentSecret(uuid string) string { return Prefix + uuid + "-agent" }
 
-// ShimSecret holds the token the shim proves to the agent on the shim socket.
+// ShimSecret holds the token both ends of the shim connection prove.
 func ShimSecret(uuid string) string { return Prefix + uuid + "-shim" }
 
 // StatefulSet is the game pod's controller.

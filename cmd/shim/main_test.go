@@ -38,8 +38,7 @@ func TestShimRunHelper(t *testing.T) {
 func TestGameCannotReadShimToken(t *testing.T) {
 	const token = "shim-token-under-test"
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
-	ln, err := protocol.Listen(sock, []byte(token), nil)
+	ln, err := protocol.Listen("127.0.0.1:0", []byte(token), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +48,7 @@ func TestGameCannotReadShimToken(t *testing.T) {
 		`if cat /proc/$PPID/environ >/dev/null 2>&1; then ` +
 		`if tr '\0' '\n' </proc/$PPID/environ | grep -q '^PELICAN_SHIM_TOKEN='; then echo "parent:token"; else echo "parent:readable"; fi; ` +
 		`else echo "parent:denied"; fi; echo done`
-	args := []string{"--socket", sock, "--dir", dir, "--tmp", "", "--no-stats", "--", "/bin/sh", "-c", script}
+	args := []string{"--agent", ln.Addr(), "--ready-file", "", "--dir", dir, "--tmp", "", "--no-stats", "--", "/bin/sh", "-c", script}
 	encoded, _ := json.Marshal(args)
 	bin := os.Args[0]
 	cmd := exec.Command(bin, "-test.run=^TestShimRunHelper$")
@@ -67,9 +66,6 @@ func TestGameCannotReadShimToken(t *testing.T) {
 			}
 		}
 		if err := os.Chown(dir, uid, uid); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chown(sock, uid, uid); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +89,7 @@ func TestGameCannotReadShimToken(t *testing.T) {
 	if _, err := c.Subscribe(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Start(ctx, nil); err != nil {
+	if _, err := c.Start(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
@@ -116,6 +112,19 @@ func TestGameCannotReadShimToken(t *testing.T) {
 	}
 	if !strings.Contains(got, "own:none") || !strings.Contains(got, "parent:denied") {
 		t.Fatalf("output %q", got)
+	}
+}
+
+func TestReadyCmd(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "ready")
+	if err := readyCmd([]string{"--file", file}); err == nil {
+		t.Fatal("ready without the file")
+	}
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := readyCmd([]string{"--file", file}); err != nil {
+		t.Fatalf("not ready with the file: %v", err)
 	}
 }
 

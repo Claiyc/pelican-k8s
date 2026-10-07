@@ -22,7 +22,7 @@ const (
 	AgentPort      = 8080
 	SFTPPort       = 2022
 	GatewayPort    = 8081
-	ShimSocket     = "/pelican/run/shim.sock"
+	ShimPort       = 8082
 	ArgvFile       = "/pelican/etc/argv"
 	PasswdFile     = "/pelican/etc/passwd"
 	GroupFile      = "/pelican/etc/group"

@@ -3,6 +3,7 @@ package shimenv
 import (
 	"context"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +22,20 @@ import (
 
 var testToken = []byte("shim-token")
 
-// listenShim is the agent's socket at sock.
+// freeAddr returns a local TCP address that is free right now, so that a test
+// can listen on it again after an agent restart.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	return addr
+}
+
+// listenShim is the agent's shim listener at addr.
 func listenShim(t *testing.T, sock string) *protocol.Listener {
 	t.Helper()
 	ln, err := protocol.Listen(sock, testToken, nil)
@@ -42,13 +56,13 @@ func init() {
 func newTestEnv(t *testing.T, argv []string) (*Environment, *supervisor.Supervisor, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
+	sock := freeAddr(t)
 	ln := listenShim(t, sock)
-	sup := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: argv, Dir: dir, KillGrace: time.Second})
+	sup := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: argv, Dir: dir, KillGrace: time.Second})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = sup.Run(ctx) }()
 	cfg := environment.NewConfiguration(environment.Settings{Allocations: environment.Allocations{DefaultMapping: &environment.DefaultAllocationMapping{Ip: "127.0.0.1", Port: 25565}}}, []string{"SERVER_IP=127.0.0.1", "GREETING=hi"})
-	e := New("test-server", cfg, Options{Connect: ln.Accept, SocketPath: sock, RunLog: filepath.Join(dir, "logs", "console.log"), ExtraEnv: []string{"INTERNAL_IP=10.0.0.5"}, DialTimeout: 5 * time.Second})
+	e := New("test-server", cfg, Options{Connect: ln.Accept, Addr: sock, RunLog: filepath.Join(dir, "logs", "console.log"), ExtraEnv: []string{"INTERNAL_IP=10.0.0.5"}, DialTimeout: 5 * time.Second})
 	e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"})
 	t.Cleanup(func() { e.Close(); cancel() })
 	return e, sup, cancel
@@ -237,14 +251,14 @@ func TestExitStateClampsOutOfRangeCodes(t *testing.T) {
 // operator must not kill the fresh start.
 func TestContainerRestartHandledOnce(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
+	sock := freeAddr(t)
 	ln := listenShim(t, sock)
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	sup1 := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	sup1 := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
 	sup1Done := make(chan struct{})
 	go func() { _ = sup1.Run(ctx1); close(sup1Done) }()
 	cfg := environment.NewConfiguration(environment.Settings{}, nil)
-	e := New("s", cfg, Options{Connect: ln.Accept, SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
+	e := New("s", cfg, Options{Connect: ln.Accept, Addr: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
 	defer e.Close()
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -256,7 +270,7 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 	<-sup1Done
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	sup2 := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	sup2 := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
 	go func() { _ = sup2.Run(ctx2) }()
 	waitState(t, e, environment.ProcessOfflineState, 5*time.Second)
 	// Either the old shim reported the SIGTERM exit (143) before dying or the
@@ -278,29 +292,31 @@ func TestContainerRestartHandledOnce(t *testing.T) {
 	}
 	var got []string
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if got = states(); len(got) >= 2 {
+		if got = states(); len(got) >= 3 {
 			break
 		}
 	}
-	if strings.Join(got, ",") != "offline,starting" {
+	// The old shim was terminated, so it reported terminating first and the
+	// exit reads as a stop.
+	if strings.Join(got, ",") != "stopping,offline,starting" {
 		t.Fatalf("states %v", got)
 	}
 }
 
 func TestReattachAfterAgentRestart(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
+	sock := freeAddr(t)
 	ln1, err := protocol.Listen(sock, testToken, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sup := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "echo booted; sleep 30"}, Dir: dir, KillGrace: time.Second})
+	sup := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "echo booted; sleep 30"}, Dir: dir, KillGrace: time.Second})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = sup.Run(ctx) }()
 	cfg := environment.NewConfiguration(environment.Settings{}, nil)
 	runLog := filepath.Join(dir, "console.log")
-	e1 := New("s", cfg, Options{Connect: ln1.Accept, SocketPath: sock, RunLog: runLog, DialTimeout: 5 * time.Second})
+	e1 := New("s", cfg, Options{Connect: ln1.Accept, Addr: sock, RunLog: runLog, DialTimeout: 5 * time.Second})
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +328,7 @@ func TestReattachAfterAgentRestart(t *testing.T) {
 	os.Remove(runLog) // simulate a lost run log so the ring buffer replay is exercised
 
 	ln2 := listenShim(t, sock)
-	e2 := New("s", cfg, Options{Connect: ln2.Accept, SocketPath: sock, RunLog: runLog, DialTimeout: 5 * time.Second})
+	e2 := New("s", cfg, Options{Connect: ln2.Accept, Addr: sock, RunLog: runLog, DialTimeout: 5 * time.Second})
 	defer e2.Close()
 	waitState(t, e2, environment.ProcessRunningState, 5*time.Second)
 	if !e2.IsAttached() {
@@ -333,19 +349,19 @@ func TestReattachAfterAgentRestart(t *testing.T) {
 // reconnects and the new environment attaches to the running process.
 func TestClosedEnvironmentReleasesTheShim(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
+	sock := freeAddr(t)
 	ln := listenShim(t, sock)
-	sup := supervisor.New(supervisor.Options{Socket: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
+	sup := supervisor.New(supervisor.Options{Agent: sock, Token: testToken, Argv: []string{"/bin/sh", "-c", "sleep 30"}, Dir: dir, KillGrace: time.Second})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = sup.Run(ctx) }()
 	cfg := environment.NewConfiguration(environment.Settings{}, nil)
-	e1 := New("s", cfg, Options{Connect: ln.Accept, SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
+	e1 := New("s", cfg, Options{Connect: ln.Accept, Addr: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	e1.Close()
-	e2 := New("s", cfg, Options{Connect: ln.Accept, SocketPath: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
+	e2 := New("s", cfg, Options{Connect: ln.Accept, Addr: sock, RunLog: filepath.Join(dir, "console.log"), DialTimeout: 5 * time.Second})
 	defer e2.Close()
 	waitState(t, e2, environment.ProcessRunningState, 8*time.Second)
 }

@@ -80,6 +80,30 @@ func TestLayout(t *testing.T) {
 	}
 }
 
+// The two pods prepare separately: the game pod copies the shim and creates
+// /pelican/{run,etc}, the agent pod lays out the PVC. Neither touches the
+// other's part.
+func TestLayoutPerPod(t *testing.T) {
+	dir := t.TempDir()
+	game := Layout{Bin: filepath.Join(dir, "shared", "bin", "shim"), Shared: filepath.Join(dir, "shared")}
+	if err := game.Run(); err != nil {
+		t.Fatalf("game pod prepare without data or uuid: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shared", "run")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data")); !os.IsNotExist(err) {
+		t.Fatalf("game pod prepare touched the data directory: %v", err)
+	}
+	agent := Layout{Data: filepath.Join(dir, "data"), UUID: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"}
+	if err := agent.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data", "machine-id")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProbe(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "bin"), 0o755)

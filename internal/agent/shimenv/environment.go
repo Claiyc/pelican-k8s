@@ -1,5 +1,5 @@
 // Package shimenv implements Wings' environment.ProcessEnvironment on top of
-// the shim in the game container, which connects to the agent's socket. See
+// the shim in the game container, which dials the agent's shim port. See
 // ARCHITECTURE.md section 6.4.
 package shimenv
 
@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,8 +41,8 @@ var ErrNotAttached = errors.New("environment/shim: not attached to process")
 type Options struct {
 	// Connect returns the next authenticated shim connection (protocol.Listener.Accept).
 	Connect func(ctx context.Context) (*protocol.Client, error)
-	// SocketPath is the socket the shim connects to (for messages).
-	SocketPath string
+	// Addr is the address the shim connects to (for messages).
+	Addr string
 	// RunLog is the per-run console log written by the agent (Readlog source).
 	RunLog string
 	// ExtraEnv is appended to every start (e.g. INTERNAL_IP=<pod ip>).
@@ -69,6 +69,9 @@ type Environment struct {
 	logCallbackMx sync.Mutex
 	logCallback   func([]byte)
 
+	// stateMu orders the state pushes to the shim.
+	stateMu sync.Mutex
+
 	mu        sync.Mutex
 	client    *protocol.Client
 	connected chan struct{} // closed while a client is connected; replaced on disconnect
@@ -80,6 +83,9 @@ type Environment struct {
 	// disconnectedAt is when the shim connection was last lost while a process
 	// was supposed to be alive (the game container restarted underneath us).
 	disconnectedAt time.Time
+	// terminating is set while the connected shim reports that its container
+	// is being terminated and it stops the process by itself.
+	terminating bool
 
 	runLogMu sync.Mutex
 	runLog   *os.File
@@ -147,11 +153,31 @@ func (e *Environment) Image() string {
 	return e.image
 }
 
-// SetStopConfiguration implements server.ImageAndStopConfigurable.
+// SetStopConfiguration implements server.ImageAndStopConfigurable. The
+// configuration is also sent to a connected shim, which applies it when its
+// container is terminated.
 func (e *Environment) SetStopConfiguration(c remote.ProcessStopConfiguration) {
 	e.metaMu.Lock()
 	e.stop = c
 	e.metaMu.Unlock()
+	if cl := e.currentClient(); cl != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
+			defer cancel()
+			if err := cl.Configure(ctx, shimStop(c)); err != nil {
+				e.log.Warn("cannot send the stop configuration to the shim", "error", err)
+			}
+		}()
+	}
+}
+
+// shimStop converts Wings' stop configuration for the shim. An empty type is
+// Wings' default, a signal.
+func shimStop(c remote.ProcessStopConfiguration) protocol.StopConfig {
+	if c.Type == remote.ProcessStopCommand {
+		return protocol.StopConfig{Type: protocol.StopCommand, Value: c.Value}
+	}
+	return protocol.StopConfig{Type: protocol.StopSignal, Value: c.Value}
 }
 
 func (e *Environment) stopConfig() remote.ProcessStopConfiguration {
@@ -174,7 +200,55 @@ func (e *Environment) SetState(state string) {
 	if e.State() != state {
 		e.st.Store(state)
 		e.Events().Publish(environment.StateChangeEvent, state)
+		e.pushState()
 	}
+}
+
+// pushState tells a connected shim the current state, which keeps its
+// readiness file in line with what the Panel shows. The calls are ordered so
+// that the shim always ends up with the latest state.
+func (e *Environment) pushState() {
+	c := e.currentClient()
+	if c == nil {
+		return
+	}
+	go func() {
+		e.stateMu.Lock()
+		defer e.stateMu.Unlock()
+		ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
+		defer cancel()
+		if err := c.State(ctx, e.State()); err != nil {
+			e.log.Debug("cannot send the process state to the shim", "error", err)
+		}
+	}()
+}
+
+// ShimInfo describes the shim connection for the operator.
+type ShimInfo struct {
+	// Attached is set while an authenticated shim connection exists.
+	Attached bool `json:"attached"`
+	// PodUID is the pod of the connected shim.
+	PodUID string `json:"podUID,omitempty"`
+	// Running reports whether the shim runs the process.
+	Running bool `json:"running"`
+	// Terminating is set while the shim stops the process because its
+	// container is being terminated.
+	Terminating bool `json:"terminating,omitempty"`
+}
+
+// Shim reports the current shim connection.
+func (e *Environment) Shim() ShimInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.client == nil {
+		return ShimInfo{}
+	}
+	select {
+	case <-e.client.Done():
+		return ShimInfo{}
+	default:
+	}
+	return ShimInfo{Attached: true, PodUID: e.client.PodUID(), Running: e.running, Terminating: e.terminating}
 }
 
 // SetLogCallback implements ProcessEnvironment.
@@ -355,9 +429,10 @@ func (e *Environment) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	env := e.buildEnv()
+	stop := shimStop(e.stopConfig())
 	actx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := c.Start(actx, env); err != nil {
+	if _, err := c.Start(actx, env, &stop); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "already running") {
 			// Someone else started it, or the reply was lost: treat it as running.
 			if st, serr := c.Status(ctx); serr == nil && st.Running {
@@ -642,7 +717,7 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 				select {
 				case <-time.After(50 * time.Millisecond):
 				case <-deadline.Done():
-					return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.SocketPath, deadline.Err())
+					return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.Addr, deadline.Err())
 				}
 				continue
 			default:
@@ -652,7 +727,7 @@ func (e *Environment) waitClient(ctx context.Context) (*protocol.Client, error) 
 		select {
 		case <-ch:
 		case <-deadline.Done():
-			return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.SocketPath, deadline.Err())
+			return nil, fmt.Errorf("environment/shim: the shim has not connected to %s: %w", e.o.Addr, deadline.Err())
 		}
 	}
 }
@@ -707,25 +782,33 @@ func (e *Environment) onConnected(c *protocol.Client) {
 		_ = c.Close()
 		return
 	}
-	if st.Stopping {
-		// A shim that is shutting down (container restart in progress) is not a
-		// usable connection; wait for its successor.
-		_ = c.Close()
-		return
-	}
-	e.log.Info("connected to shim", "running", st.Running, "pid", st.PID)
+	e.log.Info("connected to shim", "running", st.Running, "pid", st.PID, "pod", c.PodUID(), "terminating", st.Stopping)
 
 	e.mu.Lock()
 	e.client = c
 	close(e.connected)
 	e.running = st.Running
+	e.terminating = st.Stopping
 	if st.Running && st.StartedAt != nil {
 		e.startedAt = *st.StartedAt
 	}
 	state := e.State()
 	e.mu.Unlock()
 
+	// The shim keeps its own copy of the stop configuration and the state.
+	if err := c.Configure(ctx, shimStop(e.stopConfig())); err != nil {
+		e.log.Warn("cannot send the stop configuration to the shim", "error", err)
+	}
+
 	switch {
+	case st.Running && st.Stopping:
+		// The shim's container is being terminated and the shim stops the
+		// process by itself: see the stop through as a stop, not a crash.
+		e.mu.Lock()
+		e.attached = true
+		e.exitedCh = make(chan struct{})
+		e.mu.Unlock()
+		e.SetState(environment.ProcessStoppingState)
 	case st.Running && state == environment.ProcessOfflineState:
 		// Agent restart while the game keeps running: re-attach like Wings does after a reboot.
 		e.mu.Lock()
@@ -751,6 +834,7 @@ func (e *Environment) onConnected(c *protocol.Client) {
 		e.mu.Unlock()
 		e.SetState(environment.ProcessOfflineState)
 	}
+	e.pushState()
 }
 
 func (e *Environment) onDisconnected(c *protocol.Client) {
@@ -758,6 +842,7 @@ func (e *Environment) onDisconnected(c *protocol.Client) {
 	if e.client == c {
 		e.client = nil
 		e.connected = make(chan struct{})
+		e.terminating = false
 	}
 	e.disconnectedAt = time.Now()
 	e.mu.Unlock()
@@ -774,6 +859,15 @@ func (e *Environment) consume(c *protocol.Client) {
 			e.running = true
 			e.startedAt = time.Now()
 			e.mu.Unlock()
+		case protocol.TypeTerminating:
+			e.mu.Lock()
+			e.terminating = true
+			running := e.running
+			e.mu.Unlock()
+			e.log.Info("the shim is terminating and stops the process")
+			if running && e.State() != environment.ProcessOfflineState {
+				e.SetState(environment.ProcessStoppingState)
+			}
 		case protocol.TypeExited:
 			e.mu.Lock()
 			e.running = false

@@ -33,7 +33,7 @@ func AgentSecret(in *Input, tokenID, token string) *corev1.Secret {
 	}
 }
 
-// ShimSecret renders the Secret with the shim socket token. The agent and the
+// ShimSecret renders the Secret with the shim token. The agent and the
 // game container get it as PELICAN_SHIM_TOKEN; the shim keeps it from the game
 // process.
 func ShimSecret(in *Input, token string) *corev1.Secret {
