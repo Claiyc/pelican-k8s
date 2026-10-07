@@ -109,15 +109,19 @@ func TestInstallResources(t *testing.T) {
 	}
 }
 
-func TestStatefulSetTemplate(t *testing.T) {
+func TestGameStatefulSet(t *testing.T) {
 	in := testInput(t, nil)
-	sts := StatefulSet(in)
-	if *sts.Spec.Replicas != 1 || sts.Spec.UpdateStrategy.Type != "OnDelete" || sts.Spec.ServiceName != "gs-"+uuid+"-agent" {
-		t.Fatalf("sts spec %+v", sts.Spec)
+	sts := GameStatefulSet(in)
+	if sts.Name != "gs-"+uuid || *sts.Spec.Replicas != 1 || sts.Spec.UpdateStrategy.Type != "OnDelete" || sts.Spec.Selector.MatchLabels[v1alpha1.LabelComponent] != "game" {
+		t.Fatalf("sts %+v", sts)
 	}
 	spec := sts.Spec.Template.Spec
-	if len(spec.InitContainers) != 3 || spec.InitContainers[2].Name != "agent" || spec.InitContainers[2].RestartPolicy == nil || *spec.InitContainers[2].RestartPolicy != corev1.ContainerRestartPolicyAlways {
+	if len(spec.InitContainers) != 2 || spec.InitContainers[0].Name != "prepare" || spec.InitContainers[1].Name != "probe-entrypoint" {
 		t.Fatalf("init containers %+v", spec.InitContainers)
+	}
+	// The game pod's prepare only copies the shim; the agent pod prepares the volume.
+	if got := strings.Join(spec.InitContainers[0].Command, " "); got != "/shim prepare --bin /pelican/bin/shim --shared /pelican" {
+		t.Fatalf("prepare command %q", got)
 	}
 	if len(spec.Containers) != 1 || spec.Containers[0].Name != "game" || spec.Containers[0].Image != in.Image {
 		t.Fatalf("containers %+v", spec.Containers)
@@ -125,6 +129,9 @@ func TestStatefulSetTemplate(t *testing.T) {
 	game := spec.Containers[0]
 	if len(game.Ports) != 4 || game.Ports[0].ContainerPort != 25565 || game.Ports[0].HostPort != 0 {
 		t.Fatalf("ports %+v", game.Ports)
+	}
+	if !strings.Contains(strings.Join(game.Command, " "), "--agent gs-"+uuid+"-agent:8082") {
+		t.Fatalf("game command %v", game.Command)
 	}
 	if *spec.SecurityContext.RunAsUser != 1000 || *spec.SecurityContext.FSGroup != 1000 || !*spec.SecurityContext.RunAsNonRoot || spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
 		t.Fatalf("pod security %+v", spec.SecurityContext)
@@ -144,10 +151,22 @@ func TestStatefulSetTemplate(t *testing.T) {
 			machineID = m.SubPath == "machine-id" && m.ReadOnly
 		case "/etc/passwd":
 			passwd = m.SubPath == "etc/passwd"
+		case AgentRoot:
+			t.Fatal("the game pod must not mount the PVC root")
 		}
 	}
 	if !home || !machineID || !passwd {
 		t.Fatalf("mounts %+v", game.VolumeMounts)
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range game.Env {
+		env[e.Name] = e
+	}
+	if e := env["PELICAN_POD_UID"]; e.ValueFrom == nil || e.ValueFrom.FieldRef.FieldPath != "metadata.uid" {
+		t.Fatalf("pod uid env %+v", e)
+	}
+	if e := env["INTERNAL_IP"]; e.ValueFrom == nil || e.ValueFrom.FieldRef.FieldPath != "status.podIP" {
+		t.Fatalf("internal ip env %+v", e)
 	}
 	// Readiness tracks the game process; a stopped server must never be
 	// restarted or blocked for being unready.
@@ -167,17 +186,53 @@ func TestStatefulSetTemplate(t *testing.T) {
 	if game.Resources.Limits.Memory().Value() != 4300*1024*1024 {
 		t.Fatalf("resources %+v", game.Resources)
 	}
-	if h := sts.Spec.Template.Annotations[AnnotationTemplateHash]; h == "" || h != TemplateHash(sts.Spec.Template) {
-		t.Fatal("template hash missing or unstable")
+	for _, v := range spec.Volumes {
+		if v.Name == "scratch" || v.Name == "agent-config" {
+			t.Fatalf("game pod volume %q belongs to the agent pod", v.Name)
+		}
 	}
-	// The hash ignores resources but not the image.
-	in2 := testInput(t, func(i *Input) { i.Settings.Build.MemoryLimit = 8192 })
-	if TemplateHash(PodTemplate(in2)) != TemplateHash(sts.Spec.Template) {
-		t.Fatal("resource change must not change the template hash")
+	if spec.Affinity != nil {
+		t.Fatalf("no affinity without allocation nodes or agent placement: %+v", spec.Affinity)
 	}
-	in3 := testInput(t, func(i *Input) { i.Image = "ghcr.io/pelican-eggs/yolks:java_17@sha256:def" })
-	if TemplateHash(PodTemplate(in3)) == TemplateHash(sts.Spec.Template) {
-		t.Fatal("image change must change the template hash")
+}
+
+func TestAgentStatefulSet(t *testing.T) {
+	in := testInput(t, nil)
+	sts := AgentStatefulSet(in)
+	if sts.Name != "gs-"+uuid+"-agent" || *sts.Spec.Replicas != 1 || sts.Spec.ServiceName != "gs-"+uuid+"-agent" || sts.Spec.UpdateStrategy.Type != "OnDelete" {
+		t.Fatalf("sts %+v", sts)
+	}
+	if sts.Spec.Selector.MatchLabels[v1alpha1.LabelComponent] != "agent" || sts.Spec.Template.Labels[v1alpha1.LabelComponent] != "agent" {
+		t.Fatalf("selector %+v labels %+v", sts.Spec.Selector, sts.Spec.Template.Labels)
+	}
+	spec := sts.Spec.Template.Spec
+	if spec.ServiceAccountName != "pelican-agent" || spec.PriorityClassName != "pelican-agent" || *spec.AutomountServiceAccountToken {
+		t.Fatalf("pod spec %+v", spec)
+	}
+	if *spec.SecurityContext.RunAsUser != 1000 || *spec.SecurityContext.FSGroup != 1000 {
+		t.Fatalf("pod security %+v", spec.SecurityContext)
+	}
+	if len(spec.InitContainers) != 1 || strings.Join(spec.InitContainers[0].Command, " ") != "/shim prepare --data /data --uuid "+uuid {
+		t.Fatalf("init containers %+v", spec.InitContainers)
+	}
+	if len(spec.Containers) != 1 || spec.Containers[0].Name != AgentContainer {
+		t.Fatalf("containers %+v", spec.Containers)
+	}
+	agent := spec.Containers[0]
+	if agent.Lifecycle.PreStop.HTTPGet.Path != "/internal/v1/prestop" || agent.StartupProbe.HTTPGet.Path != "/internal/v1/healthz" {
+		t.Fatalf("agent probes %+v", agent)
+	}
+	if len(agent.Ports) != 3 || agent.Ports[2].ContainerPort != ShimPort {
+		t.Fatalf("agent ports %+v", agent.Ports)
+	}
+	var tokenEnv bool
+	for _, e := range agent.Env {
+		if e.Name == "WINGS_TOKEN" && e.ValueFrom.SecretKeyRef.Name == "gs-"+uuid+"-agent" {
+			tokenEnv = true
+		}
+	}
+	if !tokenEnv {
+		t.Fatalf("agent env %+v", agent.Env)
 	}
 	// Scratch defaults to a generic ephemeral volume the size of the PVC.
 	var scratch *corev1.Volume
@@ -189,27 +244,99 @@ func TestStatefulSetTemplate(t *testing.T) {
 	if scratch == nil || scratch.Ephemeral == nil || scratch.Ephemeral.VolumeClaimTemplate.Spec.Resources.Requests.Storage().Value() != 11264*1024*1024 {
 		t.Fatalf("scratch %+v", scratch)
 	}
-	agent := spec.InitContainers[2]
-	if agent.Lifecycle.PreStop.HTTPGet.Path != "/internal/v1/prestop" || agent.StartupProbe.HTTPGet.Path != "/internal/v1/healthz" {
-		t.Fatalf("agent probes %+v", agent)
+	if spec.Affinity != nil {
+		t.Fatalf("no affinity without a game pod node: %+v", spec.Affinity)
 	}
-	var tokenEnv bool
-	for _, e := range agent.Env {
-		if e.Name == "WINGS_TOKEN" && e.ValueFrom.SecretKeyRef.Name == "gs-"+uuid+"-agent" {
-			tokenEnv = true
+
+	custom := AgentPodTemplate(testInput(t, func(i *Input) {
+		i.Class.Spec.AgentServiceAccountName = "agents"
+		i.Class.Spec.AgentPriorityClassName = "high"
+		i.AgentNode = "node-b"
+	}))
+	if custom.Spec.ServiceAccountName != "agents" || custom.Spec.PriorityClassName != "high" {
+		t.Fatalf("custom agent pod %+v", custom.Spec)
+	}
+	terms := custom.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || terms[0].MatchFields[0].Values[0] != "node-b" {
+		t.Fatalf("agent node affinity %+v", terms)
+	}
+}
+
+func TestGameAffinity(t *testing.T) {
+	cases := []struct {
+		affinity  GameAffinity
+		required  bool
+		preferred bool
+	}{
+		{GameAffinityNone, false, false},
+		{GameAffinityPreferred, false, true},
+		{GameAffinityRequired, true, false},
+	}
+	for _, tc := range cases {
+		spec := GamePodTemplate(testInput(t, func(i *Input) { i.GameAffinity = tc.affinity })).Spec
+		var pa *corev1.PodAffinity
+		if spec.Affinity != nil {
+			pa = spec.Affinity.PodAffinity
+		}
+		required := pa != nil && len(pa.RequiredDuringSchedulingIgnoredDuringExecution) == 1
+		preferred := pa != nil && len(pa.PreferredDuringSchedulingIgnoredDuringExecution) == 1
+		if required != tc.required || preferred != tc.preferred {
+			t.Fatalf("affinity %d: %+v", tc.affinity, pa)
+		}
+		var term corev1.PodAffinityTerm
+		switch {
+		case required:
+			term = pa.RequiredDuringSchedulingIgnoredDuringExecution[0]
+		case preferred:
+			term = pa.PreferredDuringSchedulingIgnoredDuringExecution[0].PodAffinityTerm
+		default:
+			continue
+		}
+		if term.TopologyKey != "kubernetes.io/hostname" || term.LabelSelector.MatchLabels[v1alpha1.LabelComponent] != "agent" || term.LabelSelector.MatchLabels[v1alpha1.LabelServerUUID] != uuid {
+			t.Fatalf("affinity term %+v", term)
 		}
 	}
-	if !tokenEnv {
-		t.Fatalf("agent env %+v", agent.Env)
+	// The allocation node pin and the agent affinity combine.
+	spec := GamePodTemplate(testInput(t, func(i *Input) {
+		i.NodeNames = []string{"node-a"}
+		i.GameAffinity = GameAffinityPreferred
+	})).Spec
+	if spec.Affinity.NodeAffinity == nil || spec.Affinity.PodAffinity == nil {
+		t.Fatalf("combined affinity %+v", spec.Affinity)
 	}
+}
+
+func TestTemplateHash(t *testing.T) {
+	in := testInput(t, nil)
+	game := GamePodTemplate(in)
+	if h := game.Annotations[AnnotationTemplateHash]; h == "" || h != TemplateHash(game) {
+		t.Fatal("template hash missing or unstable")
+	}
+	same := func(name string, a, b corev1.PodTemplateSpec, want bool) {
+		t.Helper()
+		if got := a.Annotations[AnnotationTemplateHash] == b.Annotations[AnnotationTemplateHash]; got != want {
+			t.Fatalf("%s: same hash %v, want %v", name, got, want)
+		}
+	}
+	same("resources", game, GamePodTemplate(testInput(t, func(i *Input) { i.Settings.Build.MemoryLimit = 8192 })), true)
+	same("image", game, GamePodTemplate(testInput(t, func(i *Input) { i.Image = "ghcr.io/pelican-eggs/yolks:java_17@sha256:def" })), false)
+	same("game affinity", game, GamePodTemplate(testInput(t, func(i *Input) { i.GameAffinity = GameAffinityRequired })), true)
+	same("allocation nodes", game, GamePodTemplate(testInput(t, func(i *Input) { i.NodeNames = []string{"node-a"} })), false)
+
+	agent := AgentPodTemplate(in)
+	same("agent node", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.AgentNode = "node-b" })), true)
+	same("agent image", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Images.Agent = "agent:v2" })), false)
+	same("agent resources", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Resources.Agent.Memory = resource.MustParse("256Mi") })), false)
+	// The game image is not part of the agent pod.
+	same("game image in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Image = "other@sha256:def" })), true)
 }
 
 // The shim dials the agent over TCP and writes its readiness file to
 // /pelican/run; both containers get the shim token, the game container
 // nothing of the agent's.
 func TestShimSocketIsolation(t *testing.T) {
-	spec := StatefulSet(testInput(t, nil)).Spec.Template.Spec
-	agent, game := spec.InitContainers[2], spec.Containers[0]
+	in := testInput(t, nil)
+	agent, game := AgentPodTemplate(in).Spec.Containers[0], GamePodTemplate(in).Spec.Containers[0]
 	runMount := func(c corev1.Container) *corev1.VolumeMount {
 		for i := range c.VolumeMounts {
 			if c.VolumeMounts[i].MountPath == "/pelican/run" {
@@ -251,7 +378,7 @@ func TestHostPortAndArgv(t *testing.T) {
 		i.Class.Spec.Exposure.Mode = v1alpha1.ExposureHostPort
 		i.Argv = []string{"/usr/bin/tini", "-g", "--", "/entrypoint.sh"}
 	})
-	tmpl := PodTemplate(in)
+	tmpl := GamePodTemplate(in)
 	game := tmpl.Spec.Containers[0]
 	if game.Ports[0].HostPort != 25565 || tmpl.Spec.ServiceAccountName != "pelican-game-hostport" {
 		t.Fatalf("hostport %+v", game.Ports)
@@ -290,9 +417,15 @@ func TestServices(t *testing.T) {
 	if ExposureService(none) != nil {
 		t.Fatal("servers without allocation get no exposure service")
 	}
+	if svc.Spec.Selector[v1alpha1.LabelComponent] != "game" {
+		t.Fatalf("exposure selector %+v", svc.Spec.Selector)
+	}
 	agent := AgentService(in)
-	if agent.Spec.Type != corev1.ServiceTypeClusterIP || agent.Spec.ClusterIP != "None" || len(agent.Spec.Ports) != 2 || agent.Spec.Ports[1].Port != 2022 {
+	if agent.Spec.Type != corev1.ServiceTypeClusterIP || agent.Spec.ClusterIP != "None" || len(agent.Spec.Ports) != 3 || agent.Spec.Ports[1].Port != 2022 || agent.Spec.Ports[2].Port != ShimPort {
 		t.Fatalf("agent service %+v", agent.Spec)
+	}
+	if agent.Spec.Selector[v1alpha1.LabelComponent] != "agent" || !agent.Spec.PublishNotReadyAddresses {
+		t.Fatalf("agent service selector %+v", agent.Spec)
 	}
 }
 
@@ -305,14 +438,12 @@ func TestNetworkPolicy(t *testing.T) {
 		}
 	})
 	np := NetworkPolicy(in)
-	if len(np.Spec.Ingress) != 3 {
-		t.Fatalf("ingress rules %d", len(np.Spec.Ingress))
+	if np.Name != "gs-"+uuid || np.Spec.PodSelector.MatchLabels[v1alpha1.LabelComponent] != "game" {
+		t.Fatalf("game policy %+v", np.ObjectMeta)
 	}
-	if np.Spec.Ingress[0].From[0].IPBlock.CIDR != "0.0.0.0/0" || len(np.Spec.Ingress[0].Ports) != 4 {
-		t.Fatalf("game ingress %+v", np.Spec.Ingress[0])
-	}
-	if np.Spec.Ingress[1].From[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "pelican-system" {
-		t.Fatalf("agent ingress %+v", np.Spec.Ingress[1])
+	// Only the game ports: the game pod serves nothing else.
+	if len(np.Spec.Ingress) != 1 || np.Spec.Ingress[0].From[0].IPBlock.CIDR != "0.0.0.0/0" || len(np.Spec.Ingress[0].Ports) != 4 {
+		t.Fatalf("game ingress %+v", np.Spec.Ingress)
 	}
 	if len(np.Spec.Egress) != 5 {
 		t.Fatalf("egress rules %d: %+v", len(np.Spec.Egress), np.Spec.Egress)
@@ -321,11 +452,43 @@ func TestNetworkPolicy(t *testing.T) {
 	if internet.CIDR != "0.0.0.0/0" || len(internet.Except) != 4 || internet.Except[0] != "169.254.0.0/16" {
 		t.Fatalf("internet egress %+v", internet)
 	}
+	shim := np.Spec.Egress[2]
+	if shim.To[0].PodSelector.MatchLabels[v1alpha1.LabelComponent] != "agent" || shim.To[0].PodSelector.MatchLabels[v1alpha1.LabelServerUUID] != uuid || shim.Ports[0].Port.IntValue() != ShimPort {
+		t.Fatalf("shim egress %+v", shim)
+	}
+	for _, r := range np.Spec.Egress {
+		for _, p := range r.Ports {
+			if p.Port != nil && p.Port.IntValue() == GatewayPort {
+				t.Fatalf("the game pod must not reach the gateway: %+v", r)
+			}
+		}
+	}
 	if np.Spec.Egress[4].To[0].IPBlock.CIDR != "172.30.5.5/32" || len(np.Spec.Egress[4].Ports) != 2 {
 		t.Fatalf("additional egress %+v", np.Spec.Egress[4])
 	}
+
+	ap := AgentNetworkPolicy(in)
+	if ap.Name != "gs-"+uuid+"-agent" || ap.Spec.PodSelector.MatchLabels[v1alpha1.LabelComponent] != "agent" {
+		t.Fatalf("agent policy %+v", ap.ObjectMeta)
+	}
+	if len(ap.Spec.Ingress) != 3 {
+		t.Fatalf("agent ingress rules %d", len(ap.Spec.Ingress))
+	}
+	if ap.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "pelican-system" || len(ap.Spec.Ingress[0].Ports) != 2 {
+		t.Fatalf("system ingress %+v", ap.Spec.Ingress[0])
+	}
+	if ap.Spec.Ingress[1].From[0].IPBlock.CIDR != "192.0.2.10/32" {
+		t.Fatalf("node ingress %+v", ap.Spec.Ingress[1])
+	}
+	if in := ap.Spec.Ingress[2]; in.From[0].PodSelector.MatchLabels[v1alpha1.LabelComponent] != "game" || in.Ports[0].Port.IntValue() != ShimPort {
+		t.Fatalf("shim ingress %+v", in)
+	}
+	if len(ap.Spec.Egress) != 4 || ap.Spec.Egress[2].Ports[0].Port.IntValue() != GatewayPort || ap.Spec.Egress[3].To[0].IPBlock.CIDR != "172.30.5.5/32" {
+		t.Fatalf("agent egress %+v", ap.Spec.Egress)
+	}
+
 	off := testInput(t, func(i *Input) { i.Class.Spec.Network.Enabled = boolPtr(false) })
-	if NetworkPolicy(off) != nil {
+	if NetworkPolicy(off) != nil || AgentNetworkPolicy(off) != nil {
 		t.Fatal("disabled network policy")
 	}
 }
@@ -364,8 +527,8 @@ func TestInstallJob(t *testing.T) {
 	if pi := spec.InitContainers[0]; *pi.SecurityContext.RunAsUser != 1000 || pi.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Fatalf("prepare must run as the game uid: %+v", pi.SecurityContext)
 	}
-	if spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0].TopologyKey != "kubernetes.io/hostname" {
-		t.Fatal("affinity to the server pod is required")
+	if term := spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]; term.TopologyKey != "kubernetes.io/hostname" || term.LabelSelector.MatchLabels[v1alpha1.LabelComponent] != "agent" {
+		t.Fatal("affinity to the agent pod is required")
 	}
 	if c.Resources.Limits.Memory().Value() < 4096*1024*1024 {
 		t.Fatalf("install resources %+v", c.Resources)

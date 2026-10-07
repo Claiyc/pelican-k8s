@@ -48,6 +48,13 @@ type fakeAgent struct {
 	// getErr and exitErr fail GetServer and ExitState.
 	getErr  error
 	exitErr error
+	// shimPod is the game pod whose shim is attached ("" for none);
+	// shimRunning reports a shim that runs the process.
+	shimPod     string
+	shimRunning bool
+	shimErr     error
+	// busy lists the agent's in-flight work.
+	busy []string
 }
 
 func (f *fakeAgent) record(s string) {
@@ -80,6 +87,19 @@ func (f *fakeAgent) Delete(ctx context.Context, uuid string) error { f.record("d
 func (f *fakeAgent) ExitState(ctx context.Context, code int32, oom bool) error {
 	f.record(fmt.Sprintf("exit:%d:%v", code, oom))
 	return f.exitErr
+}
+func (f *fakeAgent) Shim(context.Context) (*agentclient.Shim, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.shimErr != nil {
+		return nil, f.shimErr
+	}
+	return &agentclient.Shim{Attached: f.shimPod != "", PodUID: f.shimPod, Running: f.shimRunning}, nil
+}
+func (f *fakeAgent) Activity(context.Context) (*agentclient.Activity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &agentclient.Activity{Busy: len(f.busy) > 0, Reasons: f.busy}, nil
 }
 func (f *fakeAgent) Calls() []string {
 	f.mu.Lock()
@@ -215,32 +235,85 @@ func (h *harness) patchStatus(mutate func(*v1alpha1.GameServer)) {
 	}
 }
 
-// createPod simulates the StatefulSet controller creating the pod from the current template.
+// createPod simulates the StatefulSet controllers creating the agent pod and
+// the game pod from the current templates, the game container running and its
+// shim attached to the agent. It returns the game pod.
 func (h *harness) createPod(agentReady bool) *corev1.Pod {
 	h.t.Helper()
-	sts := &appsv1.StatefulSet{}
-	if !h.get(sts, names.StatefulSet(uuid)) {
-		h.t.Fatal("statefulset missing")
-	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns, Labels: sts.Spec.Template.Labels, Annotations: sts.Spec.Template.Annotations, UID: types.UID("pod-" + h.now.Format("150405"))},
-		Spec:       sts.Spec.Template.Spec,
-	}
-	if err := h.c.Create(context.Background(), pod); err != nil {
-		h.t.Fatal(err)
-	}
+	h.createAgentPod(agentReady)
+	return h.createGamePod()
+}
+
+// createAgentPod creates the agent pod from the agent StatefulSet template.
+func (h *harness) createAgentPod(ready bool) *corev1.Pod {
+	h.t.Helper()
+	pod := h.podFrom(names.AgentStatefulSet(uuid), names.AgentPod(uuid), "agent-")
 	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.5"}
-	started := agentReady
-	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "agent", Started: &started, Ready: agentReady}}
+	started := ready
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, Started: &started, Ready: ready}}
 	if err := h.c.Status().Update(context.Background(), pod); err != nil {
 		h.t.Fatal(err)
 	}
 	return pod
 }
 
+// createGamePod creates the game pod from the game StatefulSet template with
+// the game container running and its shim attached.
+func (h *harness) createGamePod() *corev1.Pod {
+	h.t.Helper()
+	pod := h.podFrom(names.StatefulSet(uuid), names.Pod(uuid), "pod-")
+	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.6"}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.GameContainer, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := h.c.Status().Update(context.Background(), pod); err != nil {
+		h.t.Fatal(err)
+	}
+	h.agent.mu.Lock()
+	h.agent.shimPod = string(pod.UID)
+	h.agent.mu.Unlock()
+	return pod
+}
+
+func (h *harness) podFrom(stsName, name, uidPrefix string) *corev1.Pod {
+	h.t.Helper()
+	sts := &appsv1.StatefulSet{}
+	if !h.get(sts, stsName) {
+		h.t.Fatalf("statefulset %s missing", stsName)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: sts.Spec.Template.Labels, Annotations: sts.Spec.Template.Annotations, UID: types.UID(uidPrefix + h.now.Format("150405.000"))},
+		Spec:       sts.Spec.Template.Spec,
+	}
+	if err := h.c.Create(context.Background(), pod); err != nil {
+		h.t.Fatal(err)
+	}
+	return pod
+}
+
+// pod returns the game pod.
 func (h *harness) pod() *corev1.Pod {
 	p := &corev1.Pod{}
 	if !h.get(p, names.Pod(uuid)) {
+		return nil
+	}
+	return p
+}
+
+// deletePods deletes both pods, as kubelet would after their grace period.
+func (h *harness) deletePods() error {
+	for _, p := range []*corev1.Pod{h.pod(), h.agentPod()} {
+		if p == nil {
+			continue
+		}
+		if err := h.c.Delete(context.Background(), p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *harness) agentPod() *corev1.Pod {
+	p := &corev1.Pod{}
+	if !h.get(p, names.AgentPod(uuid)) {
 		return nil
 	}
 	return p
@@ -279,10 +352,16 @@ func TestCreatesOwnedResources(t *testing.T) {
 		t.Fatal("agent service")
 	}
 	var np networkingv1.NetworkPolicy
-	if !h.get(&np, names.NetworkPolicy(uuid)) {
-		t.Fatal("network policy")
+	if !h.get(&np, names.NetworkPolicy(uuid)) || !h.get(&np, names.AgentNetworkPolicy(uuid)) {
+		t.Fatal("network policies")
 	}
 	var sts appsv1.StatefulSet
+	if !h.get(&sts, names.AgentStatefulSet(uuid)) || *sts.Spec.Replicas != 1 || len(sts.OwnerReferences) != 1 {
+		t.Fatal("agent statefulset")
+	}
+	if gs.Status.Agent.TemplateHash == "" || gs.Status.Agent.TemplateHash != sts.Spec.Template.Annotations[render.AnnotationTemplateHash] {
+		t.Fatalf("agent template hash %q", gs.Status.Agent.TemplateHash)
+	}
 	if !h.get(&sts, names.StatefulSet(uuid)) {
 		t.Fatal("statefulset")
 	}
@@ -307,18 +386,19 @@ func TestFreshPodStartsWhenDesiredRunning(t *testing.T) {
 	if calls := h.agent.Calls(); len(calls) != 0 {
 		t.Fatalf("agent not ready yet, calls %v", calls)
 	}
-	p := h.pod()
+	a := h.agentPod()
 	started := true
-	p.Status.InitContainerStatuses[0].Started, p.Status.InitContainerStatuses[0].Ready = &started, true
-	if err := h.c.Status().Update(context.Background(), p); err != nil {
+	a.Status.ContainerStatuses[0].Started, a.Status.ContainerStatuses[0].Ready = &started, true
+	if err := h.c.Status().Update(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	h.reconcile(2)
 	if calls := h.agent.Calls(); strings.Join(calls, ",") != "power:start" {
 		t.Fatalf("calls %v", calls)
 	}
+	p := h.pod()
 	st := h.gs().Status
-	if st.Agent.PodUID != string(p.UID) || st.Power.ObservedGeneration != 1 || st.Power.LastAction == nil || st.Power.LastAction.Action != "start" {
+	if st.Agent.PodUID != string(a.UID) || st.Game.PodUID != string(p.UID) || st.Power.ObservedGeneration != 1 || st.Power.LastAction == nil || st.Power.LastAction.Action != "start" || st.Power.LastAction.PodUID != string(p.UID) {
 		t.Fatalf("status %+v", st)
 	}
 	if !meta.IsStatusConditionTrue(st.Conditions, v1alpha1.ConditionAgentReady) {
@@ -514,15 +594,15 @@ func TestInstallRestartsOnFreshPod(t *testing.T) {
 	if !h.get(&job, names.InstallJob(uuid, 1)) {
 		t.Fatal("job expected")
 	}
-	// The pod is replaced mid-install.
-	if err := h.c.Delete(context.Background(), h.pod()); err != nil {
+	// The agent pod is replaced mid-install.
+	if err := h.c.Delete(context.Background(), h.agentPod()); err != nil {
 		t.Fatal(err)
 	}
 	h.now = h.now.Add(time.Minute)
-	h.createPod(true)
+	h.createAgentPod(true)
 	h.reconcile(2)
 	if got := strings.Join(h.agent.Calls(), ","); got != "install:false,install:false" {
-		t.Fatalf("install must be requested again on the new pod: %v", got)
+		t.Fatalf("install must be requested again on the new agent pod: %v", got)
 	}
 	st := h.gs().Status.Install
 	if st.RequestedGeneration != 1 || st.PreparedGeneration != 0 || st.Result != v1alpha1.InstallRunning {
@@ -590,9 +670,12 @@ func TestImageChangeRecreatesWhenOffline(t *testing.T) {
 	if h.pod() != nil {
 		t.Fatal("pod should be deleted once offline")
 	}
+	if h.agentPod() == nil {
+		t.Fatal("the agent pod is not part of a game template change")
+	}
 	// The new pod starts because desired is Running.
 	h.now = h.now.Add(time.Minute)
-	h.createPod(true)
+	h.createGamePod()
 	h.reconcile(2)
 	if got := strings.Join(h.agent.Calls(), ","); got != "power:stop,power:start" {
 		t.Fatalf("calls %s", got)
@@ -697,12 +780,23 @@ func TestFinalizeDeletePolicy(t *testing.T) {
 	if h.get(&sts, names.StatefulSet(uuid)) {
 		t.Fatal("statefulset should be deleted")
 	}
-	// Pod still exists (no STS controller in the fake): the PVC waits.
+	if h.get(&sts, names.AgentStatefulSet(uuid)) {
+		t.Fatal("agent statefulset should be deleted")
+	}
+	// Pods still exist (no STS controller in the fake): the PVC waits, also
+	// for the agent pod alone.
 	var pvc corev1.PersistentVolumeClaim
 	if !h.get(&pvc, names.PVC(uuid)) {
 		t.Fatal("pvc deleted too early")
 	}
 	if err := h.c.Delete(context.Background(), h.pod()); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if !h.get(&pvc, names.PVC(uuid)) {
+		t.Fatal("pvc deleted while the agent pod still mounts it")
+	}
+	if err := h.c.Delete(context.Background(), h.agentPod()); err != nil {
 		t.Fatal(err)
 	}
 	h.reconcile(1)
@@ -734,7 +828,7 @@ func TestFinalizeRetainPolicy(t *testing.T) {
 	if got := strings.Join(h.agent.Calls(), ","); got != "power:kill" {
 		t.Fatalf("calls %s", got)
 	}
-	h.c.Delete(context.Background(), h.pod())
+	_ = h.deletePods()
 	h.reconcile(1)
 	if !h.get(&pvc, names.PVC(uuid)) || pvc.Labels[v1alpha1.LabelOrphanedAt] == "" {
 		t.Fatalf("pvc should be retained and labelled: %+v", pvc.Labels)
@@ -949,7 +1043,7 @@ func TestUnlimitedCPURecreatesThePod(t *testing.T) {
 	}
 
 	// The fresh pod carries the new resources and settles.
-	h.createPod(true)
+	h.createGamePod()
 	h.reconcile(2)
 	pod := h.pod()
 	if pod == nil {
@@ -1084,5 +1178,98 @@ func TestServicesSurviveAPIServerDefaulting(t *testing.T) {
 	var svc corev1.Service
 	if !h.get(&svc, names.AgentService(uuid)) || svc.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Fatalf("agent service %+v", svc.Spec)
+	}
+}
+
+// A new agent pod next to a game pod whose shim already runs the process
+// attaches to it: the fresh-pod rule records the pod and starts nothing.
+func TestFreshAgentPodAttachesToRunningProcess(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start" {
+		t.Fatalf("calls %s", got)
+	}
+	// The agent pod is replaced while the game runs.
+	if err := h.c.Delete(context.Background(), h.agentPod()); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if c := meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionAgentReady); c == nil || c.Reason != "NoPod" {
+		t.Fatalf("AgentReady %+v", c)
+	}
+	if h.pod() == nil {
+		t.Fatal("the game pod must survive the agent pod")
+	}
+	h.now = h.now.Add(time.Minute)
+	h.agent.shimRunning = true
+	a := h.createAgentPod(true)
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start" {
+		t.Fatalf("a running process must not be started again: %s", got)
+	}
+	if st := h.gs().Status; st.Agent.PodUID != string(a.UID) {
+		t.Fatalf("agent pod not recorded: %+v", st.Agent)
+	}
+}
+
+// A fresh game pod is started only once its own shim is attached.
+func TestFreshGamePodWaitsForItsShim(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.agent.shimPod = "a-previous-pod"
+	h.reconcile(2)
+	if calls := h.agent.Calls(); len(calls) != 0 {
+		t.Fatalf("no start before the new pod's shim is attached: %v", calls)
+	}
+	st := h.gs().Status
+	if st.Game.PodUID != "" || st.Power.ObservedGeneration != 0 {
+		t.Fatalf("the game pod must not be recorded yet: %+v", st)
+	}
+	if c := meta.FindStatusCondition(st.Conditions, v1alpha1.ConditionGamePodReady); c == nil || c.Reason != "ShimNotAttached" {
+		t.Fatalf("GamePodReady %+v", c)
+	}
+	h.agent.shimPod = string(h.pod().UID)
+	h.reconcile(1)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start" {
+		t.Fatalf("calls %s", got)
+	}
+}
+
+// An agent template change replaces only the agent pod, once the process is offline.
+func TestAgentTemplateChangeReplacesTheAgentPod(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	h.agent.state = v1alpha1.ProcessRunning
+	cls := &v1alpha1.GameServerClass{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Name: "default"}, cls); err != nil {
+		t.Fatal(err)
+	}
+	cls.Spec.Images.Agent = "agent:v2"
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if c := meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionRecreatePending); c == nil || c.Reason != "AgentTemplateChanged" {
+		t.Fatalf("RecreatePending %+v", c)
+	}
+	if h.agentPod() == nil {
+		t.Fatal("the agent pod must wait for the process to go offline")
+	}
+	h.agent.state = v1alpha1.ProcessOffline
+	h.reconcile(1)
+	if h.agentPod() != nil {
+		t.Fatal("the agent pod must be replaced once offline")
+	}
+	if h.pod() == nil {
+		t.Fatal("the game pod is not part of an agent template change")
 	}
 }

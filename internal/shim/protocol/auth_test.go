@@ -15,6 +15,7 @@ func dialAndAnswer(t *testing.T, addr string, token []byte) (net.Conn, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	_, err = Answer(conn, NewEncoder(conn), token, "pod-1", 2*time.Second)
 	return conn, err
 }
@@ -148,9 +149,7 @@ func TestAnswerRejectsMalformedChallenge(t *testing.T) {
 // wrong token (anything that is not the agent) gets no commands through.
 func TestShimRejectsAgentWithoutToken(t *testing.T) {
 	ln := listen(t, "not-the-token")
-	conn, err := dialAndAnswer(t, ln.Addr(), []byte("secret"))
-	defer conn.Close()
-	if err == nil {
+	if _, err := dialAndAnswer(t, ln.Addr(), []byte("secret")); err == nil {
 		t.Fatal("handshake with an agent that does not hold the token succeeded")
 	}
 }

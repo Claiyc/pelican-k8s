@@ -100,6 +100,14 @@ agent:
   timezone: UTC
   extra: {}
 
+# PriorityClass of agent pods (the class's agentPriorityClassName). It ranks
+# above game pods, so an agent that follows its game pod to a full node can
+# preempt lower-priority pods there (ARCHITECTURE.md 7.7).
+agentPriorityClass:
+  create: true
+  name: pelican-agent
+  value: 1000
+
 # The default GameServerClass (cluster policy). See docs/classes.md.
 defaultClass:
   create: true
@@ -180,6 +188,10 @@ defaultClass:
         "ghcr.io/pelican-eggs/games:*": ["/bin/bash", "/entrypoint.sh"]
     terminationGracePeriodSeconds: 660
     suspendScalesToZero: false
+    scheduling:
+      # Prefer the node of the server's agent pod for its game pod, so the
+      # agent moves only when that node does not fit.
+      preferAgentNode: true
     nodeSelector: {}
     tolerations: []
     priorityClassName: ""

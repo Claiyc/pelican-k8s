@@ -40,10 +40,10 @@ func newClient(t *testing.T, objs ...client.Object) client.Client {
 
 func agentPod(ip string, started bool) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(testUUID), Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(testUUID), Namespace: testNS},
 		Status: corev1.PodStatus{
-			PodIP:                 ip,
-			InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
+			PodIP:             ip,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
 		},
 	}
 }

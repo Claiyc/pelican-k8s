@@ -282,6 +282,17 @@ type ImagesSpec struct {
 	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
 }
 
+// SchedulingSpec configures where game pods are placed (ARCHITECTURE.md 7.7).
+type SchedulingSpec struct {
+	// PreferAgentNode gives the game pod a preferred pod affinity toward its
+	// agent pod's node, so the agent moves only when that node does not fit.
+	// +kubebuilder:default=true
+	PreferAgentNode *bool `json:"preferAgentNode,omitempty"`
+}
+
+// PrefersAgentNode reports the effective preferAgentNode (default true).
+func (s SchedulingSpec) PrefersAgentNode() bool { return s.PreferAgentNode == nil || *s.PreferAgentNode }
+
 // GameServerClassSpec is the cluster-side policy for a set of GameServers.
 type GameServerClassSpec struct {
 	Storage         StorageSpec         `json:"storage,omitempty"`
@@ -293,21 +304,31 @@ type GameServerClassSpec struct {
 	Failover        FailoverSpec        `json:"failover,omitempty"`
 	ImageResolution ImageResolutionSpec `json:"imageResolution,omitempty"`
 	Images          ImagesSpec          `json:"images,omitempty"`
+	Scheduling      SchedulingSpec      `json:"scheduling,omitempty"`
 	// ServiceAccountName is the ServiceAccount of game pods.
 	// +kubebuilder:default=pelican-game
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// AgentServiceAccountName is the ServiceAccount of agent pods.
+	// +kubebuilder:default=pelican-agent
+	AgentServiceAccountName string `json:"agentServiceAccountName,omitempty"`
 	// AgentConfigMap names the ConfigMap holding the agent's Wings config.yml.
 	// +kubebuilder:default=pelican-agent-config
 	AgentConfigMap string `json:"agentConfigMap,omitempty"`
-	// SuspendScalesToZero deletes the pod of a suspended server.
+	// SuspendScalesToZero also runs no agent pod for a suspended server.
 	SuspendScalesToZero bool `json:"suspendScalesToZero,omitempty"`
 	// TerminationGracePeriodSeconds must exceed Wings' 10 minute stop wait.
 	// +kubebuilder:default=660
 	TerminationGracePeriodSeconds int64 `json:"terminationGracePeriodSeconds,omitempty"`
-	// NodeSelector, Tolerations and PriorityClassName are applied to game pods.
-	NodeSelector      map[string]string   `json:"nodeSelector,omitempty"`
-	Tolerations       []corev1.Toleration `json:"tolerations,omitempty"`
-	PriorityClassName string              `json:"priorityClassName,omitempty"`
+	// NodeSelector and Tolerations are applied to both pods and install Jobs.
+	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
+	Tolerations  []corev1.Toleration `json:"tolerations,omitempty"`
+	// PriorityClassName is applied to game pods.
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+	// AgentPriorityClassName is applied to agent pods. It should rank above
+	// game pods, so an agent that follows its game pod to a full node can
+	// preempt lower-priority pods there.
+	// +kubebuilder:default=pelican-agent
+	AgentPriorityClassName string `json:"agentPriorityClassName,omitempty"`
 }
 
 // GameServerClass is admin-owned, cluster-scoped policy referenced by GameServer.spec.className.

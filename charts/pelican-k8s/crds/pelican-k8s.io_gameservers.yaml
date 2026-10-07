@@ -39,7 +39,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: 'GameServer is one Panel server: one pod, one PVC, one CR.'
+        description: 'GameServer is one Panel server: one PVC, one agent pod, and
+          one game pod while it is on.'
         properties:
           apiVersion:
             description: |-
@@ -171,8 +172,8 @@ spec:
                       procedure when Desired is Stopped.
                     type: boolean
                   restartRequest:
-                    description: RestartRequest is bumped to force a pod recreate
-                      at the next safe point.
+                    description: RestartRequest is bumped to recreate the agent pod
+                      and the game pod at the next safe point.
                     format: int64
                     minimum: 0
                     type: integer
@@ -186,12 +187,21 @@ spec:
               agent:
                 description: AgentStatus tracks the agent the operator is driving.
                 properties:
+                  node:
+                    description: Node is the node the agent pod runs on.
+                    type: string
                   podUID:
-                    description: PodUID is the pod whose agent the operator last drove.
+                    description: PodUID is the agent pod the operator last drove;
+                      a new UID means "fresh pod".
                     type: string
                   relayedExit:
                     description: RelayedExit identifies the last game container termination
                       forwarded to the agent.
+                    type: string
+                  sftpActiveAt:
+                    description: SftpActiveAt is the last time a relayed SFTP session
+                      moved data (gateway).
+                    format: date-time
                     type: string
                   sftpHostKey:
                     description: SftpHostKey is the agent's SSH host key fingerprint
@@ -204,6 +214,10 @@ spec:
                   syncedRevision:
                     description: SyncedRevision is the spec.panel.panelRevision last
                       synced into the agent.
+                    type: string
+                  templateHash:
+                    description: TemplateHash is the pod template hash of the agent
+                      StatefulSet.
                     type: string
                 type: object
               backups:
@@ -302,6 +316,17 @@ spec:
                   - port
                   type: object
                 type: array
+              game:
+                description: GameStatus tracks the game pod.
+                properties:
+                  node:
+                    description: Node is the node the game pod was scheduled to.
+                    type: string
+                  podUID:
+                    description: PodUID is the game pod the operator last issued start
+                      in; a new UID means "fresh pod".
+                    type: string
+                type: object
               install:
                 description: InstallStatus tracks install generations.
                 properties:
@@ -342,7 +367,8 @@ spec:
                   output.
                 type: string
               podImage:
-                description: PodImage is the digest-pinned image of the current pod.
+                description: PodImage is the digest-pinned image of the current or
+                  last game pod.
                 type: string
               power:
                 description: PowerStatus tracks the operator's power actions.
@@ -405,8 +431,7 @@ spec:
                     type: string
                 type: object
               templateHash:
-                description: TemplateHash is the pod template hash the current StatefulSet
-                  carries.
+                description: TemplateHash is the pod template hash of the game StatefulSet.
                 type: string
               usage:
                 description: UsageStatus is a throttled resource usage summary.

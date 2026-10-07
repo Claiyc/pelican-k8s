@@ -205,10 +205,10 @@ func newRelayEnv(t *testing.T, o relayOpts) *relayEnv {
 		started := true
 		b = b.WithObjects(
 			&corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{Name: names.Pod(srvUUID), Namespace: srvNS},
+				ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(srvUUID), Namespace: srvNS},
 				Status: corev1.PodStatus{
-					PodIP:                 "127.0.0.1",
-					InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
+					PodIP:             "127.0.0.1",
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
 				},
 			},
 			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(srvUUID), Namespace: srvNS}, Data: map[string][]byte{"token_id": []byte("a"), "token": []byte("b")}},

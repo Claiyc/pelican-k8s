@@ -62,6 +62,11 @@ type Input struct {
 	// nodes that own the allocation IP under NodePort (externalTrafficPolicy
 	// Local) and HostPort exposure.
 	NodeNames []string
+	// GameAffinity is the game pod's pod affinity toward the agent pod.
+	GameAffinity GameAffinity
+	// AgentNode, when set, is the only node the agent pod may run on: the
+	// game pod's node.
+	AgentNode string
 }
 
 // UUID returns the server UUID.

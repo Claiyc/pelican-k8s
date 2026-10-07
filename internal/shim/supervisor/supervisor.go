@@ -271,7 +271,7 @@ func (s *Supervisor) setReady(ready bool) {
 		return
 	}
 	if ready {
-		if err := os.WriteFile(s.o.ReadyFile, nil, 0o644); err != nil {
+		if err := os.WriteFile(s.o.ReadyFile, nil, 0o600); err != nil {
 			s.log.Warn("cannot write the readiness file", "path", s.o.ReadyFile, "error", err)
 		}
 		return

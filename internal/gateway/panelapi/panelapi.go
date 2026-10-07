@@ -266,7 +266,9 @@ func (h *Handler) fallbackState(ctx context.Context, gs *v1alpha1.GameServer) ma
 	if state == "" {
 		state = v1alpha1.ProcessOffline
 	}
-	pod, _ := h.Store.Pod(ctx, gs.Spec.Panel.UUID)
+	// Without an agent pod nothing is known about the server; a missing
+	// game pod is the normal state of a stopped server.
+	pod, _ := h.Store.AgentPod(ctx, gs.Spec.Panel.UUID)
 	if pod == nil {
 		state = "missing"
 	}

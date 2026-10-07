@@ -32,17 +32,26 @@ func ShimSecret(uuid string) string { return Prefix + uuid + "-shim" }
 // StatefulSet is the game pod's controller.
 func StatefulSet(uuid string) string { return Prefix + uuid }
 
-// Pod is the single pod of the StatefulSet.
+// Pod is the game pod, the single pod of the game StatefulSet.
 func Pod(uuid string) string { return Prefix + uuid + "-0" }
+
+// AgentStatefulSet is the agent pod's controller.
+func AgentStatefulSet(uuid string) string { return Prefix + uuid + "-agent" }
+
+// AgentPod is the single pod of the agent StatefulSet.
+func AgentPod(uuid string) string { return Prefix + uuid + "-agent-0" }
 
 // ExposureService exposes the game ports.
 func ExposureService(uuid string) string { return Prefix + uuid }
 
-// AgentService is the headless service for the agent.
+// AgentService is the headless service for the agent pod; the shim dials it.
 func AgentService(uuid string) string { return Prefix + uuid + "-agent" }
 
-// NetworkPolicy is the per-server policy.
+// NetworkPolicy is the game pod's policy.
 func NetworkPolicy(uuid string) string { return Prefix + uuid }
+
+// AgentNetworkPolicy is the agent pod's policy.
+func AgentNetworkPolicy(uuid string) string { return Prefix + uuid + "-agent" }
 
 // InstallConfigMap holds the install script of a generation.
 func InstallConfigMap(uuid string, gen int64) string {

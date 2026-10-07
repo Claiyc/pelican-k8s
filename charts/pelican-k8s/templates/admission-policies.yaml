@@ -1,6 +1,6 @@
 {{- if .Values.admissionPolicies.enabled }}
 {{- $ns := include "pelican-k8s.serversNamespace" . }}
-# Game pods must keep the restricted shape (ARCHITECTURE.md 12.2).
+# Agent and game pods must keep the restricted shape (ARCHITECTURE.md 12.2).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -16,7 +16,7 @@ spec:
         resources: [pods]
   matchConditions:
     - name: game-service-accounts
-      expression: "object.spec.serviceAccountName in ['pelican-game', 'pelican-game-hostport']"
+      expression: "object.spec.serviceAccountName in ['pelican-agent', 'pelican-game', 'pelican-game-hostport']"
   variables:
     - name: allContainers
       expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"

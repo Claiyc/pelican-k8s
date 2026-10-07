@@ -239,7 +239,17 @@ func (g *Gateway) diagnostics(ctx context.Context) string {
 		if _, err := g.Agents.Resolve(ctx, gs.Spec.Panel.UUID); err == nil {
 			ready = "yes"
 		}
-		fmt.Fprintf(&b, "  %s phase=%s process=%s desired=%s agent=%s\n", gs.Spec.Panel.UUID, gs.Status.Phase, gs.Status.Process.State, gs.Spec.Power.Desired, ready)
+		game := "none"
+		if pod, err := g.Store.Pod(ctx, gs.Spec.Panel.UUID); err == nil && pod != nil {
+			game = string(pod.Status.Phase)
+			if !pod.DeletionTimestamp.IsZero() {
+				game = "Terminating"
+			}
+			if pod.Spec.NodeName != "" {
+				game += "@" + pod.Spec.NodeName
+			}
+		}
+		fmt.Fprintf(&b, "  %s phase=%s process=%s desired=%s agent=%s game=%s\n", gs.Spec.Panel.UUID, gs.Status.Phase, gs.Status.Process.State, gs.Spec.Power.Desired, ready, game)
 	}
 	return b.String()
 }

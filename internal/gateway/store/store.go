@@ -80,10 +80,19 @@ func (s *Store) Class(ctx context.Context, gs *v1alpha1.GameServer) (*v1alpha1.G
 	return cls, nil
 }
 
-// Pod returns the server pod, or nil.
+// Pod returns the game pod of a server, or nil.
 func (s *Store) Pod(ctx context.Context, uuid string) (*corev1.Pod, error) {
+	return s.pod(ctx, names.Pod(uuid))
+}
+
+// AgentPod returns the agent pod of a server, or nil.
+func (s *Store) AgentPod(ctx context.Context, uuid string) (*corev1.Pod, error) {
+	return s.pod(ctx, names.AgentPod(uuid))
+}
+
+func (s *Store) pod(ctx context.Context, name string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{}
-	err := s.Client.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: names.Pod(uuid)}, pod)
+	err := s.Client.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: name}, pod)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -214,12 +223,12 @@ func (s *Store) ClassSpec(ctx context.Context, gs *v1alpha1.GameServer) v1alpha1
 	return cls.Spec
 }
 
-// PodAgentReady reports whether the agent container of the server pod is up and returns the pod IP.
+// PodAgentReady reports whether the agent container of the agent pod is up and returns the pod IP.
 func PodAgentReady(pod *corev1.Pod) (bool, string) {
 	if pod == nil || pod.Status.PodIP == "" || !pod.DeletionTimestamp.IsZero() {
 		return false, ""
 	}
-	for _, cs := range pod.Status.InitContainerStatuses {
+	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == render.AgentContainer {
 			return cs.Started != nil && *cs.Started, pod.Status.PodIP
 		}

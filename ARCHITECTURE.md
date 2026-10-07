@@ -855,7 +855,6 @@ spec:
       lifecycle: {preStop: {httpGet: {path: /internal/v1/prestop, port: agent}}}
       env:
         - {name: PELICAN_SERVER_UUID, value: <uuid>}
-        - {name: PELICAN_POD_IMAGE, value: <game image>}
         - {name: WINGS_TOKEN_ID, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token_id}}}
         - {name: WINGS_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token}}}
         - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}

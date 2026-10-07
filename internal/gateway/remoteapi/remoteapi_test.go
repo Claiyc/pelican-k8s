@@ -15,8 +15,10 @@ import (
 
 	"github.com/pelican/wings/remote"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -137,11 +139,11 @@ func (f *fixture) addPod(ip string) {
 	f.t.Helper()
 	ctx := context.Background()
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
-	pod.Status = corev1.PodStatus{PodIP: ip, InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
+	pod.Status = corev1.PodStatus{PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
 	if err := f.c.Status().Update(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
@@ -480,31 +482,52 @@ func waitFor(t *testing.T, cond func() bool) {
 }
 
 func TestContainerStatusIntentionalStop(t *testing.T) {
+	body := `{"data":{"previous_state":"stopping","new_state":"offline"}}`
+	stop := func(f *fixture) v1alpha1.PowerState {
+		f.t.Helper()
+		if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
+			f.t.Fatalf("code = %d", code)
+		}
+		return f.gs().Spec.Power.Desired
+	}
+	ctx := context.Background()
+
 	f := newFixture(t, options{})
 	f.withServer(false)
-	ctx := context.Background()
 	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
-	body := `{"data":{"previous_state":"stopping","new_state":"offline"}}`
-	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
-		t.Fatalf("code = %d", code)
-	}
-	if f.gs().Spec.Power.Desired != v1alpha1.PowerStopped {
+	if stop(f) != v1alpha1.PowerStopped {
 		t.Fatal("stopping -> offline must record an intentional stop")
 	}
 
-	// While the pod is terminating (eviction) the stop is not intentional.
-	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
-	pod, _ := f.st.Pod(ctx, uuid)
-	pod.Finalizers = []string{"test/keep"}
-	if err := f.c.Update(ctx, pod); err != nil {
-		t.Fatal(err)
+	// A stop the operator issued for a pending power generation (a restart
+	// into a new game pod) is not the user's.
+	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running", "generation": 2}})
+	if stop(f) != v1alpha1.PowerRunning {
+		t.Fatal("a stop for a pending power generation must not change the desired state")
 	}
-	if err := f.c.Delete(ctx, pod); err != nil {
-		t.Fatal(err)
-	}
-	f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer)
-	if f.gs().Spec.Power.Desired != v1alpha1.PowerRunning {
-		t.Fatal("a stop during pod termination must not change the desired state")
+
+	// While either pod is terminating (eviction, drain) the stop is not intentional.
+	for _, name := range []string{names.AgentPod(uuid), names.Pod(uuid)} {
+		f := newFixture(t, options{})
+		f.withServer(false)
+		_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+		pod := &corev1.Pod{}
+		if err := f.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, pod); apierrors.IsNotFound(err) {
+			pod = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+			if err := f.c.Create(ctx, pod); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pod.Finalizers = []string{"test/keep"}
+		if err := f.c.Update(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if stop(f) != v1alpha1.PowerRunning {
+			t.Fatalf("a stop while %s terminates must not change the desired state", name)
+		}
 	}
 }
 
@@ -516,7 +539,7 @@ func TestContainerStatusBadBodyAndNoPod(t *testing.T) {
 	}
 	// Without a pod the stop is still intentional.
 	ctx := context.Background()
-	pod, _ := f.st.Pod(ctx, uuid)
+	pod, _ := f.st.AgentPod(ctx, uuid)
 	_ = f.c.Delete(ctx, pod)
 	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
 	f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer)
@@ -530,7 +553,7 @@ func TestRecordUsageIgnoresAgentProblems(t *testing.T) {
 	f.withServer(false)
 	// No usable agent: unready pod.
 	ctx := context.Background()
-	pod, _ := f.st.Pod(ctx, uuid)
+	pod, _ := f.st.AgentPod(ctx, uuid)
 	pod.Status.PodIP = ""
 	_ = f.c.Status().Update(ctx, pod)
 	f.h.recordUsage(ctx, uuid)
