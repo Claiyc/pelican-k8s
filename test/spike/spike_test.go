@@ -323,7 +323,8 @@ func call(t *testing.T, base, method, path string, body any) (int, string) {
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(res.Body)
-	if ua := res.Header.Get("User-Agent"); !strings.HasPrefix(ua, "Pelican Wings/v") {
+	// Wings' router sets the header; /internal/v1/* is the agent's own mux.
+	if ua := res.Header.Get("User-Agent"); strings.HasPrefix(path, "/api/") && !strings.HasPrefix(ua, "Pelican Wings/v") {
 		t.Fatalf("missing Wings User-Agent header on %s %s: %q", method, path, ua)
 	}
 	return res.StatusCode, string(b)
