@@ -178,16 +178,13 @@ func Run(ctx context.Context, o Options) error {
 			s.CtxCancel()
 		}
 	}()
-	ln, err := net.Listen("tcp", srv.Addr)
+	ln, err := listen(srv)
 	if err != nil {
 		return err
 	}
 	logger.Info("agent listening", "addr", ln.Addr().String(), "sftp", cfg.System.Sftp.Port, "tls", srv.TLSConfig != nil)
 	if o.Ready != nil {
 		close(o.Ready)
-	}
-	if srv.TLSConfig != nil {
-		ln = tls.NewListener(ln, srv.TLSConfig)
 	}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -231,4 +228,13 @@ func (c *agentCerts) secureHTTP(srv *http.Server) {
 	}
 	srv.TLSConfig = c.dir.ServerConfig(true)
 	srv.Handler = routes.RequireClientCert(srv.Handler)
+}
+
+// listen opens the HTTP listener, with TLS when the server has a configuration.
+func listen(srv *http.Server) (net.Listener, error) {
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil || srv.TLSConfig == nil {
+		return ln, err
+	}
+	return tls.NewListener(ln, srv.TLSConfig), nil
 }
