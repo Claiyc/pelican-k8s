@@ -78,10 +78,11 @@ type Resolver struct {
 	HTTPWait time.Duration
 	Poll     time.Duration
 
-	// tls, when set, is the client configuration toward agents: their
+	// tls, when set, returns the client configuration toward agents: their
 	// certificates are verified against the internal CA and the gateway
-	// presents its own (ARCHITECTURE.md 12.5).
-	tls *tls.Config
+	// presents its own (ARCHITECTURE.md 12.5). It is called per connection
+	// so a renewed CA bundle is picked up.
+	tls func() *tls.Config
 
 	cacheMu sync.Mutex
 	cache   map[string]cachedState
@@ -111,16 +112,18 @@ func NewResolver(s *store.Store, ttl time.Duration) *Resolver {
 	}
 }
 
-// EnableTLS makes every call to an agent HTTPS with the client configuration
-// c. Call it before the resolver is used.
-func (r *Resolver) EnableTLS(c *tls.Config) {
-	r.tls = c
-	r.Transport.TLSClientConfig = c
+// EnableTLS makes every call to an agent HTTPS with the client
+// configuration that config returns for each connection. Call it before the
+// resolver is used.
+func (r *Resolver) EnableTLS(config func() *tls.Config) {
+	r.tls = config
 	r.Transport.DialContext = pki.AgentDialer(r.Transport.DialContext)
+	r.Transport.DialTLSContext = pki.TLSDialer(r.Transport.DialContext, config)
 }
 
-// TLSConfig returns the client configuration toward agents, nil without TLS.
-func (r *Resolver) TLSConfig() *tls.Config { return r.tls }
+// TLSConfig returns the per-connection client configuration toward agents,
+// nil without TLS.
+func (r *Resolver) TLSConfig() func() *tls.Config { return r.tls }
 
 // Resolve returns the agent target of a server, or ErrUnavailable.
 func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {

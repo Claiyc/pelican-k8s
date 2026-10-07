@@ -58,6 +58,15 @@ pods with the namespace UID range, `anyuid` for the installer).
   gateway's remote API, and the shim to the agent (around the shim-token
   handshake). SFTP between the gateway and the agent is SSH either way.
   Certificates are renewed by the operator and reloaded without restarts.
+  `tls.ca.rotation.enabled` (default `false`) also replaces the CA before it
+  expires, trusting the new one everywhere before it signs, so nothing
+  restarts. `tls.certManager.enabled` (default `false`) has cert-manager issue
+  every certificate instead, from `tls.certManager.issuerRef` (a ClusterIssuer)
+  or a self-signed CA the chart creates; use an issuer dedicated to
+  pelican-k8s, since agents accept any client certificate it signs for the
+  names `pelican-gateway` and `pelican-operator`. cert-manager renewing that
+  CA with a new key breaks trust until every leaf renews, so give it a long
+  lifetime or distribute its bundle separately (trust-manager).
   Turning the value on or off recreates every agent pod and, through
   `RecreatePending`, running game pods. Details, names and rotation:
   ARCHITECTURE.md §12.6.

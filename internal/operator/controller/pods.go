@@ -612,7 +612,7 @@ func (r *GameServerReconciler) newAgent(base, token string) AgentAPI {
 // agentBase returns the base URL of the agent at pod address ip: plain HTTP
 // to the address, or HTTPS to a name its certificate carries.
 func (r *GameServerReconciler) agentBase(ip, uuid, namespace string) string {
-	if r.PKI != nil {
+	if r.tls() {
 		return "https://" + net.JoinHostPort(pki.AgentHost(ip, uuid, namespace), strconv.Itoa(render.AgentPort))
 	}
 	return "http://" + net.JoinHostPort(ip, strconv.Itoa(render.AgentPort))

@@ -107,10 +107,16 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims, services, events]
     verbs: [get, list, watch, create, update, patch, delete]
-  # update: agent certificates are renewed in place.
+  # update: agent certificates are renewed in place. delete: cert-manager
+  # leaves a deleted server's certificate Secret behind.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch, create, update]
+    verbs: [get, list, watch, create, update{{ if and .Values.tls.enabled .Values.tls.certManager.enabled }}, delete{{ end }}]
+  {{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, create, update, delete]
+  {{- end }}
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
@@ -174,7 +180,7 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
-  {{- if .Values.tls.enabled }}
+  {{- if and .Values.tls.enabled (not .Values.tls.certManager.enabled) }}
   # The internal CA and the gateway's certificate.
   - apiGroups: [""]
     resources: [secrets]

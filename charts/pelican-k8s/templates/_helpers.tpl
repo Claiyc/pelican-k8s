@@ -61,6 +61,24 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- printf "%s-tls" (include "pelican-k8s.gatewayName" .) -}}
 {{- end -}}
 
+{{- define "pelican-k8s.operatorTLSSecretName" -}}
+{{- printf "%s-tls" (include "pelican-k8s.operatorName" .) -}}
+{{- end -}}
+
+{{/* The cert-manager issuer of every certificate: the configured one, or the chart's own CA. */}}
+{{- define "pelican-k8s.certManagerIssuer" -}}
+{{- $ref := .Values.tls.certManager.issuerRef | default dict -}}
+{{- if $ref.name -}}
+name: {{ $ref.name }}
+kind: {{ $ref.kind | default "ClusterIssuer" }}
+group: {{ $ref.group | default "cert-manager.io" }}
+{{- else -}}
+name: {{ include "pelican-k8s.caSecretName" . }}
+kind: ClusterIssuer
+group: cert-manager.io
+{{- end -}}
+{{- end -}}
+
 {{/* DNS names on the gateway's certificate: its Service, and the host of a custom remoteURL. */}}
 {{- define "pelican-k8s.gatewayTLSNames" -}}
 {{- $gw := include "pelican-k8s.gatewayName" . -}}

@@ -1547,19 +1547,45 @@ and the agent is SSH and needs none of it.
   The gateway gets Secret `<release>-gateway-tls` (server and client authentication) for its Service
   names and the host of `gateway.remoteURL`, written by the leader. The operator signs its own client
   certificate in memory. Leaves last 90 days and are reissued when 30 days remain, when the names change
-  or when the CA changes; the reconcile and an hourly check on the leader do it.
+  or when the CA changes; the reconcile and a check every ten minutes on the leader do it. Each leaf
+  Secret's `ca.crt` is the trust bundle, the CA Secret's `ca.crt`.
 - **Reaching a pod by name.** The gateway and the operator connect to the agent pod's address, not
   through the Service, and verify the name `<pod address with dashes>.gs-<uuid>-agent.<ns>.svc`, which
   the wildcard covers; their dialer turns that name back into the address. A certificate of one server
   never passes for another, and connection pools never share a connection between two servers.
-- **Client certificates.** The agent asks for a client certificate and checks it against the CA; every
-  request without a verified one is refused with 403, except kubelet's `/internal/v1/healthz` probes
-  and `/internal/v1/prestop` hook, which use `scheme: HTTPS` without one. Only the gateway and the
-  operator hold client certificates, so a leaked agent token alone no longer reaches an agent.
-- **Rotation.** The agent and the gateway read their certificate files again at most every 30 s and
-  switch to a renewed pair without a restart; Kubernetes updates mounted Secrets within about a minute.
-  The shim reads the CA bundle on every connection. The CA itself is not rotated automatically: delete
-  `<release>-ca`, restart the operator, then the gateway, and delete the agent pods.
+- **Client certificates.** The agent asks for a client certificate and checks it against its bundle and
+  for the common name `pelican-gateway` or `pelican-operator`; every request without such a one is
+  refused with 403, except kubelet's `/internal/v1/healthz` probes and `/internal/v1/prestop` hook,
+  which use `scheme: HTTPS` without one. Only the gateway and the operator hold client certificates, so
+  a leaked agent token alone no longer reaches an agent.
+- **Renewal.** The agent and the gateway read their certificate files and their bundle again at most
+  every 30 s and switch to a renewed pair or bundle without a restart; Kubernetes updates mounted
+  Secrets within about a minute. Clients take the bundle per connection, and the shim reads it on every
+  connection.
+- **CA rotation.** With `tls.ca.rotation.enabled` (default `false`) the leader replaces the CA once it
+  enters the last third of its lifetime (`tls.ca.lifetime`, ten years by default) in three steps, each
+  recorded on the CA Secret (`pelican-k8s.io/ca-rotation`, `-since`) and each waiting
+  `tls.ca.rotation.overlap` (one hour) for mounted Secrets to reach every pod:
+  1. `next`: a new CA is stored as `next.crt`/`next.key` and added to the bundle of the CA Secret and
+     of every leaf Secret. The old CA still signs.
+  2. `promoted`, once every leaf Secret carries that bundle: the new CA signs; every leaf, and the
+     operator's own certificate, is reissued from it. Both CAs stay trusted.
+  3. Done, once every leaf is signed by the new CA: the old CA leaves the bundle.
+
+  At every moment each peer trusts the CA of every certificate it can be shown, and no pod restarts.
+  Without rotation, replacing the CA by hand means deleting `<release>-ca`, restarting the operator,
+  then the gateway, and deleting the agent pods.
+- **cert-manager.** With `tls.certManager.enabled` (default `false`) cert-manager issues every
+  certificate instead and the operator keeps no CA. The issuer is `tls.certManager.issuerRef`, or a
+  self-signed CA the chart creates in `tls.certManager.caNamespace` with a ClusterIssuer `<release>-ca`.
+  The chart writes Certificates for the gateway (`<release>-gateway-tls`) and the operator
+  (`<release>-operator-tls`, mounted at `/etc/pelican-tls`); the operator writes one per agent
+  (`gs-<uuid>-tls`, owned by the GameServer, ECDSA P-256, 90 days, renewed 30 days ahead, new key on
+  every renewal) and deletes it and its Secret with the server. Each Secret's `ca.crt` is the issuer's
+  CA. The issuer must sign in both namespaces, so it is a ClusterIssuer. The internal CA's rotation does
+  not apply: when cert-manager renews the issuing CA with a new key, leaves issued before carry the old
+  `ca.crt` until they renew, so a CA that rotates needs its bundle distributed separately (for example
+  with trust-manager) or a lifetime longer than the cluster's.
 - **Switching it.** Turning `tls.enabled` on or off changes both pod templates, so every agent pod is
   recreated and running game pods follow through `RecreatePending` (§7.6); the gateway restarts with
   the chart. The gateway's pod waits for its certificate Secret, which the operator writes when it

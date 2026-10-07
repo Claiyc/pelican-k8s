@@ -19,6 +19,7 @@ import (
 	"github.com/pelican/wings/server"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/version"
 )
 
@@ -222,15 +223,25 @@ func prestop(w http.ResponseWriter, r *http.Request, m *server.Manager, reg *shi
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "waited": true})
 }
 
-// RequireClientCert rejects requests without a verified client certificate,
-// except the ones kubelet makes (HealthzPath, PreStopPath). The gateway and
-// the operator present one; the bearer token is still checked behind it.
+// RequireClientCert rejects requests without a verified client certificate
+// of the gateway or the operator, except the ones kubelet makes (HealthzPath,
+// PreStopPath). The name check matters with a shared cert-manager issuer,
+// whose other certificates the agent's bundle also verifies. The bearer
+// token is still checked behind it.
 func RequireClientCert(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == HealthzPath || r.URL.Path == PreStopPath || (r.TLS != nil && len(r.TLS.VerifiedChains) > 0) {
+		if r.URL.Path == HealthzPath || r.URL.Path == PreStopPath || trustedClient(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "a client certificate is required"})
 	})
+}
+
+func trustedClient(r *http.Request) bool {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+		return false
+	}
+	cn := r.TLS.VerifiedChains[0][0].Subject.CommonName
+	return cn == pki.GatewayName || cn == pki.OperatorName
 }

@@ -38,9 +38,20 @@ spec:
             - --health-probe-bind-address=:8081
             {{- if .Values.tls.enabled }}
             - --tls
+            {{- if .Values.tls.certManager.enabled }}
+            {{- $issuer := include "pelican-k8s.certManagerIssuer" . | fromYaml }}
+            - --tls-cert-manager-issuer={{ $issuer.name }}
+            - --tls-cert-manager-issuer-kind={{ $issuer.kind }}
+            - --tls-cert-manager-issuer-group={{ $issuer.group }}
+            - --tls-dir=/etc/pelican-tls
+            {{- else }}
             - --tls-ca-secret={{ include "pelican-k8s.caSecretName" . }}
             - --tls-gateway-secret={{ include "pelican-k8s.gatewayTLSSecretName" . }}
             - --tls-gateway-names={{ include "pelican-k8s.gatewayTLSNames" . }}
+            - --tls-ca-lifetime={{ .Values.tls.ca.lifetime }}
+            - --tls-ca-rotation={{ .Values.tls.ca.rotation.enabled }}
+            - --tls-ca-rotation-overlap={{ .Values.tls.ca.rotation.overlap }}
+            {{- end }}
             {{- end }}
             {{- if eq .Values.operator.logLevel "debug" }}
             - --zap-log-level=debug
@@ -66,3 +77,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources: {{- toYaml .Values.operator.resources | nindent 12 }}
+          {{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/pelican-tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "pelican-k8s.operatorTLSSecretName" . }}
+          {{- end }}

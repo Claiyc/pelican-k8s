@@ -55,6 +55,11 @@ them yourself: `kubectl apply -f charts/pelican-k8s/crds`.
 | `operator.concurrency` | `4` | Max concurrent reconciles |
 | `operator.leaderElect` | `true` | Leader election |
 | `tls.enabled` | `false` | TLS between gateway, operator, agents and shims from an internal CA the operator keeps (Secret `<release>-ca`); switching it recreates every agent pod and running game pods |
+| `tls.ca.lifetime` | `87600h` | Lifetime of the internal CA the operator creates |
+| `tls.ca.rotation.enabled` / `.overlap` | `false` / `1h` | Replace the internal CA automatically in its last third of life; each step waits `overlap` for Secrets to reach every pod |
+| `tls.certManager.enabled` | `false` | Issue every certificate through cert-manager instead of the internal CA (needs cert-manager) |
+| `tls.certManager.issuerRef` | `{}` | The issuer, e.g. `{name: corp-ca, kind: ClusterIssuer}`; empty creates a self-signed CA and ClusterIssuer `<release>-ca` |
+| `tls.certManager.caNamespace` / `.caDuration` | `cert-manager` / `87600h` | Namespace and lifetime of the chart-created CA (cert-manager's cluster resource namespace) |
 | `agent.*` | see values | Rendered into the agent's Wings `config.yml` (crash detection, SFTP read-only, log count, upload limit, timezone); `agent.extra` is merged verbatim |
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `agentPriorityClass.create` / `.name` / `.value` | `true` / `pelican-agent` / `1000` | PriorityClass of agent pods (class `agentPriorityClassName`); must rank above game pods |

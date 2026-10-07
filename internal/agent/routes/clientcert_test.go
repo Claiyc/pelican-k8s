@@ -3,14 +3,19 @@ package routes
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 func TestRequireClientCert(t *testing.T) {
 	h := RequireClientCert(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
-	verified := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+	chain := func(cn string) *tls.ConnectionState {
+		return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{Subject: pkix.Name{CommonName: cn}}}}}
+	}
 	cases := []struct {
 		name  string
 		path  string
@@ -22,7 +27,9 @@ func TestRequireClientCert(t *testing.T) {
 		{"api without a certificate", "/api/servers/x", &tls.ConnectionState{}, http.StatusForbidden},
 		{"internal without a certificate", "/internal/v1/shim", &tls.ConnectionState{}, http.StatusForbidden},
 		{"plain HTTP", "/api/servers/x", nil, http.StatusForbidden},
-		{"api with a verified certificate", "/api/servers/x", verified, http.StatusTeapot},
+		{"api with the gateway's certificate", "/api/servers/x", chain(pki.GatewayName), http.StatusTeapot},
+		{"api with the operator's certificate", "/api/servers/x", chain(pki.OperatorName), http.StatusTeapot},
+		{"api with another certificate of the issuer", "/api/servers/x", chain("gs-other-agent"), http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)

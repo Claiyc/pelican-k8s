@@ -87,7 +87,7 @@ func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.
 		if certs, err = pki.LoadDir(cfg.TLSDir); err != nil {
 			return nil, fmt.Errorf("tls: %w", err)
 		}
-		res.EnableTLS(certs.ClientConfig())
+		res.EnableTLS(certs.ClientConfig)
 	}
 	sync := &serversync.Syncer{Store: st, Panel: p, Timezone: cfg.Timezone, Log: logger.With("component", "sync")}
 	sessions := sftprelay.NewSessions(cfg.NodeToken)

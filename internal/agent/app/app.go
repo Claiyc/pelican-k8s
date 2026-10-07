@@ -206,7 +206,7 @@ func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
 		return nil, nil, fmt.Errorf("tls: %w", err)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = d.ClientConfig()
+	t.DialTLSContext = pki.TLSDialer(t.DialContext, d.ClientConfig)
 	return &agentCerts{dir: d}, t, nil
 }
 

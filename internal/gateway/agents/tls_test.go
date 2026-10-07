@@ -48,7 +48,10 @@ func TestTLS(t *testing.T) {
 		dialed = append(dialed, a)
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
-	r.EnableTLS(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: ca.Pool(), Certificates: []tls.Certificate{pair(pki.GatewayName, nil, pki.Client)}})
+	gw := pair(pki.GatewayName, nil, pki.Client)
+	r.EnableTLS(func() *tls.Config {
+		return &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: ca.Pool(), Certificates: []tls.Certificate{gw}}
+	})
 	if r.TLSConfig() == nil {
 		t.Fatal("TLSConfig nil after EnableTLS")
 	}

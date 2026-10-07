@@ -63,8 +63,14 @@ type CA struct {
 	CertPEM []byte
 }
 
-// NewCA creates a self-signed CA and returns it with its PEM key.
+// NewCA creates a self-signed CA valid for CALifetime and returns it with
+// its PEM key.
 func NewCA(now time.Time) (*CA, []byte, error) {
+	return NewCAFor(now, CALifetime)
+}
+
+// NewCAFor creates a self-signed CA valid for lifetime.
+func NewCAFor(now time.Time, lifetime time.Duration) (*CA, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
@@ -77,7 +83,7 @@ func NewCA(now time.Time) (*CA, []byte, error) {
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "pelican-k8s internal CA"},
 		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(CALifetime),
+		NotAfter:              now.Add(lifetime),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -117,6 +123,13 @@ func ParseCA(certPEM, keyPEM []byte) (*CA, error) {
 		return nil, errors.New("CA key cannot sign")
 	}
 	return &CA{Cert: cert, Key: signer, CertPEM: certPEM}, nil
+}
+
+// NeedsRotation reports whether the CA has entered the last third of its
+// lifetime, when automatic rotation replaces it (ARCHITECTURE.md 12.6).
+func (ca *CA) NeedsRotation(now time.Time) bool {
+	life := ca.Cert.NotAfter.Sub(ca.Cert.NotBefore)
+	return now.Add(life / 3).After(ca.Cert.NotAfter)
 }
 
 // Pool returns a pool holding the CA certificate.

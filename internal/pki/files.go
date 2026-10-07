@@ -2,10 +2,12 @@ package pki
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -94,6 +96,10 @@ func LoadPool(path string) (*x509.CertPool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return poolFromPEM(path, b)
+}
+
+func poolFromPEM(path string, b []byte) (*x509.CertPool, error) {
 	p := x509.NewCertPool()
 	if !p.AppendCertsFromPEM(b) {
 		return nil, errors.New(path + ": no PEM certificate")
@@ -101,10 +107,58 @@ func LoadPool(path string) (*x509.CertPool, error) {
 	return p, nil
 }
 
+// Roots serves a CA bundle from a file and picks up a changed bundle the way
+// KeyPair does, so a CA rotation (ARCHITECTURE.md 12.6) reaches a running
+// process: the bundle holds the old and the new CA while certificates move
+// from one to the other.
+type Roots struct {
+	path string
+	now  func() time.Time
+
+	mu      sync.Mutex
+	pool    *x509.CertPool
+	pem     []byte
+	checked time.Time
+}
+
+// LoadRoots loads the CA bundle at path.
+func LoadRoots(path string) (*Roots, error) {
+	r := &Roots{path: filepath.Clean(path), now: time.Now}
+	b, err := os.ReadFile(r.path)
+	if err != nil {
+		return nil, err
+	}
+	if r.pool, err = poolFromPEM(path, b); err != nil {
+		return nil, err
+	}
+	r.pem, r.checked = b, r.now()
+	return r, nil
+}
+
+// Pool returns the current bundle, reloading it when due. A bundle that
+// fails to load leaves the previous one in use.
+func (r *Roots) Pool() *x509.CertPool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	if now.Sub(r.checked) < reloadEvery {
+		return r.pool
+	}
+	r.checked = now
+	b, err := os.ReadFile(r.path)
+	if err != nil || bytes.Equal(b, r.pem) {
+		return r.pool
+	}
+	if p, err := poolFromPEM(r.path, b); err == nil {
+		r.pool, r.pem = p, b
+	}
+	return r.pool
+}
+
 // Dir is a mounted certificate directory: a key pair and the CA bundle.
 type Dir struct {
 	KeyPair *KeyPair
-	Roots   *x509.CertPool
+	Roots   *Roots
 }
 
 // LoadDir loads a certificate directory (CertFile, KeyFile, CAFile).
@@ -113,7 +167,7 @@ func LoadDir(dir string) (*Dir, error) {
 	if err != nil {
 		return nil, err
 	}
-	roots, err := LoadPool(filepath.Join(dir, CAFile))
+	roots, err := LoadRoots(filepath.Join(dir, CAFile))
 	if err != nil {
 		return nil, err
 	}
@@ -121,20 +175,59 @@ func LoadDir(dir string) (*Dir, error) {
 }
 
 // ServerConfig returns the TLS configuration of a listener that presents
-// the directory's certificate. With clientCAs set it asks for a client
-// certificate and verifies one when given. The server enforces it per
-// request, so that kubelet probes, which present none, still get through.
+// the directory's certificate. With verifyClients it asks for a client
+// certificate and verifies one when given against the current bundle. The
+// server enforces it per request, so that kubelet probes, which present
+// none, still get through.
 func (d *Dir) ServerConfig(verifyClients bool) *tls.Config {
 	c := &tls.Config{MinVersion: tls.VersionTLS13, GetCertificate: d.KeyPair.GetCertificate}
-	if verifyClients {
-		c.ClientAuth = tls.VerifyClientCertIfGiven
-		c.ClientCAs = d.Roots
+	if !verifyClients {
+		return c
+	}
+	c.ClientAuth = tls.VerifyClientCertIfGiven
+	base := c.Clone()
+	c.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		cc := base.Clone()
+		cc.ClientCAs = d.Roots.Pool()
+		return cc, nil
 	}
 	return c
 }
 
 // ClientConfig returns the TLS configuration of a client that trusts the
-// directory's CA and presents the directory's certificate.
+// directory's current bundle and presents the directory's certificate. The
+// bundle is the one of the moment: a long-lived client dials through
+// TLSDialer(dial, d.ClientConfig) to follow it.
 func (d *Dir) ClientConfig() *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: d.Roots, GetClientCertificate: d.KeyPair.GetClientCertificate}
+	return &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: d.Roots.Pool(), GetClientCertificate: d.KeyPair.GetClientCertificate}
+}
+
+// DialFunc is the signature of net.Dialer.DialContext.
+type DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// TLSDialer returns a DialTLSContext for http.Transport (or a websocket
+// dialer) that connects with dial and completes the handshake with a fresh
+// config(), named after the address's host. Taking the configuration per
+// connection is what lets a client follow a renewed CA bundle.
+func TLSDialer(dial DialFunc, config func() *tls.Config) DialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		c := config().Clone()
+		if c.ServerName == "" {
+			c.ServerName = host
+		}
+		conn := tls.Client(raw, c)
+		if err := conn.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
 }

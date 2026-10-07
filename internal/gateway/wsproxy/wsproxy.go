@@ -119,12 +119,11 @@ func (p *Proxy) dial(uuid string, t *agents.Target) (*websocket.Conn, error) {
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
 	if c := p.Agents.TLSConfig(); c != nil {
-		dialer.TLSClientConfig = c
 		dial := p.netDial
 		if dial == nil {
 			dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
 		}
-		dialer.NetDialContext = pki.AgentDialer(dial)
+		dialer.NetDialTLSContext = pki.TLSDialer(pki.AgentDialer(dial), c)
 	}
 	agent, resp, err := dialer.Dial(t.WSBase()+"/api/servers/"+uuid+"/ws", header)
 	if resp != nil {

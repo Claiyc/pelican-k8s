@@ -334,7 +334,10 @@ func TestMutualTLS(t *testing.T) {
 		return string(b), err
 	}
 
-	issuer := &Issuer{CA: ca, ClientName: OperatorName}
+	issuer, err := NewIssuer(ca, nil, OperatorName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, tc := range map[string]struct {
 		cfg  *tls.Config
 		want string
@@ -379,7 +382,11 @@ func TestMutualTLS(t *testing.T) {
 func TestIssuerRenews(t *testing.T) {
 	ca, _ := newCA(t)
 	now := t0
-	i := &Issuer{CA: ca, ClientName: OperatorName, Now: func() time.Time { return now }}
+	i, err := NewIssuer(ca, nil, OperatorName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.Now = func() time.Time { return now }
 	first, err := i.GetClientCertificate(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -397,5 +404,207 @@ func TestIssuerRenews(t *testing.T) {
 	}
 	if !slices.Equal(renewed.Leaf.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}) {
 		t.Errorf("usage %v", renewed.Leaf.ExtKeyUsage)
+	}
+}
+
+// writeLeaf writes a certificate from ca and the bundle trust into dir.
+func writeLeaf(t *testing.T, dir string, ca *CA, cn string, dns []string, usage Usage, trust []byte) {
+	t.Helper()
+	certPEM, keyPEM, err := ca.Issue(cn, dns, usage, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{CertFile: certPEM, KeyFile: keyPEM, CAFile: trust} {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRotationOverTLS moves a running server and client from one CA to
+// another the way a CA rotation does, without restarting either: both
+// follow their files, and each step keeps the connection working.
+func TestRotationOverTLS(t *testing.T) {
+	oldCA, _ := newCA(t)
+	nextCA, _ := newCA(t)
+	both := append(append([]byte{}, oldCA.CertPEM...), nextCA.CertPEM...)
+	agentDir, gatewayDir := t.TempDir(), t.TempDir()
+	agentNames := AgentDNSNames(testUUID, testNS)
+	writeLeaf(t, agentDir, oldCA, "agent", agentNames, Server, oldCA.CertPEM)
+	writeLeaf(t, gatewayDir, oldCA, GatewayName, nil, Client, oldCA.CertPEM)
+	agent, err := LoadDir(agentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := LoadDir(gatewayDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, d := range []*Dir{agent, gateway} {
+		d.KeyPair.now = func() time.Time { return now }
+		d.Roots.now = func() time.Time { return now }
+	}
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TLS.VerifiedChains) == 0 {
+			http.Error(w, "no client certificate", http.StatusForbidden)
+		}
+	}))
+	srv.TLS = agent.ServerConfig(true)
+	srv.StartTLS()
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+	dial := AgentDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	})
+	tr := &http.Transport{DialContext: dial, DialTLSContext: TLSDialer(dial, gateway.ClientConfig), DisableKeepAlives: true}
+	get := func() error {
+		res, err := (&http.Client{Transport: tr}).Get("https://" + AgentHost("10.0.0.5", testUUID, testNS) + ":8080/")
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return errors.New(res.Status)
+		}
+		return nil
+	}
+	step := func(name string, write func()) {
+		t.Helper()
+		write()
+		now = now.Add(reloadEvery)
+		if err := get(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if err := get(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the next CA in the agent's bundle, a client certificate from
+	// it is refused: the bundle is what the rotation waits for.
+	writeLeaf(t, gatewayDir, nextCA, GatewayName, nil, Client, both)
+	now = now.Add(reloadEvery)
+	if err := get(); err == nil {
+		t.Fatal("client certificate of an untrusted CA accepted")
+	}
+	writeLeaf(t, gatewayDir, oldCA, GatewayName, nil, Client, oldCA.CertPEM)
+
+	step("next CA trusted", func() {
+		writeLeaf(t, agentDir, oldCA, "agent", agentNames, Server, both)
+		writeLeaf(t, gatewayDir, oldCA, GatewayName, nil, Client, both)
+	})
+	step("gateway moved first", func() { writeLeaf(t, gatewayDir, nextCA, GatewayName, nil, Client, both) })
+	step("agent moved", func() { writeLeaf(t, agentDir, nextCA, "agent", agentNames, Server, both) })
+	step("old CA dropped", func() {
+		writeLeaf(t, agentDir, nextCA, "agent", agentNames, Server, nextCA.CertPEM)
+		writeLeaf(t, gatewayDir, nextCA, GatewayName, nil, Client, nextCA.CertPEM)
+	})
+}
+
+func TestRootsKeepLastGoodBundle(t *testing.T) {
+	ca, _ := newCA(t)
+	path := filepath.Join(t.TempDir(), CAFile)
+	if err := os.WriteFile(path, ca.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LoadRoots(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	r.now = func() time.Time { return now }
+	first := r.Pool()
+	if err := os.WriteFile(path, []byte("not pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(reloadEvery)
+	if r.Pool() != first {
+		t.Error("broken bundle replaced the working one")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(reloadEvery)
+	if r.Pool() != first {
+		t.Error("missing bundle replaced the working one")
+	}
+	if _, err := LoadRoots(path); err == nil {
+		t.Error("LoadRoots of a missing file: want error")
+	}
+}
+
+func TestTLSDialerErrors(t *testing.T) {
+	cfg := func() *tls.Config { return &tls.Config{MinVersion: tls.VersionTLS13} }
+	boom := errors.New("boom")
+	d := TLSDialer(func(context.Context, string, string) (net.Conn, error) { return nil, boom }, cfg)
+	if _, err := d(context.Background(), "tcp", "no-port"); err == nil {
+		t.Error("address without a port: want error")
+	}
+	if _, err := d(context.Background(), "tcp", "host:1"); !errors.Is(err, boom) {
+		t.Errorf("dial error: %v", err)
+	}
+	// A server that does not speak TLS fails the handshake.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			_ = c.Close()
+		}
+	}()
+	plain := TLSDialer((&net.Dialer{}).DialContext, cfg)
+	if _, err := plain(context.Background(), "tcp", ln.Addr().String()); err == nil {
+		t.Error("handshake with a plain server: want error")
+	}
+}
+
+func TestCARotationWindow(t *testing.T) {
+	ca, _, err := NewCAFor(t0, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.NeedsRotation(t0.Add(19 * 24 * time.Hour)) {
+		t.Error("rotation due before the last third")
+	}
+	if !ca.NeedsRotation(t0.Add(21 * 24 * time.Hour)) {
+		t.Error("rotation not due in the last third")
+	}
+}
+
+func TestIssuerSetCA(t *testing.T) {
+	a, _ := newCA(t)
+	b, _ := newCA(t)
+	i, err := NewIssuer(a, nil, OperatorName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := i.GetClientCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := append(append([]byte{}, a.CertPEM...), b.CertPEM...)
+	if err := i.SetCA(b, both); err != nil {
+		t.Fatal(err)
+	}
+	if i.CA() != b || string(i.Trust()) != string(both) {
+		t.Fatal("CA or bundle not replaced")
+	}
+	moved, err := i.GetClientCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved == first || moved.Leaf.CheckSignatureFrom(b.Cert) != nil {
+		t.Error("client certificate not reissued by the new CA")
+	}
+	if _, err := moved.Leaf.Verify(x509.VerifyOptions{Roots: i.ClientConfig().RootCAs, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Errorf("client certificate does not verify against the bundle: %v", err)
+	}
+	if err := i.SetCA(a, []byte("not pem")); err == nil {
+		t.Error("bad bundle: want error")
 	}
 }

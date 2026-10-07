@@ -97,6 +97,32 @@ operator:
 # them through the usual RecreatePending path.
 tls:
   enabled: false
+  # The internal CA, when cert-manager is not used.
+  ca:
+    # Lifetime of the CA the operator creates.
+    lifetime: 87600h
+    # Replace the CA automatically once it enters the last third of its
+    # lifetime: the new CA is trusted everywhere first, then signs, then the
+    # old one is dropped, with no pod restarted (docs/security.md).
+    rotation:
+      enabled: false
+      # How long each step waits for the new trust bundle to reach every pod.
+      overlap: 1h
+  # Issue every certificate through cert-manager instead of the internal CA.
+  # Needs cert-manager installed.
+  certManager:
+    enabled: false
+    # The issuer, e.g. {name: corp-ca, kind: ClusterIssuer}. It must issue
+    # certificates in both the release and the servers namespace, so use a
+    # ClusterIssuer. Empty: the chart creates a self-signed CA in caNamespace
+    # and a ClusterIssuer for it.
+    issuerRef: {}
+    # cert-manager's cluster resource namespace, where a chart-created CA
+    # lives.
+    caNamespace: cert-manager
+    # Lifetime of a chart-created CA. cert-manager renews it on its own;
+    # see docs/security.md before shortening it.
+    caDuration: 87600h
 
 # The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config
 # in the servers namespace. Keys under `extra` are merged verbatim.

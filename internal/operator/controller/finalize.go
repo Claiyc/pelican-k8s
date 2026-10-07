@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
+	"github.com/Claiyc/pelican-k8s/internal/operator/certs"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 )
@@ -85,6 +86,9 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 		if err := r.Delete(s.ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
+	}
+	if err := r.deleteCertificate(s); err != nil {
+		return ctrl.Result{}, err
 	}
 	jobs := &batchv1.JobList{}
 	if err := r.List(s.ctx, jobs, client.InNamespace(gs.Namespace), client.MatchingLabels{v1alpha1.LabelServerUUID: uuid}); err == nil {
@@ -169,4 +173,24 @@ func newVolumeSnapshot(namespace, name, pvcName, class string, labels map[string
 	}
 	u.Object["spec"] = spec
 	return u
+}
+
+// deleteCertificate removes the agent's cert-manager Certificate and then
+// its Secret, which cert-manager leaves behind and the GameServer does not
+// own.
+func (r *GameServerReconciler) deleteCertificate(s *scope) error {
+	if r.CertManager == nil {
+		return nil
+	}
+	name := names.TLSSecret(s.gs.Spec.Panel.UUID)
+	crt := &unstructured.Unstructured{}
+	crt.SetGroupVersionKind(certs.CertificateGVK)
+	crt.SetNamespace(s.gs.Namespace)
+	crt.SetName(name)
+	for _, obj := range []client.Object{crt, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: s.gs.Namespace, Name: name}}} {
+		if err := r.Delete(s.ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }

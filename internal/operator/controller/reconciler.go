@@ -15,10 +15,12 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -76,7 +78,22 @@ type GameServerReconciler struct {
 	// client certificate through AgentTransport (ARCHITECTURE.md 12.5).
 	PKI            *pki.Issuer
 	AgentTransport http.RoundTripper
+	// CertManager, when set instead of PKI, has cert-manager issue the
+	// agents' certificates (ARCHITECTURE.md 12.6); AgentTransport then
+	// carries the operator's certificate from its mounted Secret.
+	CertManager *certs.CertManager
 }
+
+// reader returns Reader, or the client when unset (tests).
+func (r *GameServerReconciler) reader() client.Reader {
+	if r.Reader != nil {
+		return r.Reader
+	}
+	return r.Client
+}
+
+// tls reports whether traffic between the components runs over TLS.
+func (r *GameServerReconciler) tls() bool { return r.PKI != nil || r.CertManager != nil }
 
 const (
 	requeueSlow = 30 * time.Second
@@ -123,11 +140,7 @@ type scope struct {
 func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	gs := &v1alpha1.GameServer{}
-	reader := r.Reader
-	if reader == nil {
-		reader = r.Client
-	}
-	if err := reader.Get(ctx, req.NamespacedName, gs); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, gs); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	s := &scope{ctx: ctx, gs: gs, orig: gs.DeepCopy(), now: metav1.NewTime(r.now()), requeue: requeueSlow}
@@ -248,7 +261,7 @@ func (r *GameServerReconciler) loadClassAndSettings(s *scope) error {
 			envExists = false
 		}
 	}
-	s.in = &render.Input{GS: s.gs, Class: cls, Settings: st, UID: uid, SystemNamespace: r.SystemNamespace, EnvSecretExists: envExists, TLS: r.PKI != nil}
+	s.in = &render.Input{GS: s.gs, Class: cls, Settings: st, UID: uid, SystemNamespace: r.SystemNamespace, EnvSecretExists: envExists, TLS: r.tls()}
 	return nil
 }
 
@@ -297,14 +310,18 @@ func (r *GameServerReconciler) ensureAgentSecret(s *scope) error {
 // expires. The agent reads the renewed files from its volume without a
 // restart.
 func (r *GameServerReconciler) ensureTLSSecret(s *scope) error {
+	leaf := certs.Leaf{CommonName: names.AgentService(s.in.UUID()), DNSNames: pki.AgentDNSNames(s.in.UUID(), s.gs.Namespace), Usage: pki.Server}
+	if r.CertManager != nil {
+		return r.ensureCertificate(s, leaf)
+	}
 	if r.PKI == nil {
 		return nil
 	}
-	leaf := certs.Leaf{CommonName: names.AgentService(s.in.UUID()), DNSNames: pki.AgentDNSNames(s.in.UUID(), s.gs.Namespace), Usage: pki.Server}
+	ca, trust := r.PKI.CA(), r.PKI.Trust()
 	sec := &corev1.Secret{}
 	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.TLSSecret(s.in.UUID())}, sec)
 	if apierrors.IsNotFound(err) {
-		data, _, err := leaf.Data(r.PKI.CA, nil, r.now())
+		data, _, err := leaf.Data(ca, trust, nil, r.now())
 		if err != nil {
 			return err
 		}
@@ -320,7 +337,7 @@ func (r *GameServerReconciler) ensureTLSSecret(s *scope) error {
 	if err != nil {
 		return err
 	}
-	data, changed, err := leaf.Data(r.PKI.CA, sec.Data, r.now())
+	data, changed, err := leaf.Data(ca, trust, sec.Data, r.now())
 	if err != nil || !changed {
 		return err
 	}
@@ -330,6 +347,34 @@ func (r *GameServerReconciler) ensureTLSSecret(s *scope) error {
 	}
 	r.event(s, corev1.EventTypeNormal, "CertificateRenewed", "agent certificate renewed")
 	return nil
+}
+
+// ensureCertificate writes the agent's cert-manager Certificate; cert-manager
+// fills the Secret the agent pod mounts and renews it.
+func (r *GameServerReconciler) ensureCertificate(s *scope, leaf certs.Leaf) error {
+	name := names.TLSSecret(s.in.UUID())
+	desired := r.CertManager.Certificate(s.in.Meta(name, "agent"), name, leaf)
+	if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
+		return err
+	}
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(certs.CertificateGVK)
+	// Uncached: the cache would start an informer for the Certificate kind.
+	err := r.reader().Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: name}, existing)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(s.ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if equality.Semantic.DeepEqual(existing.Object["spec"], desired.Object["spec"]) {
+		return nil
+	}
+	existing.Object["spec"] = desired.Object["spec"]
+	return r.Update(s.ctx, existing)
 }
 
 func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {

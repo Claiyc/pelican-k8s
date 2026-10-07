@@ -151,7 +151,7 @@ func newEnv(t *testing.T, o opts) *env {
 		agentTLS, gatewayTLS := testPKI(t)
 		e.agentSrv.TLS = agentTLS
 		e.agentSrv.StartTLS()
-		res.EnableTLS(gatewayTLS)
+		res.EnableTLS(func() *tls.Config { return gatewayTLS })
 	} else {
 		e.agentSrv.Start()
 	}
