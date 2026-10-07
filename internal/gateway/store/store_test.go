@@ -277,7 +277,21 @@ func TestUpdateBackups(t *testing.T) {
 	if p := got.Status.Backups.Pending; len(p) != 2 || p[0].UUID != "live" || p[1].UUID != "new" || p[1].Agent != "pod-1/2" {
 		t.Fatalf("pending = %+v", p)
 	}
-	// Without an agent pod nothing is live.
+	// An unchanged list is not written; an empty one clears the field.
+	rv := got.ResourceVersion
+	if err := s.UpdateBackups(ctx, uid1, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); got.ResourceVersion != rv {
+		t.Fatalf("unchanged list written: version %s, was %s", got.ResourceVersion, rv)
+	}
+	if err := s.UpdateBackups(ctx, uid1, func([]v1alpha1.PendingBackup, string) []v1alpha1.PendingBackup { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); len(got.Status.Backups.Pending) != 0 {
+		t.Fatalf("pending = %+v", got.Status.Backups.Pending)
+	}
+	// An unknown server is an error.
 	if err := s.UpdateBackups(ctx, uid2, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); !apierrors.IsNotFound(err) {
 		t.Fatalf("unknown server: %v", err)
 	}

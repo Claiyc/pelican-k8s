@@ -743,3 +743,22 @@ func TestAgentURL(t *testing.T) {
 		}
 	}
 }
+
+// An agent instance changes with the pod and with each restart of the agent
+// container, not with the game container's.
+func TestAgentInstance(t *testing.T) {
+	if got := AgentInstance(nil); got != "" {
+		t.Fatalf("no pod: %q", got)
+	}
+	if got := AgentInstance(&corev1.Pod{}); got != "" {
+		t.Fatalf("pod without UID: %q", got)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-1"}}
+	if got := AgentInstance(pod); got != "pod-1/0" {
+		t.Fatalf("fresh pod: %q", got)
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "other", RestartCount: 5}, {Name: AgentContainer, RestartCount: 2}}
+	if got := AgentInstance(pod); got != "pod-1/2" {
+		t.Fatalf("restarted agent: %q", got)
+	}
+}
