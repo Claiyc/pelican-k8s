@@ -5,11 +5,13 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelican/wings/remote"
@@ -39,6 +41,9 @@ type Handler struct {
 	Log    *slog.Logger
 	// Metrics counters (optional).
 	OnUnmatched func(method, path string)
+
+	// statusMu serialises the state posts of one server (striped by UUID).
+	statusMu [32]sync.Mutex
 }
 
 type ctxKey struct{}
@@ -227,10 +232,7 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	sc := body.Data
 	h.Agents.Invalidate(uuid)
-	status := map[string]any{"process": map[string]any{"state": sc.NewState, "since": metav1.Now()}}
-	if err := h.Store.PatchStatus(r.Context(), uuid, status); err != nil {
-		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
-	}
+	h.recordState(r.Context(), uuid, sc.NewState)
 	if sc.PrevState == v1alpha1.ProcessStopping && sc.NewState == v1alpha1.ProcessOffline && h.intentionalStop(r.Context(), uuid) {
 		_ = h.Store.PatchSpec(r.Context(), uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}})
 	}
@@ -243,6 +245,35 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	go h.recordUsage(context.WithoutCancel(r.Context()), uuid)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordState writes status.process.state. The agent sends each state change
+// from its own goroutine, so two posts in quick succession (starting, then
+// running) can arrive in either order. The posts of one server are therefore
+// serialised, and each writes the state the agent has now, which makes the
+// last write the latest state. The posted state is the fallback when the
+// agent cannot be asked.
+func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
+	f := fnv.New32a()
+	_, _ = f.Write([]byte(uuid))
+	mu := &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
+	mu.Lock()
+	defer mu.Unlock()
+	state := posted
+	if t, err := h.Agents.Resolve(ctx, uuid); err == nil {
+		if body, err := h.Agents.State(ctx, t, true); err == nil {
+			var st struct {
+				State string `json:"state"`
+			}
+			if json.Unmarshal(body, &st) == nil && st.State != "" {
+				state = st.State
+			}
+		}
+	}
+	status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
+	if err := h.Store.PatchStatus(ctx, uuid, status); err != nil {
+		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
+	}
 }
 
 // intentionalStop reports whether a stopping → offline transition is a stop

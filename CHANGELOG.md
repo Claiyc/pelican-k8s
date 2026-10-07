@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 - A process that exits without Wings restarting it leaves the server stopped: after a minute offline the gateway sets `desired: Stopped` and the game pod goes, as the Panel shows it.
 - New conditions `GamePodReady` and `AgentRelocating`; `status.game` records the game pod and its node, `status.agent.node` the agent's.
 
+### Fixed
+- A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now handles one server's posts one at a time and records the state the agent reports on a fresh poll.
+
 ### Added
 - The *Placement* workflow (`hack/e2e-placement.sh`, `test/placement`) runs the placement scenarios on a kind cluster with three workers.
 
