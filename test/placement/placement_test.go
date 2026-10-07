@@ -49,6 +49,10 @@ import (
 const (
 	serversNS = "pelican-servers"
 	className = "default"
+	// installImage runs the egg's install script. Install containers always
+	// pull their image, as Wings does, so it comes from a registry; the egg
+	// image is only loaded into the kind nodes.
+	installImage = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 )
 
 type env struct {
@@ -184,7 +188,7 @@ func (e *env) newServer(t *testing.T, o serverOpts) *server {
 		"skip_egg_scripts":        false,
 		"crash_detection_enabled": false,
 		"build":                   map[string]any{"memory_limit": 128, "swap": 0, "io_weight": 500, "cpu_limit": 0, "threads": nil, "disk_space": 512, "oom_killer": true},
-		"container":               map[string]any{"image": e.egg, "requires_rebuild": false},
+		"container":               map[string]any{"image": "~" + e.egg, "requires_rebuild": false}, // never pull: the egg exists only on the nodes
 		"allocations":             map[string]any{"force_outgoing_ip": false, "default": map[string]any{"ip": ip, "port": e.port}, "mappings": map[string][]int{ip: {e.port}}},
 		"egg":                     map[string]any{"id": "5c7f5e0b-0000-4000-8000-000000000001", "file_denylist": []string{}, "features": map[string][]string{}},
 		"labels":                  map[string]any{},
@@ -197,7 +201,7 @@ func (e *env) newServer(t *testing.T, o serverOpts) *server {
 			"stop":    map[string]any{"type": "command", "value": "stop"},
 			"configs": []any{},
 		},
-		Install: fakepanel.InstallScript{ContainerImage: e.egg, Entrypoint: "sh", Script: "#!/bin/sh\necho installed\n"},
+		Install: fakepanel.InstallScript{ContainerImage: installImage, Entrypoint: "sh", Script: "#!/bin/sh\necho installed\n"},
 	}
 	body, _ := json.Marshal(srv)
 	if code, out := e.do(t, http.MethodPut, e.panel, "/_fake/servers/"+uuid, "application/json", strings.NewReader(string(body))); code != http.StatusNoContent {
