@@ -188,7 +188,7 @@
           }
         },
         "remoteURL": {
-          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081`.",
+          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081` (`https://` when `tls.enabled` is true). With `tls.enabled` a set value must be an https URL whose host is the gateway Service, because the gateway's certificate is issued for that name.",
           "type": "string",
           "pattern": "^$|^https?://[^\\s/]+(/[^\\s]*)?$",
           "default": ""
@@ -465,6 +465,18 @@
           "type": "object",
           "default": {},
           "examples": [{"system": {"activity_send_interval": 60}}]
+        }
+      }
+    },
+    "tls": {
+      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace (docs/security.md). Turning it on or off recreates every agent pod, and running game pods with them through the usual RecreatePending path.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Serve the gateway remote API, the agent API and the shim connections over TLS. The operator creates the CA and issues the certificates; nothing has to be supplied.",
+          "type": "boolean",
+          "default": false
         }
       }
     },
