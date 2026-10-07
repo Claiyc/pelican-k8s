@@ -17,7 +17,27 @@ serversNamespace:
   podSecurityLevel: baseline
 
 gateway:
-  replicas: 1
+  # Replicas are active/active; two keep the Panel connected through a node
+  # drain or a rollout. Websocket and SFTP sessions drop with their replica.
+  replicas: 2
+  # Spread replicas across nodes. "soft" prefers different nodes and still
+  # schedules on a single-node cluster, "hard" requires them (replicas beyond
+  # the node count stay Pending), "none" adds no rule. A non-empty `affinity`
+  # replaces this rule.
+  podAntiAffinity: soft
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+  # Keeps at most maxUnavailable replicas down during voluntary disruptions
+  # (drains, cluster upgrades). maxUnavailable rather than minAvailable, so
+  # replicas: 1 can still be drained. A drain waits for an evicted replica to
+  # run elsewhere before evicting the next, so draining the only schedulable
+  # node with both replicas on it waits until another node is available.
+  podDisruptionBudget:
+    # Recommended false on single-node clusters, so draining the node is not
+    # held by the budget.
+    enabled: true
+    maxUnavailable: 1
   # The Panel base URL as seen from the gateway (and used as websocket Origin).
   panelURL: ""
   # Node credentials from the Panel's node configuration (token_id / token).
@@ -79,7 +99,18 @@ gateway:
   logLevel: info
 
 operator:
-  replicas: 1
+  # One replica holds the leader Lease and reconciles; the others wait and
+  # take over when its Lease expires or it releases it on shutdown. Lease
+  # election needs no quorum, so two replicas are enough.
+  replicas: 2
+  podAntiAffinity: soft
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+  podDisruptionBudget:
+    # Recommended false on single-node clusters, as for the gateway.
+    enabled: true
+    maxUnavailable: 1
   concurrency: 4
   leaderElect: true
   resources:
