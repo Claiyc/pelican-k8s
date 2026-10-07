@@ -39,6 +39,9 @@ handlers and the shim all have unit tests to extend.
   are advisory: read them, fix what is right, say so when it is not.
 - Do not modify vendored upstream behaviour: Wings changes go to the fork
   branch as opt-in hooks (see docs/development.md) and are proposed upstream.
+- A new or changed chart value also changes the chart's `values.schema.json`
+  (type, allowed values, default and a description); Helm rejects values the
+  schema does not list.
 - Update the docs in the same PR when behaviour or values change. The docs
   describe the system as it is on master: no history, no "previously", no
   deviations from another document. ARCHITECTURE.md is changed to match the
