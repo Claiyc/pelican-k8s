@@ -111,7 +111,7 @@ func (r *GameServerReconciler) agentWork(s *scope) []string {
 		return nil
 	}
 	var work []string
-	if len(gs.Status.Backups.Pending) > 0 {
+	if len(gs.Status.Backups.Live(render.AgentInstance(pod))) > 0 {
 		work = append(work, "backup")
 	}
 	if gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration && gs.Status.Install.Result != v1alpha1.InstallFailed {
@@ -353,13 +353,13 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 
 	switch {
 	case restart:
-		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "RestartRequested", "restart requested; the pods are recreated once the process is offline")
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "RestartRequested", "restart requested; the pods are recreated once the process is offline and the agent has no in-flight work")
 	case resizeRecreate:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate", "resources cannot be applied in place; the game pod is recreated once the process is offline")
 	case gameOutdated:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "TemplateChanged", "game pod template changed; the game pod is recreated once the process is offline")
 	case agentOutdated:
-		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "AgentTemplateChanged", "agent pod template changed; the agent pod is recreated once the process is offline")
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "AgentTemplateChanged", "agent pod template changed; the agent pod is recreated once the process is offline and the agent has no in-flight work")
 	default:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionFalse, "UpToDate", "")
 		return r.relocate(s)
@@ -484,9 +484,10 @@ func (r *GameServerReconciler) fence(s *scope, pod *corev1.Pod, lost *bool) erro
 }
 
 // recreate applies a pending recreate. A pod is deleted once the process is
-// offline; a pod that cannot hold the process (a game pod whose container
-// never started, an agent pod that never became ready) is replaced at once.
-// A restart request is acknowledged once both pods are gone.
+// offline, the agent pod only once the agent also has no in-flight work
+// (section 7.7); a pod that cannot hold the process (a game pod whose
+// container never started, an agent pod that never became ready) is replaced
+// at once. A restart request is acknowledged once both pods are gone.
 func (r *GameServerReconciler) recreate(s *scope, restart, agent, game bool) error {
 	offline := false
 	if s.agent != nil {
@@ -505,7 +506,10 @@ func (r *GameServerReconciler) recreate(s *scope, restart, agent, game bool) err
 	}
 	if (agent || restart) && !agentDone {
 		ready, _ := agentReady(s.agentPod)
-		if offline || (!ready && !restart) {
+		switch {
+		case offline && len(s.work) > 0:
+			s.requeue = requeueFast
+		case offline || (!ready && !restart):
 			if err := r.deleteForRecreate(s, s.agentPod, "agent"); err != nil {
 				return err
 			}

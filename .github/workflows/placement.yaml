@@ -10,18 +10,23 @@ on:
     branches: [master]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # Everything the suite builds and drives: the four images (the gateway
+    # serves the Panel API the suite uses, and writes the state it checks),
+    # the chart, and the suite itself.
     paths:
       - "api/**"
-      - "internal/operator/**"
-      - "internal/agent/**"
-      - "internal/shim/**"
-      - "internal/gateway/wsproxy/**"
+      - "cmd/**"
+      - "internal/**"
+      - "build/**"
+      - "go.mod"
+      - "go.sum"
       - "charts/pelican-k8s/**"
       - "test/placement/**"
       - "test/fakepanel/**"
       - "hack/e2e-placement.sh"
       - "hack/kind-placement.yaml"
       - ".github/workflows/placement.yaml"
+  # Scheduled runs come only from the default branch's workflow files.
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:

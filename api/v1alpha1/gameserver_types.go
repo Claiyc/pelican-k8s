@@ -221,11 +221,28 @@ type SnapshotStatus struct {
 type PendingBackup struct {
 	UUID      string      `json:"uuid"`
 	StartedAt metav1.Time `json:"startedAt"`
+	// Agent is the agent instance that runs the backup or restore: the agent
+	// pod's UID and its agent container's restart count. A backup does not
+	// survive its agent, so an entry of another instance is no longer in flight.
+	// +optional
+	Agent string `json:"agent,omitempty"`
 }
 
 // BackupsStatus tracks backups in flight.
 type BackupsStatus struct {
 	Pending []PendingBackup `json:"pending,omitempty"`
+}
+
+// Live returns the pending entries of the given agent instance, the backups
+// and restores that can still finish. Empty instance: no agent, none live.
+func (b BackupsStatus) Live(agent string) []PendingBackup {
+	var out []PendingBackup
+	for _, p := range b.Pending {
+		if agent != "" && p.Agent == agent {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Endpoint is an externally reachable game port.

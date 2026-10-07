@@ -63,6 +63,8 @@ type fixture struct {
 	agentCall []agentCall
 	// stateStatus is the status the fake agent answers for the server state.
 	stateStatus int
+	// backupStatus, when set, is the agent's answer to backup calls.
+	backupStatus int
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -98,8 +100,12 @@ func newFixture(t *testing.T) *fixture {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.agentCall = append(f.agentCall, agentCall{r.Method, r.URL.RequestURI(), r.Header.Get("Authorization"), string(b)})
-		status := f.stateStatus
+		status, backupStatus := f.stateStatus, f.backupStatus
 		f.mu.Unlock()
+		if backupStatus != 0 && strings.Contains(r.URL.Path, "/backup") {
+			w.WriteHeader(backupStatus)
+			return
+		}
 		w.Header().Set("User-Agent", "Pelican Wings/agent (id:secret)")
 		if r.URL.Path == "/api/servers/"+uuid {
 			if status != 200 {
@@ -170,7 +176,7 @@ func (f *fixture) addPod() {
 	f.t.Helper()
 	ctx := context.Background()
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: "agent-pod-1"}}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
@@ -679,7 +685,7 @@ func TestBackupProxyRecordsPendingBackups(t *testing.T) {
 		t.Fatalf("agent call = %+v", last)
 	}
 	pending := f.gs().Status.Backups.Pending
-	if len(pending) != 1 || pending[0].UUID != "b-1" {
+	if len(pending) != 1 || pending[0].UUID != "b-1" || pending[0].Agent != "agent-pod-1/0" {
 		t.Fatalf("pending = %+v", pending)
 	}
 	// The same backup again is not recorded twice.
@@ -698,6 +704,36 @@ func TestBackupProxyRecordsPendingBackups(t *testing.T) {
 	f.node("POST", "/api/servers/"+uuid+"/backup", `nope`)
 	if got := len(f.gs().Status.Backups.Pending); got != 2 {
 		t.Fatalf("pending = %d", got)
+	}
+}
+
+// A backup the agent refuses runs nothing, so its record goes again; records
+// of an earlier agent instance are dropped with the next write.
+func TestBackupProxyDropsRefusedAndEndedBackups(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	ended := []map[string]any{{"uuid": "old", "startedAt": metav1.Now(), "agent": "agent-pod-0/0"}}
+	if err := f.st.PatchStatus(context.Background(), uuid, map[string]any{"backups": map[string]any{"pending": ended}}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.backupStatus = http.StatusBadRequest
+	f.mu.Unlock()
+	if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup", `{"uuid":"b-1","ignore":"["}`); code != http.StatusBadRequest {
+		t.Fatalf("code = %d", code)
+	}
+	if pending := f.gs().Status.Backups.Pending; len(pending) != 0 {
+		t.Fatalf("pending = %+v", pending)
+	}
+	f.mu.Lock()
+	f.backupStatus = 0
+	f.mu.Unlock()
+	if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup", `{"uuid":"b-2"}`); code != 200 {
+		t.Fatalf("code = %d", code)
+	}
+	if pending := f.gs().Status.Backups.Pending; len(pending) != 1 || pending[0].UUID != "b-2" {
+		t.Fatalf("pending = %+v", pending)
 	}
 }
 

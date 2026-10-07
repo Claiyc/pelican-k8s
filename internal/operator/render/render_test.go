@@ -329,6 +329,18 @@ func TestTemplateHash(t *testing.T) {
 	same("agent resources", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Resources.Agent.Memory = resource.MustParse("256Mi") })), false)
 	// The game image is not part of the agent pod.
 	same("game image in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Image = "other@sha256:def" })), true)
+	// Panel edits of the server do not replace its agent pod.
+	same("disk size in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Build.DiskSpace = 99999 })), true)
+	same("server name in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Meta.Name = "renamed" })), true)
+	same("egg in the agent", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Settings.Egg.ID = "another-egg" })), true)
+	same("disk size in the emptyDir agent", AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir })),
+		AgentPodTemplate(testInput(t, func(i *Input) {
+			i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir
+			i.Settings.Build.DiskSpace = 99999
+		})), true)
+	same("scratch type", agent, AgentPodTemplate(testInput(t, func(i *Input) { i.Class.Spec.Storage.Scratch.Type = v1alpha1.ScratchEmptyDir })), false)
+	// The game pod is still replaced for a rename while it runs.
+	same("server name in the game", game, GamePodTemplate(testInput(t, func(i *Input) { i.Settings.Meta.Name = "renamed" })), false)
 }
 
 // The shim dials the agent over TCP and writes its readiness file to
@@ -729,5 +741,24 @@ func TestAgentURL(t *testing.T) {
 		if got := AgentURL(ip); got != want {
 			t.Errorf("AgentURL(%q) = %q, want %q", ip, got, want)
 		}
+	}
+}
+
+// An agent instance changes with the pod and with each restart of the agent
+// container, not with the game container's.
+func TestAgentInstance(t *testing.T) {
+	if got := AgentInstance(nil); got != "" {
+		t.Fatalf("no pod: %q", got)
+	}
+	if got := AgentInstance(&corev1.Pod{}); got != "" {
+		t.Fatalf("pod without UID: %q", got)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-1"}}
+	if got := AgentInstance(pod); got != "pod-1/0" {
+		t.Fatalf("fresh pod: %q", got)
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "other", RestartCount: 5}, {Name: AgentContainer, RestartCount: 2}}
+	if got := AgentInstance(pod); got != "pod-1/2" {
+		t.Fatalf("restarted agent: %q", got)
 	}
 }

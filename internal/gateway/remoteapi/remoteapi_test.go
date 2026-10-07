@@ -152,7 +152,7 @@ func (f *fixture) addPod(ip string) {
 	f.t.Helper()
 	ctx := context.Background()
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: agentPodUID}}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
@@ -186,11 +186,14 @@ func (f *fixture) gs() *v1alpha1.GameServer {
 	return gs
 }
 
+// agentPodUID is the UID of the fixture's agent pod.
+const agentPodUID = "agent-pod-1"
+
 func (f *fixture) setPending(uuids ...string) {
 	f.t.Helper()
 	var pending []map[string]any
 	for _, u := range uuids {
-		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now()})
+		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now(), "agent": agentPodUID + "/0"})
 	}
 	if err := f.st.PatchStatus(context.Background(), uuid, map[string]any{"backups": map[string]any{"pending": pending}}); err != nil {
 		f.t.Fatal(err)

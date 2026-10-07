@@ -216,7 +216,9 @@ func (g *Gateway) resetServersState(ctx context.Context) {
 			busy := false
 			for _, gs := range list {
 				installPending := gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration
-				if installPending || gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Pending) > 0 {
+				// A backup or restore of an earlier agent instance ended with it.
+				agent, _ := g.Store.AgentInstance(ctx, gs.Spec.Panel.UUID)
+				if installPending || gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Live(agent)) > 0 {
 					busy = true
 					break
 				}

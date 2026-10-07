@@ -251,6 +251,52 @@ func TestPatchStatusAt(t *testing.T) {
 	}
 }
 
+func TestUpdateBackups(t *testing.T) {
+	gs := gameServer(uid1, "")
+	gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "ended", Agent: "pod-0/0"}, {UUID: "live", Agent: "pod-1/2"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.AgentPod(uid1), UID: "pod-1"},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 2}}}}
+	s := newStore(t, gs, pod)
+	ctx := context.Background()
+	var seen []string
+	var instance string
+	err := s.UpdateBackups(ctx, uid1, func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup {
+		seen, instance = nil, agent
+		for _, p := range live {
+			seen = append(seen, p.UUID)
+		}
+		return append(live, v1alpha1.PendingBackup{UUID: "new", Agent: agent})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance != "pod-1/2" || len(seen) != 1 || seen[0] != "live" {
+		t.Fatalf("agent %q, live %v", instance, seen)
+	}
+	got, _ := s.Get(ctx, uid1)
+	if p := got.Status.Backups.Pending; len(p) != 2 || p[0].UUID != "live" || p[1].UUID != "new" || p[1].Agent != "pod-1/2" {
+		t.Fatalf("pending = %+v", p)
+	}
+	// An unchanged list is not written; an empty one clears the field.
+	rv := got.ResourceVersion
+	if err := s.UpdateBackups(ctx, uid1, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); got.ResourceVersion != rv {
+		t.Fatalf("unchanged list written: version %s, was %s", got.ResourceVersion, rv)
+	}
+	if err := s.UpdateBackups(ctx, uid1, func([]v1alpha1.PendingBackup, string) []v1alpha1.PendingBackup { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); len(got.Status.Backups.Pending) != 0 {
+		t.Fatalf("pending = %+v", got.Status.Backups.Pending)
+	}
+	// An unknown server is an error.
+	if err := s.UpdateBackups(ctx, uid2, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); !apierrors.IsNotFound(err) {
+		t.Fatalf("unknown server: %v", err)
+	}
+}
+
 func TestSetCondition(t *testing.T) {
 	s := newStore(t, gameServer(uid1, ""))
 	ctx := context.Background()

@@ -228,6 +228,12 @@ spec:
                       description: PendingBackup is a backup the agent is allowed
                         to report on.
                       properties:
+                        agent:
+                          description: |-
+                            Agent is the agent instance that runs the backup or restore: the agent
+                            pod's UID and its agent container's restart count. A backup does not
+                            survive its agent, so an entry of another instance is no longer in flight.
+                          type: string
                         startedAt:
                           format: date-time
                           type: string

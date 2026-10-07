@@ -67,17 +67,30 @@ func statefulSet(in *Input, name, serviceName, component string, tmpl corev1.Pod
 // leaves out the game container's resources, which are resized in place, and
 // the placement toward the other pod (the game pod's pod affinity, the agent
 // pod's node affinity), which is set per start (section 7.7). The game pod's
-// node affinity to the allocation nodes stays in.
+// node affinity to the allocation nodes stays in. For the agent pod it also
+// leaves out what follows Panel edits of the server (its name, its egg and the
+// scratch size derived from disk_space): those reach the agent pod when it is
+// next replaced, and do not replace it by themselves.
 func TemplateHash(tmpl corev1.PodTemplateSpec) string {
 	c := tmpl.DeepCopy()
+	agent := c.Labels[v1alpha1.LabelComponent] == ComponentAgent
 	for i := range c.Spec.Containers {
 		if c.Spec.Containers[i].Name == GameContainer {
 			c.Spec.Containers[i].Resources = corev1.ResourceRequirements{}
 		}
 	}
+	if agent {
+		delete(c.Annotations, v1alpha1.AnnotationPanelName)
+		delete(c.Labels, v1alpha1.LabelEggUUID)
+		for i := range c.Spec.Volumes {
+			if c.Spec.Volumes[i].Name == "scratch" {
+				clearScratchSize(&c.Spec.Volumes[i])
+			}
+		}
+	}
 	if a := c.Spec.Affinity; a != nil {
 		a.PodAffinity = nil
-		if c.Labels[v1alpha1.LabelComponent] == ComponentAgent {
+		if agent {
 			a.NodeAffinity = nil
 		}
 		if a.NodeAffinity == nil && a.PodAntiAffinity == nil {
@@ -238,6 +251,22 @@ func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
 		spec.Affinity = &corev1.Affinity{NodeAffinity: nodeNameAffinity([]string{in.AgentNode})}
 	}
 	return podTemplate(in, ComponentAgent, spec)
+}
+
+// AgentInstance names one run of the agent: the agent pod's UID and the
+// restart count of its agent container. Work the agent runs in the background
+// (backups, restores) ends with the instance. Empty without a pod.
+func AgentInstance(pod *corev1.Pod) string {
+	if pod == nil || pod.UID == "" {
+		return ""
+	}
+	restarts := int32(0)
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == AgentContainer {
+			restarts = cs.RestartCount
+		}
+	}
+	return fmt.Sprintf("%s/%d", pod.UID, restarts)
 }
 
 // GamePodTemplate renders the game pod template. In.GameAffinity sets its pod
@@ -442,6 +471,17 @@ func scratchVolume(s v1alpha1.StorageSpec, pvcSize resource.Quantity) corev1.Vol
 			Spec:       spec,
 		},
 	}}}
+}
+
+// clearScratchSize removes the size from the scratch volume for the template
+// hash.
+func clearScratchSize(v *corev1.Volume) {
+	if v.EmptyDir != nil {
+		v.EmptyDir.SizeLimit = nil
+	}
+	if v.Ephemeral != nil && v.Ephemeral.VolumeClaimTemplate != nil {
+		delete(v.Ephemeral.VolumeClaimTemplate.Spec.Resources.Requests, corev1.ResourceStorage)
+	}
 }
 
 func agentResources(r v1alpha1.ContainerResources) corev1.ResourceRequirements {

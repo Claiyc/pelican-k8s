@@ -1295,11 +1295,50 @@ func TestAgentTemplateChangeReplacesTheAgentPod(t *testing.T) {
 		t.Fatal("the agent pod must wait for the process to go offline")
 	}
 	h.agent.state = v1alpha1.ProcessOffline
+	// Work counts for a scheduled agent pod.
+	h.bind(h.agentPod(), "node-a")
+	h.bind(h.pod(), "node-a")
+	h.agent.busy = []string{"files"}
+	h.reconcile(1)
+	if h.agentPod() == nil {
+		t.Fatal("the agent pod must wait for its in-flight work to end")
+	}
+	h.agent.busy = nil
 	h.reconcile(1)
 	if h.agentPod() != nil {
-		t.Fatal("the agent pod must be replaced once offline")
+		t.Fatal("the agent pod must be replaced once offline and idle")
 	}
 	if h.pod() == nil {
 		t.Fatal("the game pod is not part of an agent template change")
+	}
+}
+
+// A restart request waits for the agent's in-flight work before it replaces
+// the agent pod; the game pod goes once the process is offline.
+func TestRestartRequestWaitsForAgentWork(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	h.bind(h.agentPod(), "node-a")
+	h.bind(h.pod(), "node-a")
+	h.agent.state = v1alpha1.ProcessOffline
+	h.agent.busy = []string{"restore"}
+	gs := h.gs()
+	gs.Spec.Power.RestartRequest = 1
+	if err := h.c.Update(context.Background(), gs); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if h.agentPod() == nil {
+		t.Fatal("a busy agent pod must not be replaced")
+	}
+	if h.gs().Status.Power.ObservedRestartRequest != 0 {
+		t.Fatal("the restart request is not done while the agent pod stays")
+	}
+	h.agent.busy = nil
+	h.reconcile(1)
+	if h.agentPod() != nil {
+		t.Fatal("the agent pod must be replaced once idle")
 	}
 }

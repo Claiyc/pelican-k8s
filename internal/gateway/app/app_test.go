@@ -385,8 +385,14 @@ func TestResetServersState(t *testing.T) {
 			gs.Spec.Install.Generation = 2
 			gs.Status.Install.ObservedGeneration = 1
 		},
-		"install running":   func(gs *v1alpha1.GameServer) { gs.Status.Install.Result = v1alpha1.InstallRunning },
-		"restore in flight": func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{}} },
+		"install running": func(gs *v1alpha1.GameServer) { gs.Status.Install.Result = v1alpha1.InstallRunning },
+		"restore in flight": func(gs *v1alpha1.GameServer) {
+			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/0"}}
+		},
+	}
+	// The agent pod whose instance runs the restore.
+	agentPod := func() *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: "agent-pod-1"}}
 	}
 	for name, mutate := range busy {
 		t.Run("waits while "+name, func(t *testing.T) {
@@ -395,7 +401,7 @@ func TestResetServersState(t *testing.T) {
 			defer ps.Close()
 			gs := gameServer(uuid)
 			mutate(gs)
-			g := newGateway(t, testConfig(ps.URL), gs)
+			g := newGateway(t, testConfig(ps.URL), gs, agentPod())
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			go func() { g.resetServersState(ctx); close(done) }()
@@ -411,6 +417,22 @@ func TestResetServersState(t *testing.T) {
 			}
 		})
 	}
+
+	// A restore of an earlier agent instance ended with it.
+	t.Run("resets after a restore of a replaced agent", func(t *testing.T) {
+		fp := fakepanel.New(nodeID, nodeToken)
+		ps := httptest.NewServer(fp.Handler())
+		defer ps.Close()
+		gs := gameServer(uuid)
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-0/0"}}
+		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		g.resetServersState(ctx)
+		if n := len(fp.CallsMatching("/servers/reset")); n != 1 {
+			t.Fatalf("reset calls = %d, want 1", n)
+		}
+	})
 
 	t.Run("panel failure keeps retrying until canceled", func(t *testing.T) {
 		g := newGateway(t, testConfig("http://127.0.0.1:1"))

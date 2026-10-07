@@ -88,9 +88,11 @@ default) that includes every port of other servers' game pods, and
 `inClusterEgress.additional` adds the configured destinations; turn the first
 off when servers must not reach each other. Every connection to the shim port
 must answer a challenge keyed
-with the shim token. The shim reads that token from its environment after
-making itself non-dumpable and removes it from the game's environment, so the
-game process cannot pose as the shim: process state, stats and exit codes come
+with the shim token. The shim binary is execute-only, so the shim and the
+readiness probe that runs it, both of which carry the token in their
+environment, are non-dumpable from exec on; the shim removes the token from the
+game's environment. The game process cannot read the token and cannot pose as
+the shim: process state, stats and exit codes come
 from the shim. It cannot reach the gateway, the operator, its agent's Wings API
 or SFTP server, other servers' agents, the Panel, the Kubernetes API, the agent
 token or

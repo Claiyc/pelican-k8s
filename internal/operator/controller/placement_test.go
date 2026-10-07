@@ -335,7 +335,8 @@ func (a activityAgent) Activity(context.Context) (*agentclient.Activity, error) 
 
 func TestAgentWork(t *testing.T) {
 	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
-	scheduled := &corev1.Pod{Spec: corev1.PodSpec{NodeName: "node-a"}}
+	scheduled := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "agent-1"}, Spec: corev1.PodSpec{NodeName: "node-a"}}
+	live := []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-1/0"}}
 	for _, tc := range []struct {
 		name   string
 		pod    *corev1.Pod
@@ -346,7 +347,12 @@ func TestAgentWork(t *testing.T) {
 		{name: "idle", pod: scheduled, agent: activityAgent{act: &agentclient.Activity{}}},
 		{name: "no agent pod", mutate: func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{}} }},
 		{name: "unscheduled agent pod", pod: &corev1.Pod{}, mutate: func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{}} }},
-		{name: "backup", pod: scheduled, mutate: func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{}} }, want: []string{"backup"}},
+		{name: "backup", pod: scheduled, mutate: func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = live }, want: []string{"backup"}},
+		// A backup does not survive its agent: an entry of an earlier agent pod
+		// or agent container run is no work.
+		{name: "backup of an earlier agent", pod: scheduled, mutate: func(gs *v1alpha1.GameServer) {
+			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-0/0"}, {UUID: "b-2", Agent: "agent-1/3"}, {UUID: "b-3"}}
+		}},
 		{name: "install", pod: scheduled, mutate: func(gs *v1alpha1.GameServer) { gs.Spec.Install.Generation = 1 }, want: []string{"install"}},
 		{name: "failed install", pod: scheduled, mutate: func(gs *v1alpha1.GameServer) {
 			gs.Spec.Install.Generation = 1
