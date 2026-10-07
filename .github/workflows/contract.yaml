@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its running suite; see ci.yaml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   kind:
     name: Panel ${{ (github.event_name == 'schedule' && 'latest') || (inputs.panel_image || 'pinned') }} on kind

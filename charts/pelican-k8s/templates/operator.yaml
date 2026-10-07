@@ -27,6 +27,7 @@ spec:
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "pelican-k8s.scheduling" (dict "values" .Values.operator "name" "pelican-operator" "root" .) | nindent 6 }}
       containers:
         - name: operator
           image: {{ include "pelican-k8s.image" (dict "root" . "name" "operator") }}
@@ -87,3 +88,4 @@ spec:
           secret:
             secretName: {{ include "pelican-k8s.operatorTLSSecretName" . }}
           {{- end }}
+{{ include "pelican-k8s.pdb" (dict "values" .Values.operator "name" "pelican-operator" "fullname" $name "root" .) }}

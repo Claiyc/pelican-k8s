@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its running analysis; see ci.yaml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Analyze Go

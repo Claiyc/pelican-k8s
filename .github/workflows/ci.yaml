@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its running checks, so they are
+# cancelled rather than left to hold runners the account shares across every
+# open PR. Pushes to master each keep their own run: every commit publishes
+# its images.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   go:
     name: Build and test
@@ -29,6 +37,10 @@ jobs:
           git diff --exit-code -- api charts/pelican-k8s/crds || (echo "run 'make generate' and commit"; exit 1)
       - name: Build
         run: make build
+      # The image jobs build linux/arm64 only for pushes; this keeps a pull
+      # request that breaks the arm64 build from reaching master.
+      - name: Build for linux/arm64
+        run: GOOS=linux GOARCH=arm64 go build ./cmd/...
       - name: Vet
         run: go vet ./...
       - name: Unit tests
@@ -286,8 +298,11 @@ jobs:
           sarif_file: trivy-${{ matrix.component }}.sarif
           category: trivy-${{ matrix.component }}
 
+  # Builds and pushes the multi-arch images. A pull request pushes nothing,
+  # and the scan job already builds each Dockerfile for it, so it skips this.
   images:
     name: Container images
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: [go]
     permissions:

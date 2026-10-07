@@ -42,6 +42,7 @@ spec:
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "pelican-k8s.scheduling" (dict "values" .Values.gateway "name" "pelican-gateway" "root" .) | nindent 6 }}
       containers:
         - name: gateway
           image: {{ include "pelican-k8s.image" (dict "root" . "name" "gateway") }}
@@ -140,6 +141,7 @@ spec:
             secretName: {{ include "pelican-k8s.gatewayTLSSecretName" . }}
         {{- end }}
           {{- end }}
+{{ include "pelican-k8s.pdb" (dict "values" .Values.gateway "name" "pelican-gateway" "fullname" $name "root" .) }}
 ---
 apiVersion: v1
 kind: Service
