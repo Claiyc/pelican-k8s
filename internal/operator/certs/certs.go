@@ -26,20 +26,23 @@ func EnsureCA(ctx context.Context, c client.Client, key types.NamespacedName, no
 	sec := &corev1.Secret{}
 	err := c.Get(ctx, key, sec)
 	if apierrors.IsNotFound(err) {
-		ca, keyPEM, err := pki.NewCA(now)
-		if err != nil {
-			return nil, err
+		ca, keyPEM, nerr := pki.NewCA(now)
+		if nerr != nil {
+			return nil, nerr
 		}
 		sec = &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name, Labels: partOf},
 			Type:       corev1.SecretTypeTLS,
 			Data:       map[string][]byte{pki.CertFile: ca.CertPEM, pki.KeyFile: keyPEM},
 		}
-		if err := c.Create(ctx, sec); err == nil {
+		err = c.Create(ctx, sec)
+		if err == nil {
 			return ca, nil
-		} else if !apierrors.IsAlreadyExists(err) {
+		}
+		if !apierrors.IsAlreadyExists(err) {
 			return nil, err
 		}
+		// Another replica created it first.
 		err = c.Get(ctx, key, sec)
 	}
 	if err != nil {

@@ -644,3 +644,79 @@ func TestInstallResourcesFollowTheGameRequest(t *testing.T) {
 		t.Fatalf("install memory limit %v must stay at the cap", got.Limits[corev1.ResourceMemory])
 	}
 }
+
+func TestTLS(t *testing.T) {
+	plain := testInput(t, nil)
+	in := testInput(t, func(i *Input) { i.TLS = true })
+
+	agentTmpl := AgentPodTemplate(in)
+	agent := agentTmpl.Spec.Containers[0]
+	if got := strings.Join(agent.Args, " "); !strings.HasSuffix(got, "--tls-dir "+AgentTLSDir) {
+		t.Errorf("agent args %q", got)
+	}
+	for name, scheme := range map[string]corev1.URIScheme{
+		"startup":  agent.StartupProbe.HTTPGet.Scheme,
+		"liveness": agent.LivenessProbe.HTTPGet.Scheme,
+		"preStop":  agent.Lifecycle.PreStop.HTTPGet.Scheme,
+	} {
+		if scheme != corev1.URISchemeHTTPS {
+			t.Errorf("%s scheme %q", name, scheme)
+		}
+	}
+	if !hasMount(agent.VolumeMounts, "tls", AgentTLSDir) {
+		t.Errorf("agent mounts %+v", agent.VolumeMounts)
+	}
+	if v := volume(agentTmpl.Spec.Volumes, "tls"); v == nil || v.Secret == nil || v.Secret.SecretName != "gs-"+uuid+"-tls" || len(v.Secret.Items) != 0 {
+		t.Errorf("agent tls volume %+v", v)
+	}
+
+	gameTmpl := GamePodTemplate(in)
+	game := gameTmpl.Spec.Containers[0]
+	if got := strings.Join(game.Command, " "); !strings.Contains(got, "--agent gs-"+uuid+"-agent:8082 ") || !strings.HasSuffix(got, " --agent-ca "+GameCAFile+" --") {
+		t.Errorf("game command %q", got)
+	}
+	if !hasMount(game.VolumeMounts, "agent-ca", "/pelican/tls") {
+		t.Errorf("game mounts %+v", game.VolumeMounts)
+	}
+	// The game pod gets the CA bundle only, never the agent's key.
+	v := volume(gameTmpl.Spec.Volumes, "agent-ca")
+	if v == nil || v.Secret == nil || v.Secret.SecretName != "gs-"+uuid+"-tls" || len(v.Secret.Items) != 1 || v.Secret.Items[0].Key != "ca.crt" || v.Secret.Items[0].Path != "ca.crt" {
+		t.Errorf("game ca volume %+v", v)
+	}
+
+	// Without TLS nothing of it is rendered, and switching it recreates both pods.
+	plainAgent, plainGame := AgentPodTemplate(plain), GamePodTemplate(plain)
+	if strings.Contains(strings.Join(plainAgent.Spec.Containers[0].Args, " "), "--tls-dir") || volume(plainAgent.Spec.Volumes, "tls") != nil ||
+		plainAgent.Spec.Containers[0].StartupProbe.HTTPGet.Scheme != "" {
+		t.Errorf("plain agent pod has TLS: %+v", plainAgent.Spec)
+	}
+	if strings.Contains(strings.Join(plainGame.Spec.Containers[0].Command, " "), "--agent-ca") || volume(plainGame.Spec.Volumes, "agent-ca") != nil {
+		t.Errorf("plain game pod has TLS: %+v", plainGame.Spec)
+	}
+	if TemplateHash(plainAgent) == TemplateHash(agentTmpl) || TemplateHash(plainGame) == TemplateHash(gameTmpl) {
+		t.Error("switching TLS must change the template hashes")
+	}
+
+	sec := TLSSecret(in, map[string][]byte{"tls.crt": []byte("c")})
+	if sec.Name != "gs-"+uuid+"-tls" || sec.Type != corev1.SecretTypeTLS || string(sec.Data["tls.crt"]) != "c" || sec.Labels[v1alpha1.LabelServerUUID] != uuid {
+		t.Errorf("tls secret %+v", sec)
+	}
+}
+
+func hasMount(mounts []corev1.VolumeMount, name, path string) bool {
+	for _, m := range mounts {
+		if m.Name == name && m.MountPath == path && m.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func volume(vols []corev1.Volume, name string) *corev1.Volume {
+	for i := range vols {
+		if vols[i].Name == name {
+			return &vols[i]
+		}
+	}
+	return nil
+}
