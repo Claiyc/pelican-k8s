@@ -51,8 +51,10 @@ func TestCopiedShimRunsNonDumpable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run the copy: %v", err)
 	}
-	if got := strings.TrimSpace(string(out)); got != "0" {
-		t.Fatalf("dumpable %q, want 0", got)
+	// The kernel sets fs.suid_dumpable (0, or 2 on many distributions); either
+	// way it is not SUID_DUMP_USER (1), the only value that lets the same UID in.
+	if got := strings.TrimSpace(string(out)); got == "1" || got == "" {
+		t.Fatalf("dumpable %q, want anything but 1", got)
 	}
 	// A second copy over the first, as when init containers run again.
 	if err := copySelf(bin); err != nil {
