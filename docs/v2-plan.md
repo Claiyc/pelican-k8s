@@ -117,14 +117,47 @@ game pod has a required pod affinity to the agent pod.
 - `internal/gateway/sftprelay`: write `status.agent.sftpActiveAt`.
 - Tests: reconciler tests with a fake client for same node, other node, busy agent, busy agent on a
   full node, lost agent pod, lost game pod, drain.
-- e2e: a kind cluster with two workers and a StorageClass whose volumes are not bound to a node.
-  kind's default local-path volumes carry node affinity, so the pair could never move; configure
-  the local-path provisioner with a shared directory (`sharedFileSystemPath`) that is mounted into
-  every kind node, or use an in-cluster NFS CSI driver. That exercises the whole flow: scheduling,
-  the agent following, sessions, starts on a full node.
-- Not covered by kind: the detach and attach of a real block device (timing, a volume that is
-  still attached to the old node). Run that once by hand on a multi-node cluster with Longhorn or
-  Ceph.
+- Live suite: step 6.
+
+### Step 6: live placement suite
+
+Reconciler tests prove the operator decides correctly; they cannot show that the scheduler, the
+StatefulSet controller and kubelet then do what the design assumes. A live suite covers that and
+is where later scheduling rules get their tests.
+
+- **Workflow** *Placement* (`.github/workflows/placement.yaml`, `hack/e2e-placement.sh`): on pull
+  requests that touch `internal/operator`, `internal/agent`, `internal/shim`, `api` or
+  `charts/pelican-k8s`, on pushes to `master`, and nightly.
+- **Cluster:** kind with one control-plane node and three workers, the same node image as the
+  *Contract* workflow.
+- **Storage:** a StorageClass whose volumes are not bound to a node. kind's default local-path
+  volumes carry node affinity, so the pair could never move; the suite configures the local-path
+  provisioner with a shared directory (`sharedFileSystemPath`) mounted into every kind node, or an
+  in-cluster NFS CSI driver if that option does not hold up.
+- **No Panel, no real game.** The suite creates `GameServer` objects itself and drives them through
+  `spec.power`; the gateway runs against `test/fakepanel`. The egg image is a few lines of shell
+  that print a done line, answer a stop command and can be told to exit or to ignore SIGTERM.
+- **Forced outcomes.** A node is made unfit by cordoning it or by a placeholder pod that requests
+  most of its memory, so "the game pod lands elsewhere" never depends on scheduler scoring.
+- **Scenarios** (`test/placement`, build tag `placement`):
+
+  | Scenario | Asserts |
+  |---|---|
+  | Start, stop | game pod appears on the agent's node, becomes Ready on the done line, is gone after the stop; the agent pod is never recreated |
+  | Start with the agent's node full | game pod on another node, `AgentRelocating`, agent pod recreated there, `start` issued only after both are on one node |
+  | The same while the agent is busy | game pod `Pending` on the agent's node; released when the work ends |
+  | `preferAgentNode: false` | no pod affinity on the game pod |
+  | Drain of the pair's node | the process gets its stop command, both pods come back on one node, the server runs again |
+  | Agent pod deleted while the game runs | the process keeps its PID, the agent returns on the same node and re-attaches |
+  | Game pod deleted while running | graceful stop by the shim, new game pod, server runs again |
+  | Crash without restart | `desired: Stopped` after a minute, game pod gone |
+  | Stopped server, agent's node drained | agent reschedules without a node affinity |
+  | Allocation-IP node affinity (NodePort with `Local`) | game pod on the node owning the IP, agent follows |
+
+- **Not covered:** the detach and attach of a real block device. With shared storage a game pod
+  mounts the volume before the agent has left the old node, so the suite cannot show a volume that
+  is still attached elsewhere (`GamePodReady=False`, `WaitingForVolume`) or how long a move takes.
+  That stays a manual run on a multi-node cluster with Longhorn or Ceph before a release; see §5.
 
 ### Release
 
@@ -166,3 +199,8 @@ the Panel UI reconnects by itself. ARCHITECTURE.md §5.9 describes the behaviour
    SELinux MCS label (the install Job already shares the volume this way).
 7. **Agent SFTP host key.** Confirm it is on the PVC and survives an agent move; otherwise the
    pinned `status.agent.sftpHostKey` has to be reset on relocation.
+8. **Real block storage in automation.** Longhorn inside kind needs iSCSI in the node containers
+   and is slow to come up, so it does not belong in the pull request suite. If the manual run
+   before releases becomes a burden, the option is a nightly workflow that creates three small
+   cloud VMs with k3s and Longhorn, runs the placement suite against them and deletes them. It
+   needs cloud credentials and costs a little per run.
