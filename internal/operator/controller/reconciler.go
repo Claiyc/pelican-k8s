@@ -184,7 +184,7 @@ func (r *GameServerReconciler) reconcile(s *scope) error {
 		return err
 	}
 	r.place(s)
-	if err := r.ensureStatefulSets(s); err != nil {
+	if err := r.ensureAgentStatefulSet(s); err != nil {
 		return err
 	}
 	if err := r.reconcilePods(s); err != nil {
@@ -740,9 +740,13 @@ func computePhase(s *scope) v1alpha1.Phase {
 		return v1alpha1.PhaseRunning
 	case v1alpha1.ProcessStopping:
 		return v1alpha1.PhaseStopping
-	default:
-		return v1alpha1.PhaseStopped
 	}
+	// Offline: a start in progress (the game pod being scheduled, pulled
+	// and connected, or the power call not made yet) is Starting.
+	if gs.Spec.Power.Desired == v1alpha1.PowerRunning && (gs.Spec.Power.Generation != gs.Status.Power.ObservedGeneration || !condTrue(gs, v1alpha1.ConditionGamePodReady)) {
+		return v1alpha1.PhaseStarting
+	}
+	return v1alpha1.PhaseStopped
 }
 
 // quantityString is a small helper for events.

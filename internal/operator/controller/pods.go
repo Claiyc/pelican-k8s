@@ -75,28 +75,69 @@ func (r *GameServerReconciler) place(s *scope) {
 	s.in.AgentNode = ""
 }
 
-// ensureStatefulSets renders and applies the agent and game StatefulSets.
-func (r *GameServerReconciler) ensureStatefulSets(s *scope) error {
-	suspendedToZero := s.settings.Suspended && s.class.Spec.SuspendScalesToZero
+// ensureAgentStatefulSet applies the agent StatefulSet: one replica from the
+// creation of the GameServer to its deletion, none for a suspended server
+// whose class scales it to zero once its game pod is gone.
+func (r *GameServerReconciler) ensureAgentStatefulSet(s *scope) error {
 	agent := render.AgentStatefulSet(s.in)
-	if suspendedToZero {
+	if s.settings.Suspended && s.class.Spec.SuspendScalesToZero && s.pod == nil {
 		agent.Spec.Replicas = new(int32)
 	}
 	if err := r.applyStatefulSet(s, agent); err != nil {
 		return err
 	}
 	s.gs.Status.Agent.TemplateHash = agent.Spec.Template.Annotations[render.AnnotationTemplateHash]
+	return nil
+}
 
+// ensureGameStatefulSet applies the game StatefulSet (ARCHITECTURE.md 7.6
+// "Workloads"). Its template is rendered from the current spec and class on
+// every reconcile, so a new game pod always gets the current image, limits,
+// ports and placement.
+func (r *GameServerReconciler) ensureGameStatefulSet(s *scope) error {
 	game := render.GameStatefulSet(s.in)
-	if suspendedToZero {
-		game.Spec.Replicas = new(int32)
+	replicas, err := r.gameReplicas(s)
+	if err != nil {
+		return err
 	}
+	game.Spec.Replicas = &replicas
 	if err := r.applyStatefulSet(s, game); err != nil {
 		return err
 	}
 	s.gs.Status.TemplateHash = game.Spec.Template.Annotations[render.AnnotationTemplateHash]
 	s.gs.Status.PodImage = s.in.Image
 	return nil
+}
+
+// gameReplicas is 1 while the server should run, and after that until its
+// process is offline: a game pod goes only once nothing runs in it.
+func (r *GameServerReconciler) gameReplicas(s *scope) (int32, error) {
+	if s.gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended {
+		return 1, nil
+	}
+	if s.pod == nil {
+		return 0, nil
+	}
+	if !s.pod.DeletionTimestamp.IsZero() {
+		// Already going; scaling down only keeps the StatefulSet from
+		// recreating it.
+		return 0, nil
+	}
+	if s.agent == nil {
+		// Without the agent nothing tells whether the process still runs.
+		return 1, nil
+	}
+	if !gameContainerStarted(s.pod) {
+		return 0, nil
+	}
+	st, err := r.serverState(s)
+	if err != nil {
+		return 0, err
+	}
+	if st.State != v1alpha1.ProcessOffline {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (r *GameServerReconciler) applyStatefulSet(s *scope, desired *appsv1.StatefulSet) error {
@@ -143,6 +184,9 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 
 	lost := false
 	if err := r.reconcileAgentPod(s, &lost); err != nil {
+		return err
+	}
+	if err := r.ensureGameStatefulSet(s); err != nil {
 		return err
 	}
 	resizeRecreate := false
@@ -207,7 +251,12 @@ func (r *GameServerReconciler) reconcileAgentPod(s *scope, lost *bool) error {
 func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *bool) error {
 	pod := s.pod
 	if pod == nil {
-		r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "NoPod", "game pod does not exist yet")
+		if s.gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended {
+			r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "NoPod", "game pod does not exist yet")
+			s.requeue = requeueFast
+		} else {
+			r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "NotRequested", "the server is stopped")
+		}
 		return nil
 	}
 	if pod.Spec.NodeName != "" {

@@ -1,6 +1,6 @@
 // Package app wires the gateway: Kubernetes cache, Panel client, the
 // Panel-facing API, the agent-facing remote API, the websocket proxy, the
-// SFTP relay and the drift resync loop.
+// SFTP relay, the drift resync loop and the crash check.
 package app
 
 import (
@@ -26,6 +26,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/config"
+	"github.com/Claiyc/pelican-k8s/internal/gateway/crashwatch"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/metallb"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panelapi"
@@ -140,6 +141,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 	}()
 	go g.Sync.RunResync(ctx, g.Cfg.ResyncInterval)
 	go g.resetServersState(ctx)
+	go (&crashwatch.Watcher{Store: g.Store, Log: g.Log.With("component", "crashwatch")}).Run(ctx)
 
 	var runErr error
 	select {

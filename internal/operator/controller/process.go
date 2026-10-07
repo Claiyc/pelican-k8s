@@ -97,8 +97,14 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 				gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 				break
 			}
+			if s.pod == nil || !s.pod.DeletionTimestamp.IsZero() {
+				// The game StatefulSet creates the game pod; the fresh-pod rule
+				// starts the process once its shim is attached.
+				s.requeue = requeueFast
+				break
+			}
 			if recreatePending {
-				// Stop first; reconcilePod recreates the pod once offline and the
+				// Stop first; reconcilePods recreates the pod once offline and the
 				// fresh-pod rule starts it. The generation stays unobserved until then.
 				if state.State != v1alpha1.ProcessOffline {
 					if err := r.power(s, "stop"); err != nil {

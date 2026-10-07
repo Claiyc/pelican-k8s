@@ -515,7 +515,8 @@ func TestGamePodReadyReasons(t *testing.T) {
 		mutate func(h *podHarness)
 		reason string
 	}{
-		"no pod": {func(h *podHarness) { h.s.pod = nil }, "NoPod"},
+		"no pod, stopped": {func(h *podHarness) { h.s.pod = nil }, "NotRequested"},
+		"no pod, running": {func(h *podHarness) { h.s.pod = nil; h.s.gs.Spec.Power.Desired = v1alpha1.PowerRunning }, "NoPod"},
 		"unschedulable": {func(h *podHarness) {
 			h.pod.Spec.NodeName = ""
 			h.pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "0/3 nodes are available"}}
@@ -618,4 +619,67 @@ func TestReconcilePodsResizesEvenWhenRecreateIsPending(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGameReplicas(t *testing.T) {
+	cases := []struct {
+		name      string
+		desired   v1alpha1.PowerState
+		suspended bool
+		noPod     bool
+		noAgent   bool
+		deleting  bool
+		unstarted bool
+		state     string
+		want      int32
+	}{
+		{name: "running, no pod yet", desired: v1alpha1.PowerRunning, noPod: true, want: 1},
+		{name: "running, process running", desired: v1alpha1.PowerRunning, state: v1alpha1.ProcessRunning, want: 1},
+		{name: "running, crashed and offline", desired: v1alpha1.PowerRunning, state: v1alpha1.ProcessOffline, want: 1},
+		{name: "stopped, no pod", desired: v1alpha1.PowerStopped, noPod: true, want: 0},
+		{name: "stopped, still stopping", desired: v1alpha1.PowerStopped, state: v1alpha1.ProcessStopping, want: 1},
+		{name: "stopped, offline", desired: v1alpha1.PowerStopped, state: v1alpha1.ProcessOffline, want: 0},
+		{name: "stopped, agent unavailable", desired: v1alpha1.PowerStopped, noAgent: true, want: 1},
+		{name: "stopped, game container never started", desired: v1alpha1.PowerStopped, unstarted: true, state: v1alpha1.ProcessRunning, want: 0},
+		{name: "stopped, pod terminating", desired: v1alpha1.PowerStopped, deleting: true, state: v1alpha1.ProcessRunning, want: 0},
+		{name: "suspended, running", desired: v1alpha1.PowerRunning, suspended: true, state: v1alpha1.ProcessRunning, want: 1},
+		{name: "suspended, offline", desired: v1alpha1.PowerRunning, suspended: true, state: v1alpha1.ProcessOffline, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+			h.s.gs.Spec.Power.Desired = tc.desired
+			h.s.settings.Suspended = tc.suspended
+			h.agent.state = tc.state
+			h.s.agent = h.agent
+			if tc.noAgent {
+				h.s.agent = nil
+			}
+			if tc.noPod {
+				h.s.pod = nil
+			}
+			if tc.deleting {
+				now := metav1.NewTime(h.now)
+				h.pod.DeletionTimestamp = &now
+			}
+			if tc.unstarted {
+				h.pod.Status.ContainerStatuses = nil
+			}
+			got, err := h.r.gameReplicas(h.s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("replicas %d, want %d", got, tc.want)
+			}
+		})
+	}
+	t.Run("agent error", func(t *testing.T) {
+		h := newPodHarness(t, true, newClass(), interceptor.Funcs{})
+		h.agent.getErr = errBoom
+		h.s.agent = h.agent
+		if _, err := h.r.gameReplicas(h.s); !errors.Is(err, errBoom) {
+			t.Fatalf("err %v", err)
+		}
+	})
 }
