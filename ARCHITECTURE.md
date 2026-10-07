@@ -571,7 +571,7 @@ runs inside the encrypted connection (§12.6).
 | `Attach` | Wait for the shim's authenticated connection and subscribe; `terminating` ⇒ `SetState(stopping)`; `exited` ⇒ `SetState(offline)` (drives Wings' crash detection) |
 | `Start` | Wait for the shim connection, truncate the console log, `starting`, `start{env}`. If the shim already runs the process, mark it running and attach |
 | `SetStopConfiguration` | Keep the configuration and send `configure{stop}` to an attached shim |
-| `Stop` | Stop type `signal` ⇒ `signal{}` (Wings' mapping, unknown ⇒ SIGKILL); type `command` ⇒ `stdin{value+"\n"}` |
+| `Stop` | Stop type `signal` ⇒ `signal{}` (Wings' mapping, unknown ⇒ SIGKILL), then `kill` when the process still runs 10 s later, as Wings' Docker environment does; type `command` ⇒ `stdin{value+"\n"}` |
 | `WaitForStop` / `Terminate` | Poll the shim status; SIGKILL on timeout |
 | `SendCommand` | `stdin{}` (sets `stopping` first if it equals the stop command, as Wings does) |
 | `Readlog(n)` | Tail of `logs/console/<uuid>.log` |
