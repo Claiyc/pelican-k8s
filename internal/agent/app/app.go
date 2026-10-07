@@ -88,16 +88,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	logger.Info("pelican-k8s agent starting", "version", version.Version, "remote", cfg.PanelLocation, "root", cfg.System.RootDirectory)
 
-	var certs *pki.Dir
-	var gatewayTransport http.RoundTripper
-	if o.TLSDir != "" {
-		var err error
-		if certs, err = pki.LoadDir(o.TLSDir); err != nil {
-			return fmt.Errorf("tls: %w", err)
-		}
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.TLSClientConfig = certs.ClientConfig()
-		gatewayTransport = t
+	certs, gatewayTransport, err := loadTLS(o.TLSDir)
+	if err != nil {
+		return err
 	}
 	client := remote.New(cfg.PanelLocation,
 		remote.WithCredentials(cfg.Token.ID, cfg.Token.Token),
@@ -114,11 +107,7 @@ func Run(ctx context.Context, o Options) error {
 	if shimListen == "" {
 		shimListen = ":8082"
 	}
-	var shimTLS *tls.Config
-	if certs != nil {
-		shimTLS = certs.ServerConfig(false)
-	}
-	shimListener, err := protocol.Listen(shimListen, []byte(o.ShimToken), shimTLS, logger.With("component", "shim-listener"))
+	shimListener, err := protocol.Listen(shimListen, []byte(o.ShimToken), certs.shimConfig(), logger.With("component", "shim-listener"))
 	if err != nil {
 		return err
 	}
@@ -179,12 +168,7 @@ func Run(ctx context.Context, o Options) error {
 		Handler:           routes.Handler(engine, manager, registry),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	if certs != nil {
-		// Kubelet probes and the preStop hook cannot present a certificate;
-		// everything else comes from the gateway or the operator.
-		srv.TLSConfig = certs.ServerConfig(true)
-		srv.Handler = routes.RequireClientCert(srv.Handler)
-	}
+	certs.secureHTTP(srv)
 	go func() {
 		<-ctx.Done()
 		sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -198,15 +182,53 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("agent listening", "addr", ln.Addr().String(), "sftp", cfg.System.Sftp.Port, "tls", certs != nil)
+	logger.Info("agent listening", "addr", ln.Addr().String(), "sftp", cfg.System.Sftp.Port, "tls", srv.TLSConfig != nil)
 	if o.Ready != nil {
 		close(o.Ready)
 	}
-	if certs != nil {
+	if srv.TLSConfig != nil {
 		ln = tls.NewListener(ln, srv.TLSConfig)
 	}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// agentCerts is the agent's certificate directory; nil without TLS.
+type agentCerts struct{ dir *pki.Dir }
+
+// loadTLS loads the certificate directory, when one is set, and returns the
+// transport for calls to the gateway that trusts the internal CA.
+func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
+	if dir == "" {
+		return nil, nil, nil
+	}
+	d, err := pki.LoadDir(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tls: %w", err)
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = d.ClientConfig()
+	return &agentCerts{dir: d}, t, nil
+}
+
+// shimConfig is the shim listener's TLS configuration: the agent's
+// certificate, no client certificate (the shim proves the shim token).
+func (c *agentCerts) shimConfig() *tls.Config {
+	if c == nil {
+		return nil
+	}
+	return c.dir.ServerConfig(false)
+}
+
+// secureHTTP serves the HTTP API over TLS and requires a client certificate.
+// Kubelet probes and the preStop hook cannot present one; everything else
+// comes from the gateway or the operator.
+func (c *agentCerts) secureHTTP(srv *http.Server) {
+	if c == nil {
+		return
+	}
+	srv.TLSConfig = c.dir.ServerConfig(true)
+	srv.Handler = routes.RequireClientCert(srv.Handler)
 }
