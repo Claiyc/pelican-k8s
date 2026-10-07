@@ -497,16 +497,17 @@ func (h *Handler) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Completion posts clear the pending record.
 	if r.Method == http.MethodPost {
-		var pending []v1alpha1.PendingBackup
-		for _, p := range gs.Status.Backups.Pending {
-			if p.UUID != backup {
-				pending = append(pending, p)
+		if err := h.Store.UpdateBackups(r.Context(), uuid, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup {
+			out := []v1alpha1.PendingBackup{}
+			for _, p := range live {
+				if p.UUID != backup {
+					out = append(out, p)
+				}
 			}
+			return out
+		}); err != nil {
+			h.Log.Warn("cannot clear the pending backup", "uuid", uuid, "backup", backup, "error", err)
 		}
-		if pending == nil {
-			pending = []v1alpha1.PendingBackup{}
-		}
-		_ = h.Store.PatchStatus(r.Context(), uuid, map[string]any{"backups": map[string]any{"pending": pending}})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

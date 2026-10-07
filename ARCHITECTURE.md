@@ -333,7 +333,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `GET /servers/{uuid}/install/state?generation=` | The Job outcome recorded by the operator, polled by the installer |
 | `POST /servers/{uuid}/install` | Record `status.install.result`, `finishedAt` and `reportedGeneration`; forward to the Panel; on success with `spec.install.startOnInstall`, start the server |
 | `POST /activity` | Forward rows whose `server` is the caller; drop the rest. A `422` from the Panel drops the batch |
-| `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls); a result post removes the entry; unknown backups get `404` |
+| `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls, §8.7); a result post removes the entry; unknown backups get `404` |
 | `POST /sftp/auth` | Verify the SFTP session credential (§5.6) and answer with the Panel response sealed in it when it is for the caller's server; never forwarded |
 | transfers, anything else | `404`, logged as a warning |
 
@@ -449,7 +449,7 @@ the agent's own routes and serves both on `:8080`:
 | `GET /internal/v1/healthz` | kubelet | Startup and liveness probe of the agent container |
 | `/internal/v1/prestop` | kubelet `preStop` (httpGet) of the agent container | Return at once unless the shim is shutting down; then return when the process is offline (§6.4) |
 | `GET /internal/v1/shim` | operator (agent token) | `{attached, podUID, running}`: the game pod whose shim holds the authenticated connection (§7.6) |
-| `GET /internal/v1/activity` | operator (agent token) | `{busy, reasons}`: in-flight file requests (uploads, downloads, compress, decompress), remote pulls, backup, restore and install (§7.7) |
+| `GET /internal/v1/activity` | operator (agent token) | `{busy, reasons}`: in-flight file requests (uploads, downloads, compress, decompress), remote pulls, restore and install; backups count through `status.backups.pending` (§7.7) |
 | `POST /internal/v1/exit-state {code, oomKilled}` | operator (agent token) | Inject the exit of a game container that terminated, e.g. after an OOM kill (§6.4) |
 
 The agent also listens on `:8082` for the shim (§6.4).
@@ -700,7 +700,7 @@ status:
     reportedGeneration: 1   # result forwarded to the Panel
     observedGeneration: 1
   backups:
-    pending: [ {uuid: "…", startedAt: "…"} ]
+    pending: [ {uuid: "…", startedAt: "…", agent: "<agent pod UID>/<agent restarts>"} ]   # gateway, §8.7
   endpoints:
     - {ip: "203.0.113.10", port: 25565, protocols: [TCP, UDP]}
   podImage: ghcr.io/pelican-eggs/yolks:java_21@sha256:…   # image of the current or last game pod
@@ -1025,9 +1025,9 @@ of §9.3, the game pod is constrained toward the agent only softly:
 | The agent has in-flight work | required, for this start only. If the node has no room the game pod stays `Pending` (`GamePodReady=False`, `Unschedulable`); when the work has ended the operator replaces it with a pod without the requirement |
 
 In-flight work is anything a move of the agent would break: what the agent reports at
-`GET /internal/v1/activity` (file transfers, compress and decompress, remote pulls, backup, restore,
-install), an entry in `status.backups.pending`, an install in progress, or
-`status.agent.sftpActiveAt` within the last minute.
+`GET /internal/v1/activity` (file transfers, compress and decompress, remote pulls, restore,
+install), an entry in `status.backups.pending` of the current agent (§8.7), an install in progress,
+or `status.agent.sftpActiveAt` within the last minute.
 
 **Agent pod.** Once the game pod has a node, the operator writes a required node affinity for that node
 into the agent StatefulSet's template.
@@ -1260,8 +1260,13 @@ in-flight work.
 - **Restore:** Panel → gateway → agent. The agent runs Wings' `RestoreBackup` (an S3 `download_url` is
   fetched by the agent) and reports through the remote API.
 - The gateway adds the backup to `status.backups.pending` on backup and restore requests, which lets
-  the agent's remote-API calls for it through (§5.7), and removes it when the agent posts the result.
-  A pending entry counts as in-flight work of the agent (§7.7).
+  the agent's remote-API calls for it through (§5.7), and removes it when the agent posts the result
+  or refuses the request (any answer other than 2xx, or no agent within the wait). Each entry names
+  the agent instance that runs it, the agent pod's UID and its container's restart count: a backup
+  ends with its agent, so entries of an earlier instance are no longer in flight and are dropped
+  with the next write. The writes are conditional on the GameServer's `resourceVersion`, so two
+  gateway replicas never lose each other's entries. A pending entry of the current agent counts as
+  in-flight work (§7.7) and holds back the gateway's boot reset (§8.9).
 
 ### 8.8 Delete server
 
@@ -1297,7 +1302,7 @@ in-flight work.
   reconnect. `POST /api/remote/servers/reset` clears `installing` and `restoring_backup` for every
   server on the node, so after each start the gateway sends it once no CR has an install in progress
   (`spec.install.generation` above `observedGeneration`, or `result: Running`) and none has a pending
-  backup or restore, checking every 30 s.
+  backup or restore of its current agent (§8.7), checking every 30 s.
 - **Operator restart:** reconciles are idempotent; `status.power.observedGeneration`,
   `status.agent.podUID` and `status.game.podUID` prevent duplicate power actions.
 

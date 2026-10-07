@@ -443,7 +443,8 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // backupProxy records the backup as pending so the agent's remote-API calls
-// for it are allowed, then proxies.
+// for it are allowed, then proxies. An agent that refuses the backup or
+// restore, or cannot be reached, runs nothing, so its record is dropped again.
 func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("server")
 	backup := r.PathValue("backup")
@@ -456,24 +457,77 @@ func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &data)
 		backup = data.UUID
 	}
-	if backup != "" {
-		gs, err := h.Store.Get(r.Context(), uuid)
-		if err == nil {
-			pending := append([]v1alpha1.PendingBackup(nil), gs.Status.Backups.Pending...)
-			found := false
-			for _, p := range pending {
-				if p.UUID == backup {
-					found = true
-				}
-			}
-			if !found {
-				pending = append(pending, v1alpha1.PendingBackup{UUID: backup, StartedAt: nowMeta()})
-				_ = h.Store.PatchStatus(r.Context(), uuid, map[string]any{"backups": map[string]any{"pending": pending}})
+	t, err := h.Agents.Wait(r.Context(), uuid)
+	if err != nil {
+		h.agentUnavailable(w, err)
+		return
+	}
+	if backup == "" {
+		h.Agents.Proxy(w, r, t, nil)
+		return
+	}
+	// Recorded before the agent sees the request: it may report on the
+	// backup before it answers.
+	added := false
+	err = h.Store.UpdateBackups(r.Context(), uuid, func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup {
+		added = false
+		for _, p := range live {
+			if p.UUID == backup {
+				return live
 			}
 		}
+		added = true
+		return append(live, v1alpha1.PendingBackup{UUID: backup, StartedAt: nowMeta(), Agent: agent})
+	})
+	if err != nil {
+		h.Log.Warn("cannot record the pending backup", "uuid", uuid, "backup", backup, "error", err)
 	}
-	h.proxy(w, r)
+	rec := &statusRecorder{ResponseWriter: w}
+	h.Agents.Proxy(rec, r, t, nil)
+	if added && (rec.status < 200 || rec.status > 299) {
+		// WithoutCancel: the client may be gone, the record must still go.
+		ctx := context.WithoutCancel(r.Context())
+		if err := h.Store.UpdateBackups(ctx, uuid, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup {
+			return withoutBackup(live, backup)
+		}); err != nil {
+			h.Log.Warn("cannot drop the refused backup", "uuid", uuid, "backup", backup, "error", err)
+		}
+	}
 }
+
+// withoutBackup returns the entries other than backup.
+func withoutBackup(pending []v1alpha1.PendingBackup, backup string) []v1alpha1.PendingBackup {
+	out := []v1alpha1.PendingBackup{}
+	for _, p := range pending {
+		if p.UUID != backup {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// statusRecorder notes the status code a handler writes.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func (h *Handler) agentUnavailable(w http.ResponseWriter, err error) {
 	if errors.Is(err, agents.ErrUnavailable) {

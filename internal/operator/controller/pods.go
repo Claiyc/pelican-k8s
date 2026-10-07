@@ -111,7 +111,7 @@ func (r *GameServerReconciler) agentWork(s *scope) []string {
 		return nil
 	}
 	var work []string
-	if len(gs.Status.Backups.Pending) > 0 {
+	if len(gs.Status.Backups.Live(render.AgentInstance(pod))) > 0 {
 		work = append(work, "backup")
 	}
 	if gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration && gs.Status.Install.Result != v1alpha1.InstallFailed {

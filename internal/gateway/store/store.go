@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
@@ -199,6 +202,59 @@ func (s *Store) PatchStatusAt(ctx context.Context, uuid, resourceVersion string,
 	}
 	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
 	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
+// backupsBackoff paces the retries of a pending-backups write that lost to
+// another write of the GameServer (another replica's, or any status change).
+var backupsBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 10, Cap: time.Second}
+
+// AgentInstance returns the current instance of the server's agent
+// (render.AgentInstance), or "" without an agent pod.
+func (s *Store) AgentInstance(ctx context.Context, uuid string) (string, error) {
+	pod, err := s.AgentPod(ctx, uuid)
+	if err != nil {
+		return "", err
+	}
+	return render.AgentInstance(pod), nil
+}
+
+// UpdateBackups rewrites status.backups.pending. mutate gets the entries of
+// the current agent instance (entries of an earlier one ended with it and are
+// dropped) and that instance, and returns the new list. The write is
+// conditional on the version read, so concurrent writers on several gateway
+// replicas never drop or bring back each other's entries; a conflict starts
+// over with a fresh read.
+func (s *Store) UpdateBackups(ctx context.Context, uuid string, mutate func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup) error {
+	return retry.OnError(backupsBackoff, apierrors.IsConflict, func() error {
+		gs, err := s.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		agent, err := s.AgentInstance(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		pending := mutate(gs.Status.Backups.Live(agent), agent)
+		if pending == nil {
+			pending = []v1alpha1.PendingBackup{}
+		}
+		if equalBackups(pending, gs.Status.Backups.Pending) {
+			return nil
+		}
+		return s.PatchStatusAt(ctx, uuid, gs.ResourceVersion, map[string]any{"backups": map[string]any{"pending": pending}})
+	})
+}
+
+func equalBackups(a, b []v1alpha1.PendingBackup) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].UUID != b[i].UUID || a[i].Agent != b[i].Agent {
+			return false
+		}
+	}
+	return true
 }
 
 // SetCondition sets one status condition through a merge patch (the operator
