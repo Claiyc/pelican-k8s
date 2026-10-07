@@ -154,10 +154,30 @@ is where later scheduling rules get their tests.
   | Stopped server, agent's node drained | agent reschedules without a node affinity |
   | Allocation-IP node affinity (NodePort with `Local`) | game pod on the node owning the IP, agent follows |
 
-- **Not covered:** the detach and attach of a real block device. With shared storage a game pod
-  mounts the volume before the agent has left the old node, so the suite cannot show a volume that
-  is still attached elsewhere (`GamePodReady=False`, `WaitingForVolume`) or how long a move takes.
-  That stays a manual run on a multi-node cluster with Longhorn or Ceph before a release; see §5.
+- **Not covered here:** the detach and attach of a real block device. With shared storage a game
+  pod mounts the volume before the agent has left the old node, so this suite cannot show a volume
+  that is still attached elsewhere (`GamePodReady=False`, `WaitingForVolume`) or how long a move
+  takes. Step 7 covers that.
+
+### Step 7: nightly block-storage suite
+
+The same scenarios on real nodes with real block storage, so no release depends on a manual run.
+
+- **Workflow** *Placement (block storage)*: nightly and on demand (`workflow_dispatch`), on a
+  GitHub-hosted Linux runner. These expose `/dev/kvm` (a udev rule gives the runner user access)
+  and have 4 vCPU and 16 GB RAM for public repositories.
+- **Cluster:** three KVM virtual machines on the runner (Ubuntu cloud image, cloud-init installs
+  `open-iscsi`), k3s with one server and two agents, Longhorn with one replica per volume. Unlike
+  kind nodes, each VM has its own kernel, so a volume is attached to exactly one node.
+- **Suite:** `test/placement` with the StorageClass as a parameter, plus the block-only
+  assertions: the game pod waits with `WaitingForVolume` while the agent still holds the volume,
+  the move completes within a bound, and data written before the move is there after it.
+- **Budget:** three VMs with 2 vCPU and 4 GB each fit the runner's memory. The 14 GB disk does
+  not hold three VM disks plus the images, so the job first removes preinstalled toolchains.
+- **Spike first.** Bringing up the VMs, k3s and Longhorn on a hosted runner is unproven here: do
+  it as a throwaway workflow before step 5 and record the run time. If it does not hold up
+  (time, disk, flakiness), the fallback is the same job against three short-lived cloud VMs,
+  which needs cloud credentials.
 
 ### Release
 
@@ -199,8 +219,3 @@ the Panel UI reconnects by itself. ARCHITECTURE.md §5.9 describes the behaviour
    SELinux MCS label (the install Job already shares the volume this way).
 7. **Agent SFTP host key.** Confirm it is on the PVC and survives an agent move; otherwise the
    pinned `status.agent.sftpHostKey` has to be reset on relocation.
-8. **Real block storage in automation.** Longhorn inside kind needs iSCSI in the node containers
-   and is slow to come up, so it does not belong in the pull request suite. If the manual run
-   before releases becomes a burden, the option is a nightly workflow that creates three small
-   cloud VMs with k3s and Longhorn, runs the placement suite against them and deletes them. It
-   needs cloud credentials and costs a little per run.
