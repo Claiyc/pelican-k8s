@@ -92,6 +92,10 @@ spec:
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/pelican/ca
             {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: PELICAN_GW_TLS_DIR
+              value: /etc/pelican-tls
+            {{- end }}
           ports:
             - {name: panel, containerPort: 8080}
             - {name: remote, containerPort: 8081}
@@ -108,18 +112,33 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
-          {{- if .Values.gateway.extraCA.configMap }}
+          {{- if or .Values.gateway.extraCA.configMap .Values.tls.enabled }}
           volumeMounts:
+            {{- if .Values.gateway.extraCA.configMap }}
             - name: extra-ca
               mountPath: /etc/pelican/ca
               readOnly: true
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            # Written and renewed by the operator; the gateway reloads it.
+            - name: tls
+              mountPath: /etc/pelican-tls
+              readOnly: true
+            {{- end }}
       volumes:
+        {{- if .Values.gateway.extraCA.configMap }}
         - name: extra-ca
           configMap:
             name: {{ .Values.gateway.extraCA.configMap }}
             items:
               - key: {{ .Values.gateway.extraCA.key }}
                 path: ca.crt
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "pelican-k8s.gatewayTLSSecretName" . }}
+        {{- end }}
           {{- end }}
 ---
 apiVersion: v1

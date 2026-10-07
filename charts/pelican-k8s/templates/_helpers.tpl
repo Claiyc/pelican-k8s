@@ -41,7 +41,7 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- if .Values.gateway.remoteURL -}}
 {{- .Values.gateway.remoteURL -}}
 {{- else -}}
-{{- printf "http://%s.%s.svc:8081" (include "pelican-k8s.gatewayName" .) .Release.Namespace -}}
+{{- printf "%s://%s.%s.svc:8081" (ternary "https" "http" .Values.tls.enabled) (include "pelican-k8s.gatewayName" .) .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
 
@@ -51,4 +51,25 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- else -}}
 {{- printf "%s-node-token" (include "pelican-k8s.gatewayName" .) -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "pelican-k8s.caSecretName" -}}
+{{- printf "%s-ca" (include "pelican-k8s.fullname" .) -}}
+{{- end -}}
+
+{{- define "pelican-k8s.gatewayTLSSecretName" -}}
+{{- printf "%s-tls" (include "pelican-k8s.gatewayName" .) -}}
+{{- end -}}
+
+{{/* DNS names on the gateway's certificate: its Service, and the host of a custom remoteURL. */}}
+{{- define "pelican-k8s.gatewayTLSNames" -}}
+{{- $gw := include "pelican-k8s.gatewayName" . -}}
+{{- $names := list $gw (printf "%s.%s" $gw .Release.Namespace) (printf "%s.%s.svc" $gw .Release.Namespace) (printf "%s.%s.svc.cluster.local" $gw .Release.Namespace) -}}
+{{- with .Values.gateway.remoteURL -}}
+{{- $host := (urlParse .).host | splitList ":" | first -}}
+{{- if not (has $host $names) -}}
+{{- $names = append $names $host -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
 {{- end -}}

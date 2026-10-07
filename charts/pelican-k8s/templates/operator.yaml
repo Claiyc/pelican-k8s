@@ -36,6 +36,12 @@ spec:
             - --concurrency={{ .Values.operator.concurrency }}
             - --metrics-bind-address=:8443
             - --health-probe-bind-address=:8081
+            {{- if .Values.tls.enabled }}
+            - --tls
+            - --tls-ca-secret={{ include "pelican-k8s.caSecretName" . }}
+            - --tls-gateway-secret={{ include "pelican-k8s.gatewayTLSSecretName" . }}
+            - --tls-gateway-names={{ include "pelican-k8s.gatewayTLSNames" . }}
+            {{- end }}
             {{- if eq .Values.operator.logLevel "debug" }}
             - --zap-log-level=debug
             {{- end }}
