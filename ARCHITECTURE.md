@@ -451,7 +451,7 @@ downloads and uploads, `deauthorize-user`, `ws/deny`, and the SFTP server on `:2
 
 | # | Hook | Used by the agent for |
 |---|---|---|
-| 1 | `server.EnvironmentFactory` (`func(*Server, *environment.Configuration) (environment.ProcessEnvironment, error)`), set with `server.WithEnvironmentFactory`; default `server.DockerEnvironmentFactory` | `internal/agent/shimenv`, a `ProcessEnvironment` over the shim socket |
+| 1 | `server.EnvironmentFactory` (`func(*Server, *environment.Configuration) (environment.ProcessEnvironment, error)`), set with `server.WithEnvironmentFactory`; default `server.DockerEnvironmentFactory` | `internal/agent/shimenv`, a `ProcessEnvironment` over the shim connection |
 | 2 | `server.ImageAndStopConfigurable` and `server.Attachable` interfaces in place of `*docker.Environment` type assertions | Image and stop configuration, websocket attach |
 | 3 | `server.Installer` interface, set with `server.WithInstaller`; Wings takes the install lock before calling it | `internal/agent/installer`, the Job-backed installer (§8.2) |
 | 4 | Package `boot` (`boot.InitializeDatabase`, `boot.Scheduler`) over Wings' `internal/database` and `internal/cron` | Activity database and cron scheduler |
@@ -826,6 +826,7 @@ spec:
     fsGroup: <same>
     fsGroupChangePolicy: OnRootMismatch
     seccompProfile: {type: RuntimeDefault}
+  imagePullSecrets: <class pullSecrets>
   nodeSelector / tolerations: <class>
 ```
 
@@ -916,7 +917,6 @@ spec:
     - {name: data, persistentVolumeClaim: {claimName: gs-<uuid>}}
     - {name: pelican, emptyDir: {}}
     - {name: tmp, emptyDir: {medium: Memory, sizeLimit: <tmpSizeMiB>Mi}}
-  imagePullSecrets: <class pullSecrets>
   affinity:
     nodeAffinity: <nodes owning the allocation IP>   # HostPort, NodePort with Local (§9.3)
     podAffinity: <toward the agent pod, kubernetes.io/hostname: preferred, or required while the agent has in-flight work>   # §7.7
@@ -1042,8 +1042,8 @@ storage lets the pair move as described. Install Jobs carry a required pod affin
 
 Every flow has the same shape: the **gateway** turns a Panel or browser request into a spec change
 (or proxies a data-path request), the **operator** reconciles spec against status by calling the
-**agent's** Wings API, and the agent reports facts back through its remote API, which the gateway
-records in the status.
+**agent's** Wings API and by creating or removing the game pod, and the agent reports facts back through
+its remote API, which the gateway records in the status.
 
 ### 8.1 Create server
 
@@ -1061,8 +1061,8 @@ sequenceDiagram
   P-->>G: {container_image, entrypoint, script}
   G->>K: create GameServer (install.generation=1, power.desired=Stopped, startOnInstall), then Secret env + ConfigMap install-1 owned by it
   G-->>P: 202 Accepted
-  O->>K: Secret agent token, PVC, Services, NetworkPolicy, StatefulSet
-  K-->>A: pod starts, agent fetches its one-server config from the gateway
+  O->>K: Secrets (agent token, shim token), PVC, Services, NetworkPolicies, agent StatefulSet (1), game StatefulSet (0)
+  K-->>A: agent pod starts, agent fetches its one-server config from the gateway
   O->>A: POST /api/servers/{uuid}/install
   A->>G: (remote API) prepared ⇒ status.install.preparedGeneration=1
   O->>K: Job install-1 (§8.2)
@@ -1070,6 +1070,7 @@ sequenceDiagram
   G->>P: POST /api/remote/servers/{uuid}/install {successful, reinstall:false}
   alt successful and startOnInstall
     G->>K: patch power.desired=Running, generation++
+    O->>K: game StatefulSet to 1 replica (§8.3)
     O->>A: POST /api/servers/{uuid}/power {start}
   end
 ```
@@ -1085,7 +1086,8 @@ A `POST /api/servers` for a server that already has a CR re-syncs it and request
    runs the installer asynchronously; `/reinstall` answers `409` while a power action is running, which
    the operator retries.
 3. **Agent prepares** (`internal/agent/installer`, behind the installer hook, §6.3): for a reinstall
-   Wings stops the process first (`WaitForStop(10s, terminate)`); Wings takes the install lock, cancels
+   Wings stops the process first (`WaitForStop(10s, terminate)`), which sets `desired: Stopped` and
+   removes the game pod (§7.6); Wings takes the install lock, cancels
    SFTP sessions and publishes `install started`. The installer reports `prepared` to the gateway, which
    records `status.install.preparedGeneration` and `result: Running` and answers with the generation and
    `strict_exit_code`. The installer then tails `install/<gen>/output.log` into the console and polls
@@ -1093,7 +1095,8 @@ A `POST /api/servers` for a server that already has a CR re-syncs it and request
    script never runs while the process is alive. Without `prepared` within
    `install.prepareTimeoutSeconds`, the operator marks the install failed in the status.
 4. **Operator runs the Job** (`internal/operator/render/job.go`):
-   - required `podAffinity` to the server pod's node, so the RWO volume attaches on any cluster size
+   - required `podAffinity` to the agent pod (`kubernetes.io/hostname`), so the RWO volume attaches on
+     any cluster size
    - ServiceAccount `install.serviceAccountName`; `runAsRoot` (default) runs the script as root with the
      runtime's default capabilities, otherwise as the game UID with all capabilities dropped;
      `automountServiceAccountToken: false`; seccomp `RuntimeDefault` unless `install.disableSeccomp`
@@ -1121,7 +1124,7 @@ sequenceDiagram
   participant K as Kubernetes API
   participant O as Operator
   participant A as Agent (Wings)
-  participant S as Shim
+  participant S as Shim (game pod)
   participant P as Panel
   B->>G: WS /api/servers/{uuid}/ws
   G->>A: WS dial
@@ -1131,12 +1134,18 @@ sequenceDiagram
   B->>G: {"event":"set state","args":["start"]}
   G->>P: GET /api/remote/servers/{uuid} (re-sync spec.panel)
   G->>K: patch spec.power {desired: Running, generation: n+1}
+  O->>K: game StatefulSet: current template, 1 replica
+  K-->>S: game pod scheduled and started
+  O->>K: agent on another node? pin and recreate it there (§7.7)
+  S->>A: dial :8082, mutual challenge, pod UID
+  O->>A: GET /internal/v1/shim ⇒ attached, pod UID matches
   O->>A: POST /api/servers/{uuid}/power {start}
   A->>A: HandlePowerAction: sync, config parsers, disk check
-  A->>S: start{env}
+  A->>S: start{env, stop}
   S-->>A: output bytes …
   A-->>B: console output / status starting
   A->>A: done string matched ⇒ running
+  A->>S: state{running} ⇒ game pod Ready
   A->>G: POST /servers/{uuid}/container/status {starting → running}
   G->>K: status.process.state = running
   G->>P: forward container/status
@@ -1149,13 +1158,18 @@ sequenceDiagram
   `start` and `restart` first re-sync `spec.panel` from the Panel and are refused for a suspended server.
   The gateway checks the websocket's permissions (§5.5). `send command`, `send logs` and `send stats`
   pass through to the agent.
+- **Start:** between the power patch and Wings' `starting` the game pod is scheduled, its images are
+  pulled, its init containers run and, if the scheduler chose another node, the agent moves (§7.7). The
+  phase is `Starting` and `GamePodReady` tells which step is pending.
 - **Stop:** Wings stop logic (`command` or `signal`), `WaitForStop(10 min, terminate)`. The process goes
   `stopping` → `offline`; the gateway sees that transition in `container/status` and sets
-  `power.desired=Stopped`. The same happens when the stop command is typed into the console or the
-  server is suspended, the transitions Wings excludes from crash detection.
+  `power.desired=Stopped`, and the operator scales the game StatefulSet to 0. The same happens when the
+  stop command is typed into the console or the server is suspended, the transitions Wings excludes
+  from crash detection. Console history stays readable from the console log on the volume.
+- **Restart:** stop and start in the same game pod, unless `RecreatePending` asks for a new one (§8.5).
 - **Crash:** `exited` (from the shim, or relayed by the operator from a container-level termination) ⇒
-  agent `offline` ⇒ Wings `handleServerCrash` ⇒ auto-restart within Wings' timeout rules.
-  `power.desired` stays `Running` and the operator does not intervene (§7.6).
+  agent `offline` ⇒ Wings `handleServerCrash` ⇒ auto-restart within Wings' timeout rules, in the same
+  game pod. `power.desired` stays `Running` and the operator does not intervene (§7.6).
 
 ### 8.4 Files, downloads and uploads
 
@@ -1170,12 +1184,19 @@ sequenceDiagram
 
 ### 8.5 Image change and other pod recreates
 
-1. Panel `sync` ⇒ the gateway updates `spec.panel.settings.container.image` ⇒ the operator updates the
-   StatefulSet template and sets `RecreatePending`.
-2. If the process is `offline`, the operator deletes the pod. Otherwise it waits until the process is
-   `offline`. A start while `RecreatePending` is set stops the old process first; the pod is then
-   deleted and the new pod starts the server.
-3. The new pod's agent comes up; the fresh-pod rule (§7.6) issues `start` if `desired: Running`.
+A stopped server has no game pod, so an image, port or class change needs no action: the next start
+creates the pod from the current template (§7.6). For a server that is on:
+
+1. Panel `sync` ⇒ the gateway updates `spec.panel.settings.container.image` ⇒ the operator sets
+   `RecreatePending`.
+2. When the process is `offline`, the operator deletes the game pod. A `restart` while `RecreatePending`
+   is set stops the process first; the game pod is then replaced.
+3. The StatefulSet creates the new game pod from the updated template; the fresh-pod rule (§7.6) issues
+   `start` if `desired: Running`.
+
+A change of the agent pod's template (a new agent image, class agent resources) also sets
+`RecreatePending`; the agent pod is replaced when the process is `offline` and the agent has no
+in-flight work.
 
 ### 8.6 Sync (Panel edits a server)
 
@@ -1193,7 +1214,7 @@ sequenceDiagram
 
 | Adapter | Flow |
 |---|---|
-| **wings** (local) | The agent writes `/scratch/backups/<uuid>/<backup>.tar.gz` on the pod's scratch volume (§10.1). Download via gateway `/download/backup` → agent. The scratch volume is deleted with the pod, so these archives do not survive a pod recreate |
+| **wings** (local) | The agent writes `/scratch/backups/<uuid>/<backup>.tar.gz` on the agent pod's scratch volume (§10.1). Download via gateway `/download/backup` → agent. The scratch volume is deleted with the agent pod, so these archives do not survive its recreation or its move to another node (§7.7) |
 | **s3** | The agent creates the archive on the scratch volume → remote API `GET /backups/{b}?size=` (forwarded by the gateway) → Panel presigned part URLs → the **agent uploads to S3** → `POST /backups/{b}` via the gateway → temp file removed. An in-cluster S3 needs an `inClusterEgress.additional` entry (§12.4) |
 
 - Backups and restores are Wings actions proxied by the gateway (`POST /backup`,
@@ -1202,40 +1223,45 @@ sequenceDiagram
   fetched by the agent) and reports through the remote API.
 - The gateway adds the backup to `status.backups.pending` on backup and restore requests, which lets
   the agent's remote-API calls for it through (§5.7), and removes it when the agent posts the result.
+  A pending entry counts as in-flight work of the agent (§7.7).
 
 ### 8.8 Delete server
 
 1. Panel `DELETE /api/servers/:s`. The gateway deletes the CR and answers `204`.
 2. Operator finalizer, by the class `deletionPolicy` (`Delete` when the class is missing). Agent calls
-   are made only while the pod is ready and not terminating; their failures are recorded as events and
+   are made only while the agent pod is ready and not terminating; their failures are recorded as events and
    do not block the deletion.
    - `Delete`: `DELETE /api/servers/:s` on the agent. Wings kills the process, publishes `deleted`,
      cancels sessions and removes the server directory (and local backups). Then the PVC is deleted.
    - `Retain`: `POST /power {kill}` on the agent; the PVC is kept, labelled `pelican-k8s.io/orphaned-at`.
    - `SnapshotThenDelete`: `POST /power {kill}`, a VolumeSnapshot `gs-<uuid>-final`, wait for
      `readyToUse`, then delete the PVC.
-   - Under every policy the StatefulSet, Services, NetworkPolicy and install Jobs are deleted, and the
-     finalizer waits for the pod to go before handling the PVC.
+   - Under every policy both StatefulSets, the Services, NetworkPolicies and install Jobs are deleted,
+     and the finalizer waits for both pods to go before handling the PVC.
 3. Websocket and SFTP sessions end when the agent container stops.
 
 ### 8.9 Pod, node and component restarts
 
-- **Pod deleted** (eviction, drain, operator recreate): the `preStop` hooks run Wings' stop procedure
-  through the agent before any container receives SIGTERM (§6.4). The agent, a native sidecar, stops
-  last. `spec.power.desired` is untouched by this path.
-- **Pod recreated** (after eviction, node reboot, operator recreate): the agent boots and fetches its
-  configuration from the gateway; it does not start anything on its own. The operator's fresh-pod rule
-  (§7.6) issues `start` if `desired: Running` and re-requests an install that was in flight.
-- **Agent container restart only:** the shim keeps the game running and the agent re-attaches (§6.4).
-  The pod UID is unchanged, so the operator does not issue a start. Tokens issued before the restart are
-  rejected by Wings' boot cutoff in the agent; the Panel UI fetches fresh ones.
+- **Game pod deleted** (eviction, drain, operator recreate): the shim stops the process with Wings'
+  stop configuration before it exits (§6.4). `spec.power.desired` is untouched by this path, so the
+  StatefulSet's replacement pod is placed (§7.7) and started by the fresh-pod rule (§7.6).
+- **Node drained:** both pods are evicted. The agent's `preStop` hook sees the shim shutting down and
+  waits for the process to be offline. The new game pod picks the node and the new agent pod follows.
+- **Agent pod deleted or evicted alone:** the game keeps running under the shim. The agent pod comes
+  back on the same node, fetches its configuration from the gateway and re-attaches (§7.7). Tokens
+  issued before are rejected by Wings' boot cutoff in the new agent; open consoles are carried across
+  by the gateway (§5.9).
+- **Agent container restart only:** as above without a new pod; the pod UIDs are unchanged, so the
+  operator does not issue a start.
+- **Node reboot:** the agent boots and does not start anything on its own. The fresh-pod rule issues
+  `start` if `desired: Running` and re-requests an install that was in flight.
 - **Gateway restart or rollout:** live websocket and SSH connections on that replica drop and clients
   reconnect. `POST /api/remote/servers/reset` clears `installing` and `restoring_backup` for every
   server on the node, so after each start the gateway sends it once no CR has an install in progress
   (`spec.install.generation` above `observedGeneration`, or `result: Running`) and none has a pending
   backup or restore, checking every 30 s.
-- **Operator restart:** reconciles are idempotent; `status.power.observedGeneration` and
-  `status.agent.podUID` prevent duplicate power actions.
+- **Operator restart:** reconciles are idempotent; `status.power.observedGeneration`,
+  `status.agent.podUID` and `status.game.podUID` prevent duplicate power actions.
 
 ---
 
@@ -1278,22 +1304,23 @@ Invariant: **container port = service port = external port = Panel allocation po
 
 | Mode | How | Client IP | Panel allocations |
 |---|---|---|---|
-| **LoadBalancer** (default) | Service `type: LoadBalancer`; the class's annotations pin the allocation IP and allow IP sharing; `externalTrafficPolicy: Local` | preserved | IP = LB pool IP, any port. Works on any cluster size: the LB follows the pod. Needs a LoadBalancer implementation (cloud, k3s ServiceLB, MetalLB, kube-vip); without one, `ExposureReady` reports it after two minutes |
-| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local`; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error` |
-| **HostPort** | `hostPort` = allocation port on the game container; no Service; the pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) |
+| **LoadBalancer** (default) | Service `type: LoadBalancer`; the class's annotations pin the allocation IP and allow IP sharing; `externalTrafficPolicy: Local` | preserved | IP = LB pool IP, any port. Works on any cluster size: the LB follows the game pod. Needs a LoadBalancer implementation (cloud, k3s ServiceLB, MetalLB, kube-vip); without one, `ExposureReady` reports it after two minutes |
+| **NodePort** | Service `type: NodePort`, `nodePort` = allocation port, `externalTrafficPolicy: Local`; the game pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP; **ports must be in the NodePort range** (30000–32767 by default), otherwise `ExposureReady=False` (`PortOutOfRange`) and phase `Error` |
+| **HostPort** | `hostPort` = allocation port on the game container; no Service; the game pod runs on the node owning the allocation IP | preserved | IP = a node's InternalIP or ExternalIP, any port; the servers namespace must be `privileged` (`serversNamespace.podSecurityLevel`) |
 
 **Node placement (NodePort with `Local`, HostPort).** With `externalTrafficPolicy: Local` a NodePort
-delivers traffic only on nodes that run the pod, and a hostPort exists only on the pod's node. The
+delivers traffic only on nodes that run the game pod, and a hostPort exists only on its node. The
 operator lists the nodes, takes those whose `InternalIP` or `ExternalIP` addresses include every
 allocation IP (`0.0.0.0` and loopback name no node and are skipped), and sets a required node affinity
-on `metadata.name` for them. A changed match is a pod template change (§7.6). A cluster with one node
-gets no affinity. With more than one node and no match, the pod is not pinned and `ExposureReady=False`
+on `metadata.name` for them on the game pod; the agent pod follows it there (§7.7). A changed match is
+a game pod template change (§7.6). A cluster with one node
+gets no affinity. With more than one node and no match, the game pod is not pinned and `ExposureReady=False`
 (`AllocationIPNotOnNode`) names the address; the server keeps running. With
-`externalTrafficPolicy: Cluster` every node forwards the NodePort and the pod is not pinned.
+`externalTrafficPolicy: Cluster` every node forwards the NodePort and the game pod is not pinned.
 
 `GET /api/system/ips` offers the addresses the Panel's allocation form shows (§5.2).
 
-### 9.4 `SERVER_IP` inside the pod
+### 9.4 `SERVER_IP` inside the game pod
 
 Wings passes the allocation IP as `SERVER_IP`, and many eggs write it into config files as the bind
 address. Inside a pod the node or LB IP is not bindable, so:
@@ -1323,12 +1350,12 @@ address. Inside a pod the node or LB IP is not bindable, so:
 - **Scratch volume** (class `storage.scratch`): a generic ephemeral volume (or emptyDir) mounted in the
   agent at `/scratch`, holding Wings' `archive_directory`, `backup_directory` and `tmp_directory`. Its
   default size equals the server PVC size, since an archive can be as large as the server. It is created
-  and deleted with the pod.
+  and deleted with the agent pod.
 
 ### 10.2 Expansion
 
 Online expansion via PVC resize if the CSI driver supports expanding attached volumes; otherwise it takes
-effect at the next pod recreate. A smaller size sets `DiskShrinkRefused`.
+effect when the volume is next attached. A smaller size sets `DiskShrinkRefused`.
 
 ### 10.3 Deletion policy
 
@@ -1346,9 +1373,10 @@ See §8.8. The default is `Delete` (Panel semantics).
 
 ### 10.5 Panel backups
 
-The Panel's **S3 adapter** stores archives in a bucket, durable independent of the pod, with downloads
-presigned by the Panel. The local `wings` adapter stores archives on the pod's scratch volume, which does
-not survive a pod recreate.
+The Panel's **S3 adapter** stores archives in a bucket, durable independent of the pods, with downloads
+presigned by the Panel. The local `wings` adapter stores archives on the agent pod's scratch volume, which
+does not survive a recreation of the agent pod or its move to another node (§7.7); it suits single-node
+clusters and node-local storage, where the agent does not move.
 
 ---
 
@@ -1365,9 +1393,12 @@ not survive a pod recreate.
 | tmpfs `/tmp` (100 MiB) | tmpfs | `emptyDir{medium: Memory, sizeLimit: tmpSizeMiB}` (counts toward memory) |
 | installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; requests equal the server's |
 
-**Agent resources:** the agent container has its own requests and limits from class `resources.agent`
-(requests 50m CPU and 128Mi memory, memory limit 512Mi, no CPU limit), separate from the game. The
-memory limit leaves room for Wings' compress, decompress and archive code on large servers.
+The game container's requests and limits exist only while the game pod does: **a stopped server
+requests nothing but its agent.**
+
+**Agent resources:** the agent pod has its own requests and limits from class `resources.agent`
+(requests 50m CPU and 128Mi memory, memory limit 512Mi, no CPU limit). The memory limit leaves room for
+Wings' compress, decompress and archive code on large servers.
 
 ---
 
@@ -1378,42 +1409,44 @@ memory limit leaves room for Wings' compress, decompress and archive code on lar
 | Credential | Held by | Never in |
 |---|---|---|
 | Node daemon token (`token_id.token`) | Gateway Secret | agents, game pods, install Jobs, operator |
-| Per-agent Wings token (Secret `gs-<uuid>-agent`) | Agent container (env), gateway and operator (read) | game container, install Jobs, CR |
-| Shim token (Secret `gs-<uuid>-shim`) | Agent container and the shim (env; the shim is non-dumpable) | game process, install Jobs, CR |
+| Per-agent Wings token (Secret `gs-<uuid>-agent`) | Agent pod (env), gateway and operator (read) | game pod, install Jobs, CR |
+| Shim token (Secret `gs-<uuid>-shim`) | Agent pod and the shim (env; the shim is non-dumpable) | game process, install Jobs, CR |
 | SFTP host key (gateway) | Gateway Secret | pods |
 | Egg variables (Secret `gs-<uuid>-env`; may hold tokens and passwords) | Gateway (serves them to the agent), install Job (`envFrom`), game process environment | CR spec, ConfigMaps, pod specs |
 | Panel S3 credentials | Panel | agents (they get presigned URLs only) |
 
 **Blast radius of a compromised game process** (arbitrary egg code, RCE in a game):
-- it can read and modify its own server files
-- it can use the pod's egress (limited by the NetworkPolicy), which includes the gateway's remote API port
-- it can connect to the shim socket, but it cannot replace the socket (read-only mount) or pass the
-  agent's handshake (the shim token is out of its reach, §6.4), so process state, stats and exit codes
-  come from the shim
-- it **cannot** use the gateway's remote API without the agent token, reach other servers' agents, the
-  Panel, the Kubernetes API (no token), or the node token
+- it can read and modify its own server files; the rest of the volume (activity, logs, install state)
+  is not mounted in its pod
+- it can use the game pod's egress (limited by the NetworkPolicy), which reaches its own agent on the
+  shim port and nothing else of pelican-k8s
+- it can connect to the agent's shim port, but it cannot pass the handshake (the shim token is out of
+  its reach, §6.4), so process state, stats and exit codes come from the shim
+- it **cannot** reach the gateway's remote API, the agent's HTTP or SFTP ports, other servers' agents,
+  the Panel, the Kubernetes API (no token), the agent token or the node token
 
-A compromised **agent** container holds its own Wings token. It can mint browser tokens for its own
-server and act as its own server toward the Panel through the gateway's remote API (status, activity,
-install result, its own pending backups). It cannot reach other servers' agents (NetworkPolicy), the
-Panel directly, the Kubernetes API, or the node token.
+A compromised **agent** holds its own Wings token and the shim token. It can mint browser tokens for its
+own server, control its own game process, and act as its own server toward the Panel through the
+gateway's remote API (status, activity, install result, its own pending backups). It cannot reach other
+servers' agents or game pods (NetworkPolicy), the Panel directly, the Kubernetes API, or the node token.
 
 ### 12.2 Pod security
 
-Pod Security Admission works per namespace, and game pods and install Jobs share `pelican-servers` (a
-PVC cannot be mounted across namespaces) while install scripts run as root. The chart labels the
+Pod Security Admission works per namespace, and agent pods, game pods and install Jobs share
+`pelican-servers` (a PVC cannot be mounted across namespaces) while install scripts run as root. The chart labels the
 namespace with `serversNamespace.podSecurityLevel` for `enforce` and `warn` (default `baseline`;
 `privileged` for HostPort) and `restricted` for `audit`. Admission policies bound to the ServiceAccounts
 enforce the workload shapes:
 
 | Workload | ServiceAccount | Enforced by `ValidatingAdmissionPolicy` |
 |---|---|---|
+| Agent pod | `pelican-agent` | `pelican-game-restricted` (the row below) |
 | Game pod | `pelican-game` | `pelican-game-restricted`: `runAsNonRoot`, non-root `runAsUser`, seccomp `RuntimeDefault`, every container with `allowPrivilegeEscalation: false`, all capabilities dropped and none added, not privileged; no host network, PID or IPC; no `hostPort`; `automountServiceAccountToken: false`; only PVC, emptyDir, ephemeral, projected, ConfigMap and Secret volumes |
 | Game pod, HostPort mode | `pelican-game-hostport` | the same policy with host ports allowed |
 | Install Job | `pelican-installer` | `pelican-installer-baseline`: no host network, PID or IPC; not privileged; no privilege escalation; no added capabilities; no `hostPort`; `automountServiceAccountToken: false`; only PVC, ConfigMap and emptyDir volumes |
 
-- On OpenShift (`openshift.enabled`) the chart binds `openshift.gameSCC` (default `restricted-v2`) to both
-  game ServiceAccounts and `openshift.installerSCC` (default `anyuid`) to the installer.
+- On OpenShift (`openshift.enabled`) the chart binds `openshift.gameSCC` (default `restricted-v2`) to the
+  agent and both game ServiceAccounts and `openshift.installerSCC` (default `anyuid`) to the installer.
 - **UID pinning:** the class `runAsUser` is used as UID, GID and `fsGroup`, and install Jobs `chown` the
   server directory to it. With `security.useNamespaceUIDRange` (set by `openshift.enabled`) the operator
   uses the start of the namespace's `openshift.io/sa.scc.uid-range` annotation instead.
@@ -1424,23 +1457,27 @@ enforce the workload shapes:
 |---|---|
 | Gateway | Servers namespace: `gameservers` get/list/watch/create/update/patch/delete; `gameservers/status` get/update/patch; `gameservers/finalizers` update; `configmaps`, `secrets` get/list/watch/create/update/patch; `pods` get/list/watch. Release namespace: `secrets` get/create (SFTP host key). Cluster: `gameserverclasses`, `nodes` get/list/watch; MetalLB `ipaddresspools` get/list with `gateway.metallb.discoverPools` |
 | Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/delete and `pods/resize` update/patch; `secrets` get/list/watch/create; `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. Release namespace: `leases`, `events`. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
-| Game, installer ServiceAccounts | none; no ServiceAccount token is mounted in game pods or install Jobs |
+| Agent, game, installer ServiceAccounts | none; no ServiceAccount token is mounted in agent pods, game pods or install Jobs |
 
 ### 12.4 NetworkPolicies
 
 - **Servers namespace:** default deny for ingress and egress.
-- **Per server** (`gs-<uuid>`):
+- **Game pod** (`gs-<uuid>`):
   - ingress on its allocation ports (TCP/UDP) from anywhere; client IPs are preserved by
     `externalTrafficPolicy: Local`
-  - ingress on the agent ports (8080, 2022) from pelican-k8s pods in the system namespace, and from
-    `network.nodeCIDRs` on 8080 for kubelet probes on CNIs without implicit host access
-  - egress: DNS (53 and 5353, TCP and UDP) to any namespace; TCP 8081 to pelican-k8s pods in the system
-    namespace (remote API); `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (by
-    default the private and shared ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
-    `100.64.0.0/10`, covering the usual pod, service, node and LAN ranges); with
-    `inClusterEgress.gameServers`, all ports of other game pods; `inClusterEgress.additional` CIDR/port
-    pairs. Rules are additive, so DNS, the remote API and the in-cluster rules reach their
-    destinations inside the blocked ranges
+  - egress: DNS (53 and 5353, TCP and UDP) to any namespace; TCP 8082 to its own agent pod;
+    `0.0.0.0/0` except link-local and `network.blockedEgressCIDRs` (by default the private and shared
+    ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10`, covering the usual pod,
+    service, node and LAN ranges); with `inClusterEgress.gameServers`, all ports of other game pods;
+    `inClusterEgress.additional` CIDR/port pairs
+- **Agent pod** (`gs-<uuid>-agent`):
+  - ingress on 8080 and 2022 from pelican-k8s pods in the system namespace, and from
+    `network.nodeCIDRs` on 8080 for kubelet probes on CNIs without implicit host access; on 8082 from
+    its own game pod
+  - egress: DNS; TCP 8081 to pelican-k8s pods in the system namespace (remote API); the same internet
+    rule as the game pod (remote pulls, S3 uploads); `inClusterEgress.additional` CIDR/port pairs
+- Rules are additive, so DNS, the remote API, the shim port and the in-cluster rules reach their
+  destinations inside the blocked ranges.
 - **Install Jobs** (chart policy `install-jobs`): DNS and `0.0.0.0/0` except link-local and the default
   class's `blockedEgressCIDRs`.
 - **System namespace:** the gateway accepts 8080 and 2022 from anywhere and 8081 from the servers
@@ -1448,16 +1485,17 @@ enforce the workload shapes:
 
 ### 12.5 Other controls
 
-- Game and install pods: `automountServiceAccountToken: false`, `enableServiceLinks: false`.
+- Agent, game and install pods: `automountServiceAccountToken: false`, `enableServiceLinks: false`.
 - Install Jobs mount only the `volumes/<uuid>` and `install/<gen>` subPaths of the PVC. A new install
   generation while a previous Job still runs deletes that Job first.
 - Gateway: Origin checks on websockets; SFTP authentication throttling is the Panel's, per
   `server|ip`, with the real client IP passed by the gateway. Websocket limits, the upload size limit,
   token replay and denylist checks are Wings code in the agent.
 - Agent ↔ gateway and operator ↔ agent traffic is plain HTTP inside the cluster, protected by
-  NetworkPolicy and bearer tokens.
+  NetworkPolicy and bearer tokens. Shim ↔ agent traffic is plain TCP, protected by NetworkPolicy and the
+  mutual shim-token handshake.
 - Registry credentials: class `imageResolution.pullSecrets` (Secrets in the servers namespace) as
-  `imagePullSecrets` of game pods and install Jobs.
+  `imagePullSecrets` of agent pods, game pods and install Jobs.
 
 ---
 
@@ -1471,6 +1509,8 @@ enforce the workload shapes:
 | Desired power state | CR `spec.power` (gateway: Panel and websocket power actions, and intentional stops derived from `container/status`, §4.2; editable with kubectl) | — |
 | Actual process state | **Agent** (Wings state machine over the shim) | `status.process` (written by the gateway), gateway state cache, Panel |
 | Last power action taken | CR `status.power` (operator) | — |
+| Whether a game pod exists | Derived from `spec.power.desired` and `status.process.state` (operator, §7.6) | game StatefulSet replicas |
+| Node of the pair | The game pod's `spec.nodeName` (scheduler) | node affinity in the agent StatefulSet template, `status.game.node` |
 | Install progress and result | Install files on the PVC and the Job status | CR `status.install`, Panel server status |
 | Server files, activity queue | PVC | — |
 | Local backups | Scratch volume | — |
@@ -1496,25 +1536,30 @@ enforce the workload shapes:
 | Panel | 1 (web, queue worker and scheduler in the upstream image) |
 | Gateway | 1 (`gateway.replicas`). Websocket and SSH connections are per replica and drop on a rollout. Every replica verifies SFTP session credentials (§5.6), so SFTP works with any replica count |
 | Operator | 1, with leader election |
-| Game servers | 1 pod each (StatefulSet). On a **NotReady node** the pod stays `Terminating` and the StatefulSet does not replace it. With `failover.forceDeleteAfter` set, the operator sets `NodeLost` and force-deletes the pod after that duration, so it reschedules and the RWO volume reattaches; this is safe only when the storage layer fences the old node or the node is confirmed down |
+| Game servers | 1 agent pod each, plus 1 game pod while on (StatefulSets). On a **NotReady node** the pods stay `Terminating` and the StatefulSets do not replace them. With `failover.forceDeleteAfter` set, the operator sets `NodeLost` and force-deletes both pods after that duration, so they reschedule and the RWO volume reattaches; this is safe only when the storage layer fences the old node or the node is confirmed down |
 
 **Load:**
 - Agents make short remote-API calls (state changes, activity every 60 s); the gateway polls state on
   demand with a 2 s cache. Long-lived agent connections exist only for relayed sessions.
 - The gateway's informer caches GameServers, pods, Secrets, ConfigMaps, GameServerClasses and nodes.
-- Memory per server is the agent (memory limit 512 MiB by default) plus the game.
+- A stopped server costs its agent pod (128 MiB memory and 50m CPU requested by default); a running
+  one adds the game pod.
+- A start takes as long as scheduling, image pull and init containers of the game pod, plus a volume
+  detach and attach when the agent moves.
 
 ---
 
 ## 15. Observability
 
 - **Gateway, operator and agent logs:** structured JSON (`kubectl logs`).
-- **Game console:** `kubectl logs gs-<uuid>-0 -c game` (shim tee, plus the shim's own JSON logs) and
-  `logs/console/<uuid>.log` on the PVC.
+- **Game console:** `kubectl logs gs-<uuid>-0` while the game pod exists (shim tee, plus the shim's own
+  JSON logs) and `logs/console/<uuid>.log` on the PVC.
+- **Pods:** `gs-<uuid>-agent-0` is always there; `gs-<uuid>-0` exists while the server is on and is
+  Ready while the Panel shows it as running.
 - **Operator:** controller-runtime metrics on `:8443`; Kubernetes Events on the `GameServer`
   (install: `InstallRequested`, `InstallStarted`, `InstallFinished`, `InstallFailed`, `InstallRestarted`,
   `InstallTimeout`, `InstallScriptMissing`; process: `Power`, `Synced`, `Suspended`,
-  `GameContainerTerminated`; pod: `Recreate`, `Resized`, `ForceDelete`, `ClassNotFound`,
+  `GameContainerTerminated`; pod: `Recreate`, `Resized`, `AgentRelocated`, `ForceDelete`, `ClassNotFound`,
   `DigestLookupFailed`, `EntrypointLookupFailed`; storage: `VolumeExpanded`, `ResizeFailed`, `SnapshotCreated`,
   `SnapshotFailed`, `InvalidSnapshotSchedule`, `VolumeRetained`; deletion: `AgentDeleteFailed`,
   `AgentKillFailed`); conditions (§7.2).
@@ -1591,7 +1636,9 @@ pelican-k8s/
 | **Egg** | Panel template: images, startup command, install script, config parsers, variables |
 | **Yolks** | Pelican's runtime images (`ghcr.io/pelican-eggs/yolks:*`) |
 | **Wings** | Pelican's Docker daemon; here the agent's library |
-| **Agent** | Wings as a library with one server, native sidecar in each game pod, addressed with its own Wings token |
-| **Shim** | PID 1 of the game container; supervises the egg process |
+| **Agent** | Wings as a library with one server, in a pod of its own that runs whether the server is on or off, addressed with its own Wings token |
+| **Agent pod** | `gs-<uuid>-agent-0`: the agent, the PVC root and the scratch volume |
+| **Game pod** | `gs-<uuid>-0`: the egg image with the shim as entrypoint; exists while the server is on |
+| **Shim** | PID 1 of the game container; supervises the egg process and connects to the agent |
 | **Gateway** | The Panel-facing node: writes intents to `GameServer` specs, records process facts in their status, proxies data-path traffic |
 | **Operator** | The only reconciler: `GameServer` spec against status, acting on Kubernetes objects and on agents |
