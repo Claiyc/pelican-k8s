@@ -6,7 +6,7 @@ name: Placement
 
 on:
   push:
-    branches: [master, v2]
+    branches: [master]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
