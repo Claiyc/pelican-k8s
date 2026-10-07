@@ -1,7 +1,8 @@
 # Live placement suite: a kind cluster with three workers and storage that is
 # not bound to a node runs pelican-k8s built from this commit against the fake
 # Panel, and test/placement checks how the agent pod and the game pod are
-# placed and moved (ARCHITECTURE.md 7.7).
+# placed and moved (ARCHITECTURE.md 7.7), and that an open console survives
+# an agent pod replacement (5.9).
 name: Placement
 
 on:
@@ -14,6 +15,7 @@ on:
       - "internal/operator/**"
       - "internal/agent/**"
       - "internal/shim/**"
+      - "internal/gateway/wsproxy/**"
       - "charts/pelican-k8s/**"
       - "test/placement/**"
       - "test/fakepanel/**"
