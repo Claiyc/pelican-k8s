@@ -206,6 +206,23 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatal("agent did not start listening")
 	}
 
+	// Wings' SFTP server starts in its own goroutine and writes its host key
+	// into the data directory first. Wait for it to listen, so it does not
+	// write into the directory while the test removes it.
+	sftpAddr := fmt.Sprintf("127.0.0.1:%d", c.sftpPort)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", sftpAddr, time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the SFTP server is not listening: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
 	base := fmt.Sprintf("http://127.0.0.1:%d", c.apiPort)
 	res, err := http.Get(base + "/internal/v1/healthz")
 	if err != nil {
