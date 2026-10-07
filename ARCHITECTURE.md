@@ -346,8 +346,9 @@ agent's `GET /api/servers/:s` (state plus utilization) on demand: 2 s TTL, 900 m
 `container/status` post or a server delete invalidates the entry. State changes go to `status.process`
 when the agent posts them. The agent sends each change from its own goroutine, so `starting` can arrive
 after `running`; each gateway replica therefore handles one server's posts one at a time and writes the
-state a fresh poll of the agent returns. An agent pod that is not ready yet (it posts right after it
-boots) gets the same wait as a proxied call (§5.9); after that the posted state is written. After
+state a fresh poll of the agent returns. When the poll fails the posted state is written and the
+gateway polls the agent again every second for up to 30 s, writing the state it reports once it
+answers, since no further post comes while the state stays put. After
 each post the gateway also refreshes `status.usage` from a fresh poll.
 
 ### 5.9 Agent pod replacement

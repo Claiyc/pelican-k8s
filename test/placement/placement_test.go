@@ -270,6 +270,29 @@ func (s *server) dump() {
 			s.t.Logf("logs of %s/%s:\n%s", p.Name, c.Name, b)
 		}
 	}
+	// The gateway's lines about this server, e.g. why a state poll failed.
+	gws, err := s.e.cs.CoreV1().Pods("pelican-system").List(context.Background(), metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=pelican-gateway"})
+	if err != nil {
+		s.t.Logf("gateway pods: %v", err)
+		return
+	}
+	for _, p := range gws.Items {
+		b, err := s.e.cs.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{}).DoRaw(context.Background())
+		if err != nil {
+			s.t.Logf("logs of %s: %v", p.Name, err)
+			continue
+		}
+		var lines []string
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.Contains(l, s.uuid) {
+				lines = append(lines, l)
+			}
+		}
+		if len(lines) > 80 {
+			lines = lines[len(lines)-80:]
+		}
+		s.t.Logf("logs of %s about this server:\n%s", p.Name, strings.Join(lines, "\n"))
+	}
 }
 
 func (s *server) gs() *v1alpha1.GameServer {

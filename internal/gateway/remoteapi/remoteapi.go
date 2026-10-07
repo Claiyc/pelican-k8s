@@ -5,6 +5,7 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"hash/fnv"
 	"io"
 	"log/slog"
@@ -44,6 +45,11 @@ type Handler struct {
 
 	// statusMu serialises the state posts of one server (striped by UUID).
 	statusMu [32]sync.Mutex
+	// RepollEvery and RepollFor pace the polls after a state post the agent
+	// did not answer for (default every second for 30 s).
+	RepollEvery, RepollFor time.Duration
+	// repolling holds the servers whose state is being polled again.
+	repolling sync.Map
 }
 
 type ctxKey struct{}
@@ -247,32 +253,82 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recordState writes status.process.state. The agent sends each state change
-// from its own goroutine, so two posts in quick succession (starting, then
-// running) can arrive in either order. The posts of one server are therefore
-// serialised, and each writes the state the agent has now, which makes the
-// last write the latest state. The posted state is the fallback when the
-// agent cannot be asked.
+// recordState writes a posted process state. The agent sends each change from
+// its own goroutine, so posts can arrive out of order; each server's posts are
+// handled one at a time and the state written is the one the agent reports on
+// a fresh poll. When the poll fails the posted state is written and the agent
+// is polled again in the background until it answers, because no further post
+// comes while its state stays put.
 func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
-	f := fnv.New32a()
-	_, _ = f.Write([]byte(uuid))
-	mu := &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
+	mu := h.stateLock(uuid)
 	mu.Lock()
 	defer mu.Unlock()
-	state := posted
-	// The agent posts right after it booted, possibly before its pod reports
-	// Ready; Wait gives it the same grace as a proxied call, so a late post
-	// cannot record a state the agent has already left.
-	if t, err := h.Agents.Wait(ctx, uuid); err == nil {
-		if body, err := h.Agents.State(ctx, t, true); err == nil {
-			var st struct {
-				State string `json:"state"`
-			}
-			if json.Unmarshal(body, &st) == nil && st.State != "" {
-				state = st.State
-			}
+	state, err := h.agentState(ctx, uuid)
+	if err != nil {
+		h.Log.Debug("cannot poll the agent, recording the posted state", "uuid", uuid, "state", posted, "error", err)
+		state = posted
+		if _, busy := h.repolling.LoadOrStore(uuid, true); !busy {
+			go h.repollState(context.WithoutCancel(ctx), uuid)
 		}
 	}
+	h.writeState(ctx, uuid, state)
+}
+
+// repollState writes the agent's state once it answers a poll.
+func (h *Handler) repollState(ctx context.Context, uuid string) {
+	defer h.repolling.Delete(uuid)
+	every, total := h.RepollEvery, h.RepollFor
+	if every <= 0 {
+		every = time.Second
+	}
+	if total <= 0 {
+		total = 30 * time.Second
+	}
+	mu := h.stateLock(uuid)
+	for deadline := time.Now().Add(total); time.Now().Before(deadline); {
+		time.Sleep(every)
+		mu.Lock()
+		state, err := h.agentState(ctx, uuid)
+		if err == nil {
+			h.writeState(ctx, uuid, state)
+		}
+		mu.Unlock()
+		if err == nil {
+			return
+		}
+	}
+	h.Log.Warn("the agent did not answer a state poll; status.process keeps the last posted state", "uuid", uuid)
+}
+
+func (h *Handler) stateLock(uuid string) *sync.Mutex {
+	f := fnv.New32a()
+	_, _ = f.Write([]byte(uuid))
+	return &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
+}
+
+// agentState polls the agent for its process state.
+func (h *Handler) agentState(ctx context.Context, uuid string) (string, error) {
+	t, err := h.Agents.Resolve(ctx, uuid)
+	if err != nil {
+		return "", err
+	}
+	body, err := h.Agents.State(ctx, t, true)
+	if err != nil {
+		return "", err
+	}
+	var st struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return "", err
+	}
+	if st.State == "" {
+		return "", errors.New("the agent reported no state")
+	}
+	return st.State, nil
+}
+
+func (h *Handler) writeState(ctx context.Context, uuid, state string) {
 	status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
 	if err := h.Store.PatchStatus(ctx, uuid, status); err != nil {
 		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)

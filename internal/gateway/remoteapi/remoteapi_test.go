@@ -105,7 +105,6 @@ func newFixture(t *testing.T, o options) *fixture {
 	t.Cleanup(f.agent.Close)
 
 	res := agents.NewResolver(st, time.Millisecond)
-	res.HTTPWait, res.Poll = 300*time.Millisecond, 10*time.Millisecond
 	// Every pod IP resolves to the fake agent, whatever port is dialled.
 	agentAddr := strings.TrimPrefix(f.agent.URL, "http://")
 	res.Transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -113,6 +112,7 @@ func newFixture(t *testing.T, o options) *fixture {
 	}
 	f.h = &Handler{
 		Store: st, Panel: pc, Agents: res, Log: log,
+		RepollEvery: 10 * time.Millisecond, RepollFor: 300 * time.Millisecond,
 		Sync: &serversync.Syncer{Store: st, Panel: pc, Timezone: "UTC", Log: log},
 		Sftp: fakeSessions{"user:pw": {Server: uuid, User: "u-1"}, "user:foreign": {Server: otherID, User: "u-2"}},
 	}
@@ -512,30 +512,26 @@ func TestContainerStatusOutOfOrder(t *testing.T) {
 		t.Fatal("the posted change was not forwarded to the Panel")
 	}
 
-	// An agent that posts before its pod reports ready is still asked.
+	// Without a ready agent the posted state is recorded, and the agent is
+	// polled again until it answers: a late post must not stay recorded.
 	ctx := context.Background()
 	pod, _ := f.st.AgentPod(ctx, uuid)
 	ip := pod.Status.PodIP
 	pod.Status.PodIP = ""
 	_ = f.c.Status().Update(ctx, pod)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		p, _ := f.st.AgentPod(ctx, uuid)
-		p.Status.PodIP = ip
-		_ = f.c.Status().Update(ctx, p)
-	}()
 	post("offline", "starting")
-	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
-		t.Fatalf("process state %q from an agent that became ready, want running", got)
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessStarting {
+		t.Fatalf("process state %q without an agent, want the posted starting", got)
 	}
-
-	// Without a ready agent the posted state is recorded.
 	pod, _ = f.st.AgentPod(ctx, uuid)
-	pod.Status.PodIP = ""
+	pod.Status.PodIP = ip
 	_ = f.c.Status().Update(ctx, pod)
-	post("running", "stopping")
-	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessStopping {
-		t.Fatalf("process state %q without an agent, want stopping", got)
+	deadline := time.Now().Add(time.Second)
+	for f.gs().Status.Process.State != v1alpha1.ProcessRunning {
+		if time.Now().After(deadline) {
+			t.Fatalf("process state %q once the agent answers, want running", f.gs().Status.Process.State)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
