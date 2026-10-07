@@ -187,6 +187,9 @@ func TestPlacementBusyAgent(t *testing.T) {
 	if h.agentPod() == nil {
 		t.Fatal("a busy agent pod is not moved")
 	}
+	if calls := h.agent.Calls(); len(calls) != 0 {
+		t.Fatalf("no start while the agent is on another node: %v", calls)
+	}
 	c := h.condition(v1alpha1.ConditionAgentRelocating)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "WaitingForWork" || !strings.Contains(c.Message, "transfer") {
 		t.Fatalf("AgentRelocating %+v", c)

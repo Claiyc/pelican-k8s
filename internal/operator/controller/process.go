@@ -35,9 +35,10 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 
 	// Fresh pod: record it and restore the desired state (Wings' "was running
 	// before reboot"). With a game pod, wait until its shim is attached, so
-	// the start reaches that pod.
+	// the start reaches that pod, and until the agent is on the game pod's
+	// node, so the start does not precede a move of the agent (section 7.7).
 	if gs.Status.Agent.PodUID != agentUID || gs.Status.Game.PodUID != gameUID {
-		if s.pod != nil && (s.shim == nil || !s.shim.Attached || s.shim.PodUID != gameUID) {
+		if s.pod != nil && (s.shim == nil || !s.shim.Attached || s.shim.PodUID != gameUID || !s.shim.Running && !colocated(s)) {
 			s.requeue = requeueFast
 			return r.reconcileInstall(s)
 		}
@@ -97,9 +98,10 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 				gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 				break
 			}
-			if s.pod == nil || !s.pod.DeletionTimestamp.IsZero() {
+			if s.pod == nil || !s.pod.DeletionTimestamp.IsZero() || !colocated(s) {
 				// The game StatefulSet creates the game pod; the fresh-pod rule
-				// starts the process once its shim is attached.
+				// starts the process once its shim is attached. An agent on
+				// another node moves first.
 				s.requeue = requeueFast
 				break
 			}
@@ -305,4 +307,9 @@ func (r *GameServerReconciler) deleteInstallJob(s *scope, gen int64) error {
 	policy := metav1.DeletePropagationBackground
 	err := r.Delete(s.ctx, job, &client.DeleteOptions{PropagationPolicy: &policy})
 	return client.IgnoreNotFound(err)
+}
+
+// colocated reports whether the agent pod runs on the game pod's node.
+func colocated(s *scope) bool {
+	return s.pod != nil && s.agentPod != nil && s.pod.Spec.NodeName == s.agentPod.Spec.NodeName
 }

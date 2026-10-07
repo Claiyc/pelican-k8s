@@ -1018,7 +1018,8 @@ into the agent StatefulSet's template.
   cluster and most starts elsewhere.
 - If it runs on another node, the operator sets `AgentRelocating` and deletes the agent pod once it has
   no in-flight work. The StatefulSet recreates it on the game pod's node, the volume detaches from the
-  old node and attaches to the new one, and the game pod's containers start when it is mounted.
+  old node and attaches to the new one, and the game pod's containers start when it is mounted. The
+  operator starts the process only once both pods are on one node.
   Websockets and HTTP calls are carried across by the gateway (§5.9). Archives of the local backup
   adapter are on the agent pod's scratch volume and are lost (§10.5).
 - When the game pod is gone the operator removes the node affinity again, without restarting the agent,

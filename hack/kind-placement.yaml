@@ -1,0 +1,25 @@
+# kind cluster for the live placement suite (hack/e2e-placement.sh): three
+# workers that share one host directory, so a volume of the local-path
+# provisioner in shared mode mounts on any of them.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            service-node-port-range: "30000-32767"
+  - role: worker
+    extraMounts:
+      - hostPath: /tmp/pelican-placement-shared
+        containerPath: /var/local-path-shared
+  - role: worker
+    extraMounts:
+      - hostPath: /tmp/pelican-placement-shared
+        containerPath: /var/local-path-shared
+  - role: worker
+    extraMounts:
+      - hostPath: /tmp/pelican-placement-shared
+        containerPath: /var/local-path-shared
