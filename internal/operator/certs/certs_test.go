@@ -92,7 +92,9 @@ func TestEnsureCAErrors(t *testing.T) {
 		t.Error("broken CA secret: want error")
 	}
 	boom := errors.New("boom")
-	failGet := interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error { return boom }}
+	failGet := interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+		return boom
+	}}
 	if _, err := EnsureCA(ctx, newClient(failGet), caKey, t0); !errors.Is(err, boom) {
 		t.Errorf("get error: %v", err)
 	}
