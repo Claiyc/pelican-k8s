@@ -1186,6 +1186,10 @@ sequenceDiagram
   stop command is typed into the console or the server is suspended, the transitions Wings excludes
   from crash detection. Console history stays readable from the console log on the volume.
 - **Restart:** stop and start in the same game pod, unless `RecreatePending` asks for a new one (§8.5).
+  The restart's own `stopping` → `offline` leaves `power.desired` at `Running`: for 10 minutes after
+  the operator issues a restart (Wings' stop timeout), the gateway takes no such transition for an
+  intentional stop. A stop command typed into the console in that window is settled like a crash
+  without restart, once the process has been offline for 60 s.
 - **Crash:** `exited` (from the shim, or relayed by the operator from a container-level termination) ⇒
   agent `offline` ⇒ Wings `handleServerCrash` ⇒ auto-restart within Wings' timeout rules, in the same
   game pod. `power.desired` stays `Running` and the operator does not intervene (§7.6).

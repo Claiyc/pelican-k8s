@@ -314,8 +314,11 @@ func (h *Handler) stateLock(uuid string) *sync.Mutex {
 	return &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
 }
 
-// agentState polls the agent for its process state.
+// agentState polls the agent for its process state. The poll is short: it
+// runs under the server's stripe of statusMu, which other servers share.
 func (h *Handler) agentState(ctx context.Context, uuid string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	t, err := h.Agents.Resolve(ctx, uuid)
 	if err != nil {
 		return "", err
@@ -362,13 +365,19 @@ func (h *Handler) writeState(ctx context.Context, uuid string, pick func(state s
 	}
 }
 
+// restartWindow is how long after the operator issued a restart its stop
+// half is not taken for an intentional stop: Wings waits up to 10 minutes for
+// the process to stop before it starts it again.
+const restartWindow = 10 * time.Minute
+
 // intentionalStop reports whether a stopping → offline transition is a stop
 // the Panel should see as the server's new desired state: the stop command
 // typed into the console, a suspension, or a stop the operator issued for
 // desired Stopped. A pod that is terminating (a drain, a recreate) stops the
 // process without changing what the user wants, and so does a stop the
 // operator issued for a pending power generation (a restart into a new game
-// pod under RecreatePending).
+// pod under RecreatePending) or the stop half of a restart. A console stop
+// within restartWindow of a restart is then settled by crashwatch.
 func (h *Handler) intentionalStop(ctx context.Context, uuid string) bool {
 	for _, get := range []func(context.Context, string) (*corev1.Pod, error){h.Store.Pod, h.Store.AgentPod} {
 		if pod, _ := get(ctx, uuid); pod != nil && !pod.DeletionTimestamp.IsZero() {
@@ -377,6 +386,9 @@ func (h *Handler) intentionalStop(ctx context.Context, uuid string) bool {
 	}
 	gs, err := h.Store.Get(ctx, uuid)
 	if err != nil || gs.Spec.Power.Desired == v1alpha1.PowerStopped {
+		return false
+	}
+	if la := gs.Status.Power.LastAction; la != nil && la.Action == "restart" && time.Since(la.At.Time) < restartWindow {
 		return false
 	}
 	return gs.Spec.Power.Generation == gs.Status.Power.ObservedGeneration

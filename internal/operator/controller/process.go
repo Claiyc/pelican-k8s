@@ -61,10 +61,8 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 			gs.Status.Game.PodUID = gameUID
 			gs.Status.Agent.RelayedExit = ""
 		}
-		if s.pod != nil {
-			// A shim that already runs the process (a new agent pod next to a
-			// running game pod) is attached by the agent; there is nothing to start.
-			if !s.shim.Running && gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended && !recreatePending {
+		if s.pod != nil && !s.shim.Running {
+			if gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended && !recreatePending {
 				if err := r.power(s, "start"); err != nil {
 					return err
 				}
@@ -72,6 +70,10 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 			gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 			return r.reconcileInstall(s)
 		}
+		// A shim that already runs the process (a new agent pod next to a
+		// running game pod) is attached by the agent; there is nothing to
+		// start. A power generation requested while no agent was ready is
+		// applied below.
 	}
 
 	// Configuration sync.

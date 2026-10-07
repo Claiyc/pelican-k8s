@@ -67,6 +67,9 @@ func (m *CertManager) spec(secretName string, leaf Leaf, labels map[string]strin
 		"duration":       pki.LeafLifetime.String(),
 		"renewBefore":    pki.RenewBefore.String(),
 		"privateKey":     map[string]any{"algorithm": "ECDSA", "size": int64(256), "rotationPolicy": "Always"},
-		"issuerRef":      map[string]any{"name": m.IssuerName, "kind": kind, "group": group},
+		// cert-manager's default, explicit so that a stored spec carrying it
+		// still compares equal to this one.
+		"encodeUsagesInRequest": true,
+		"issuerRef":             map[string]any{"name": m.IssuerName, "kind": kind, "group": group},
 	}
 }
