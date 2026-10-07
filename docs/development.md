@@ -38,8 +38,10 @@ the Helm release:
 REGISTRY=harbor.example.com/pelican VALUES=my-values.yaml hack/dev-push.sh
 ```
 
-The operator recreates game pods with the new shim/agent images at the next
-safe point; an idle server is recreated immediately.
+The operator recreates agent pods with the new agent image at the next safe
+point: the process is offline and the agent has no in-flight work (transfers,
+backups, installs, active SFTP). Game pods get the new shim when they are next
+created.
 
 ## Wings as a dependency
 
@@ -63,15 +65,15 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 | Package | Role |
 |---|---|
-| `internal/shim/supervisor` | PTY process supervisor (PID 1); connects to the agent's socket and serves it |
+| `internal/shim/supervisor` | PTY process supervisor (PID 1 of the game pod); connects to the agent pod and serves it |
 | `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
 | `internal/shim/cgroup` | cgroup v2 and `/proc/net/dev` sampling |
 | `internal/shim/prepare` | PVC layout, entrypoint probe, install-run |
 | `internal/agent/app` | Wings boot sequence without Docker |
 | `internal/agent/shimenv` | `environment.ProcessEnvironment` over the shim |
 | `internal/agent/installer` | Job-backed `server.Installer` |
-| `internal/operator/render` | pure object builders and resource mapping |
-| `internal/operator/controller` | reconciler, install state machine, finalizer, snapshots |
+| `internal/operator/render` | pure object builders (agent and game StatefulSets, Services, NetworkPolicies, Jobs) and resource mapping |
+| `internal/operator/controller` | reconciler, game pod lifecycle and placement, install state machine, finalizer, snapshots |
 | `internal/gateway/panelapi` | Wings API towards the Panel and browsers |
 | `internal/gateway/remoteapi` | Panel remote API towards agents |
 | `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync |

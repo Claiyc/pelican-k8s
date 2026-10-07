@@ -7,8 +7,8 @@ servers as Kubernetes resources.
 
 | Requirement | Notes |
 |---|---|
-| Kubernetes ≥ 1.33 | 1.35+ recommended. Uses native sidecars, `ValidatingAdmissionPolicy` and in-place pod resize (`pods/resize`) |
-| StorageClass with `allowVolumeExpansion: true` | One RWO PVC per server; Panel disk changes expand it online |
+| Kubernetes ≥ 1.33 | 1.35+ recommended. Uses `ValidatingAdmissionPolicy` and in-place pod resize (`pods/resize`) |
+| StorageClass with `allowVolumeExpansion: true` | One RWO PVC per server; Panel disk changes expand it online. On multi-node clusters, network block storage lets a server start on any node; node-local storage keeps it on the volume's node |
 | Ingress controller or OpenShift Router | For the gateway's HTTP API (Panel calls, websockets, signed uploads/downloads) |
 | A way to expose TCP | SFTP (`NodePort`/`LoadBalancer`) and game ports (`LoadBalancer`, `NodePort` or `HostPort`) |
 | A Pelican Panel | Any deployment; the `pelican-panel` chart in this repo is one option ([panel.md](panel.md)) |
@@ -69,7 +69,8 @@ What the chart creates:
 - gateway and operator Deployments with scoped RBAC
 - ConfigMap `pelican-agent-config` (the agent's Wings `config.yml`)
 - `GameServerClass/default`
-- `ValidatingAdmissionPolicy` objects enforcing the restricted shape of game pods and the volume allow-list of install Jobs
+- `ValidatingAdmissionPolicy` objects enforcing the restricted shape of game and agent pods and the volume allow-list of install Jobs
+- PriorityClass `pelican-agent` for agent pods
 
 ### Ingress requirements
 
@@ -180,7 +181,7 @@ Panel console and to `logs/install/<uuid>.log` on the server volume.
 
 ## 5. OpenShift
 
-Set `openshift.enabled=true`. This binds `restricted-v2` to the game
+Set `openshift.enabled=true`. This binds `restricted-v2` to the game and agent
 ServiceAccounts and `anyuid` to the installer ServiceAccount, makes the operator
 pick the namespace's UID range (`openshift.io/sa.scc.uid-range`) as the pinned
 UID, and drops the seccomp profile from install pods (the `anyuid` SCC rejects
