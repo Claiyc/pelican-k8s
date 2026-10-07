@@ -1,0 +1,1183 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Claiyc/pelican-k8s/charts/pelican-k8s/values.schema.json",
+  "title": "pelican-k8s chart values",
+  "description": "Values of the pelican-k8s Helm chart: the gateway (presents the cluster to Pelican Panel as one Wings node), the operator (reconciles GameServer resources) and the default GameServerClass. Helm validates the merged values (values.yaml, every -f file and every --set) against this schema on install, upgrade, template and lint, before any template renders.",
+  "$comment": "Draft-07 keeps the schema readable by every Helm 3 release (Helm < 3.18 only understands draft-04 to draft-07). Objects the chart models key by key set additionalProperties: false so a misspelt key fails instead of being ignored silently. Maps passed through verbatim (annotations, agent.extra, resources) stay open. Keep this file in step with values.yaml, the templates and the GameServerClass CRD in crds/.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "$comment": "Helm injects an empty `global` map into the values of every chart; allow it so additionalProperties: false at the root does not reject it.",
+      "description": "Helm's global values. Unused by this chart.",
+      "type": "object"
+    },
+    "nameOverride": {
+      "description": "Overrides the chart name in generated names. Read by the name helper; values.yaml does not set it.",
+      "type": "string",
+      "maxLength": 63
+    },
+    "fullnameOverride": {
+      "description": "Overrides the release-name prefix of the gateway and operator objects (`<fullname>-gateway`, `<fullname>-operator`). Empty uses the release name. Truncated to 63 characters.",
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "image": {
+      "description": "Images of the gateway, operator, agent and shim. Every image is `<registry>/<component>:<tag>`; the agent and shim images are written into the default GameServerClass and injected into game pods by the operator.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registry": {
+          "description": "Registry and repository prefix, without a trailing slash. The component name (gateway, operator, agent, shim) is appended.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\s/][^\\s]*[^\\s/]$",
+          "default": "ghcr.io/claiyc/pelican-k8s",
+          "examples": ["ghcr.io/claiyc/pelican-k8s", "registry.example.com/mirror/pelican-k8s"]
+        },
+        "tag": {
+          "description": "Image tag of all four components. Empty uses the chart's appVersion, which is the release the chart was tested with. Mixing component versions is not supported.",
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+          "default": "",
+          "examples": ["", "1.1.0"]
+        },
+        "pullPolicy": {
+          "description": "imagePullPolicy of the gateway and operator containers and of the injected agent and shim containers.",
+          "allOf": [{"$ref": "#/definitions/pullPolicy"}],
+          "default": "IfNotPresent"
+        },
+        "pullSecrets": {
+          "description": "imagePullSecrets of the gateway and operator pods, as LocalObjectReferences (`- name: <secret>`) in the release namespace. Game pods take theirs from defaultClass.spec.imageResolution.pullSecrets.",
+          "allOf": [{"$ref": "#/definitions/localObjectReferences"}],
+          "default": []
+        }
+      }
+    },
+    "serversNamespace": {
+      "description": "The namespace holding GameServer objects, game pods, their volumes and install Jobs. It is separate from the release namespace (which holds the gateway and operator).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Name of the servers namespace. The gateway and operator only watch this namespace.",
+          "allOf": [{"$ref": "#/definitions/dnsLabel"}],
+          "default": "pelican-servers"
+        },
+        "create": {
+          "description": "Create the namespace with its Pod Security labels. The namespace carries `helm.sh/resource-policy: keep`, so uninstalling the release keeps it and the game data in it. Set false when the namespace is managed elsewhere; it must then exist before install.",
+          "type": "boolean",
+          "default": true
+        },
+        "podSecurityLevel": {
+          "description": "Pod Security Admission level enforced and warned on in the servers namespace (audit is always `restricted`). Install Jobs run as root, so `baseline` is the lowest level that works; `privileged` is needed for HostPort exposure. `restricted` rejects install Jobs.",
+          "type": "string",
+          "enum": ["baseline", "privileged", "restricted"],
+          "default": "baseline"
+        }
+      }
+    },
+    "gateway": {
+      "description": "The gateway: the Panel-facing Deployment that presents the cluster as one Wings node, holds the node token, writes GameServer specs and proxies websockets, file transfers and SFTP to the agents.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "description": "Gateway replicas. Replicas are active/active behind the Service; two keep the Panel connected through a node drain or a rollout. Websocket and SFTP sessions are per replica and drop when their replica stops; clients reconnect to another.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "podAntiAffinity": {
+          "description": "Spread gateway replicas across nodes (topology kubernetes.io/hostname). soft prefers different nodes and still schedules on a single-node cluster; hard requires them, so replicas beyond the node count stay Pending; none adds no rule. A non-empty affinity replaces this rule.",
+          "type": "string",
+          "enum": ["soft", "hard", "none"],
+          "default": "soft"
+        },
+        "affinity": {
+          "description": "Affinity of the gateway pods. When non-empty it replaces the podAntiAffinity rule.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of the gateway pods.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of the gateway pods.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/toleration"},
+          "default": []
+        },
+        "podDisruptionBudget": {
+          "description": "PodDisruptionBudget of the gateway keeping at most maxUnavailable replicas down during voluntary disruptions (drains, cluster upgrades). A drain evicts one replica, waits until its replacement runs elsewhere, then evicts the next. With one replica the eviction is allowed at once.",
+          "allOf": [{"$ref": "#/definitions/podDisruptionBudget"}],
+          "default": {"enabled": true, "maxUnavailable": 1}
+        },
+        "panelURL": {
+          "description": "Base URL of the Panel as the gateway reaches it, scheme included, without a trailing path. Also the websocket Origin the gateway accepts. Required: rendering fails while it is empty.",
+          "type": "string",
+          "pattern": "^$|^https?://[^\\s/]+(/[^\\s]*)?$",
+          "default": "",
+          "examples": ["https://panel.example.com", "http://pelican-panel.pelican.svc"]
+        },
+        "nodeTokenID": {
+          "description": "`token_id` of the node in the Panel (Admin > Nodes > Configuration). Stored in a chart-managed Secret. Required unless existingSecret is set.",
+          "type": "string",
+          "default": ""
+        },
+        "nodeToken": {
+          "description": "`token` of the node in the Panel. Stored in a chart-managed Secret. Required unless existingSecret is set. Prefer existingSecret so the token stays out of the values.",
+          "type": "string",
+          "default": ""
+        },
+        "existingSecret": {
+          "description": "Name of an existing Secret in the release namespace with the keys `token_id` and `token`. When set, nodeTokenID and nodeToken are ignored and the chart creates no Secret.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        },
+        "advertisedVersion": {
+          "description": "Wings version the gateway reports to the Panel (`/api/system`). The Panel gates features on it; keep it at a Wings release the Panel supports.",
+          "type": "string",
+          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
+          "default": "1.0.0"
+        },
+        "allowedOrigins": {
+          "description": "Extra websocket Origins accepted besides panelURL, as full origins (scheme and host, optional port).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^https?://[^\\s/]+$"
+          },
+          "default": [],
+          "examples": [["https://panel.example.org"]]
+        },
+        "externalIPs": {
+          "description": "Addresses offered to the Panel for allocations. Empty falls back to defaultClass.spec.exposure.externalIPs, then to the node addresses.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/definitions/ipAddress"},
+          "default": []
+        },
+        "metallb": {
+          "description": "MetalLB integration: offer the addresses of MetalLB IPAddressPools in the Panel's allocation form, so an allocation cannot land on an address MetalLB never announces.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "discoverPools": {
+              "description": "Read MetalLB IPAddressPools and offer their addresses. Adds read RBAC on metallb.io IPAddressPools. Without MetalLB installed the gateway falls back to externalIPs and node addresses.",
+              "type": "boolean",
+              "default": false
+            },
+            "poolNames": {
+              "description": "IPAddressPool names to offer. Empty offers every pool.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"$ref": "#/definitions/dnsSubdomain"},
+              "default": []
+            },
+            "maxAddresses": {
+              "description": "Upper bound on the addresses offered; a large pool would otherwise flood the Panel's dropdown.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 256
+            }
+          }
+        },
+        "remoteURL": {
+          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081`.",
+          "type": "string",
+          "pattern": "^$|^https?://[^\\s/]+(/[^\\s]*)?$",
+          "default": ""
+        },
+        "resyncInterval": {
+          "description": "How often the gateway re-reads every server from the Panel, as a Go duration (`30s`, `15m`, `1h`).",
+          "allOf": [{"$ref": "#/definitions/goDuration"}],
+          "default": "15m"
+        },
+        "extraCA": {
+          "description": "Extra CA certificates trusted for the Panel's TLS (a private CA, the OpenShift router CA). Mounted next to the system bundle.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {
+              "description": "ConfigMap in the release namespace holding the PEM bundle. Empty mounts nothing.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+              "default": ""
+            },
+            "key": {
+              "description": "Key in the ConfigMap holding the PEM bundle.",
+              "allOf": [{"$ref": "#/definitions/configMapKey"}],
+              "default": "ca.crt"
+            }
+          }
+        },
+        "sftp": {
+          "description": "The gateway's SFTP server, which authenticates users against the Panel and proxies to the agent of the requested server.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "keyOnly": {
+              "description": "Accept public-key logins only and refuse passwords.",
+              "type": "boolean",
+              "default": false
+            },
+            "hostKeySecret": {
+              "description": "Secret in the release namespace holding the SSH host key. The gateway creates it on first start; every replica shares it, so clients see one host key.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+              "default": "pelican-gateway-sftp-hostkey"
+            },
+            "service": {
+              "description": "The Service exposing SFTP to players. Non-ClusterIP types use externalTrafficPolicy Local.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "description": "Service type.",
+                  "allOf": [{"$ref": "#/definitions/serviceType"}],
+                  "default": "NodePort"
+                },
+                "port": {
+                  "description": "Service port. With LoadBalancer this is the port players connect to; set it to the SFTP port configured for the node in the Panel.",
+                  "allOf": [{"$ref": "#/definitions/port"}],
+                  "default": 2022
+                },
+                "nodePort": {
+                  "description": "Fixed nodePort, used only with type NodePort. 0 lets Kubernetes pick one. Must be inside the cluster's service-node-port-range (30000-32767 by default).",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535,
+                  "default": 30022
+                },
+                "annotations": {
+                  "description": "Annotations of the SFTP Service (load balancer settings, MetalLB address pinning).",
+                  "allOf": [{"$ref": "#/definitions/stringMap"}],
+                  "default": {}
+                }
+              }
+            }
+          }
+        },
+        "service": {
+          "description": "The gateway's Panel-facing Service. The remote API port 8081 for agents is always added.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "description": "Service type. ClusterIP with an Ingress or Route in front is the usual setup.",
+              "allOf": [{"$ref": "#/definitions/serviceType"}],
+              "default": "ClusterIP"
+            },
+            "port": {
+              "description": "Service port of the Panel-facing API. Use this port as the node's daemon port in the Panel when the Panel reaches the Service directly.",
+              "allOf": [{"$ref": "#/definitions/port"}],
+              "default": 8080
+            }
+          }
+        },
+        "ingress": {
+          "description": "Ingress for the Panel-facing API (the node FQDN the Panel and browsers connect to). Its controller must allow websockets with long timeouts.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Create the Ingress.",
+              "type": "boolean",
+              "default": false
+            },
+            "className": {
+              "description": "ingressClassName. Empty uses the cluster's default class.",
+              "type": "string",
+              "default": ""
+            },
+            "host": {
+              "description": "Host of the Ingress rule: the node FQDN configured in the Panel. Required when enabled.",
+              "allOf": [{"$ref": "#/definitions/hostnameOrEmpty"}],
+              "default": ""
+            },
+            "annotations": {
+              "description": "Ingress annotations (timeouts, cert-manager issuer).",
+              "allOf": [{"$ref": "#/definitions/stringMap"}],
+              "default": {}
+            },
+            "tls": {
+              "description": "`spec.tls` of the Ingress, passed through.",
+              "allOf": [{"$ref": "#/definitions/ingressTLS"}],
+              "default": []
+            }
+          }
+        },
+        "route": {
+          "description": "OpenShift Route with edge TLS for the Panel-facing API, as an alternative to the Ingress.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Create the Route. Needs the route.openshift.io API.",
+              "type": "boolean",
+              "default": false
+            },
+            "host": {
+              "description": "Host of the Route: the node FQDN configured in the Panel. Required when enabled.",
+              "allOf": [{"$ref": "#/definitions/hostnameOrEmpty"}],
+              "default": ""
+            },
+            "annotations": {
+              "description": "Route annotations. The default raises the router timeout so websockets survive between console messages.",
+              "allOf": [{"$ref": "#/definitions/stringMap"}],
+              "default": {"haproxy.router.openshift.io/timeout": "16m"}
+            }
+          }
+        },
+        "resources": {
+          "description": "Resources of the gateway container.",
+          "allOf": [{"$ref": "#/definitions/resourceRequirements"}],
+          "default": {"requests": {"cpu": "50m", "memory": "128Mi"}, "limits": {"memory": "512Mi"}}
+        },
+        "logLevel": {
+          "description": "Log level. `debug` adds --debug; any other level logs at info.",
+          "allOf": [{"$ref": "#/definitions/logLevel"}],
+          "default": "info"
+        }
+      }
+    },
+    "operator": {
+      "description": "The operator: the only reconciler, turning GameServer resources into StatefulSets, volumes, Services, NetworkPolicies and install Jobs.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "description": "Operator replicas. With leaderElect one replica holds the Lease and reconciles; the others stand by and take over when it releases the Lease on shutdown or the Lease expires. Lease election needs no quorum, so two replicas are enough.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 2
+        },
+        "podAntiAffinity": {
+          "description": "Spread operator replicas across nodes (topology kubernetes.io/hostname). soft prefers different nodes and still schedules on a single-node cluster; hard requires them, so replicas beyond the node count stay Pending; none adds no rule. A non-empty affinity replaces this rule.",
+          "type": "string",
+          "enum": ["soft", "hard", "none"],
+          "default": "soft"
+        },
+        "affinity": {
+          "description": "Affinity of the operator pods. When non-empty it replaces the podAntiAffinity rule.",
+          "allOf": [{"$ref": "#/definitions/affinity"}],
+          "default": {}
+        },
+        "nodeSelector": {
+          "description": "Node selector of the operator pods.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of the operator pods.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/toleration"},
+          "default": []
+        },
+        "podDisruptionBudget": {
+          "description": "PodDisruptionBudget of the operator keeping at most maxUnavailable replicas down during voluntary disruptions (drains, cluster upgrades). A drain evicts one replica, waits until its replacement runs elsewhere, then evicts the next. With one replica the eviction is allowed at once.",
+          "allOf": [{"$ref": "#/definitions/podDisruptionBudget"}],
+          "default": {"enabled": true, "maxUnavailable": 1}
+        },
+        "concurrency": {
+          "description": "GameServers reconciled in parallel (--concurrency).",
+          "type": "integer",
+          "minimum": 1,
+          "default": 4
+        },
+        "leaderElect": {
+          "description": "Elect a leader through a Lease (--leader-elect). Keep true whenever replicas is above 1; two leaders would fight over every object.",
+          "type": "boolean",
+          "default": true
+        },
+        "resources": {
+          "description": "Resources of the operator container.",
+          "allOf": [{"$ref": "#/definitions/resourceRequirements"}],
+          "default": {"requests": {"cpu": "50m", "memory": "128Mi", "ephemeral-storage": "64Mi"}, "limits": {"memory": "512Mi"}}
+        },
+        "logLevel": {
+          "description": "Log level. `debug` adds --zap-log-level=debug; any other level logs at info.",
+          "allOf": [{"$ref": "#/definitions/logLevel"}],
+          "default": "info"
+        }
+      }
+    },
+    "agent": {
+      "description": "The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config in the servers namespace and read by the agent sidecar of every game pod.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "crashDetection": {
+          "description": "Wings crash detection (`system.crash_detection`): restart a server whose process exits unexpectedly.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Restart crashed servers.",
+              "type": "boolean",
+              "default": true
+            },
+            "detectCleanExitAsCrash": {
+              "description": "Treat an exit code 0 the Panel did not ask for as a crash.",
+              "type": "boolean",
+              "default": true
+            },
+            "timeout": {
+              "description": "Seconds after a crash restart during which a second crash is not restarted again (crash-loop guard).",
+              "type": "integer",
+              "minimum": 0,
+              "default": 60
+            }
+          }
+        },
+        "sftpReadOnly": {
+          "description": "Make SFTP read-only for every server (`system.sftp.read_only`).",
+          "type": "boolean",
+          "default": false
+        },
+        "websocketLogCount": {
+          "description": "Console lines sent to a websocket client when it connects (`system.websocket_log_count`).",
+          "type": "integer",
+          "minimum": 0,
+          "default": 150
+        },
+        "uploadLimitMiB": {
+          "description": "Largest file upload accepted through the Panel, in MiB (`api.upload_limit`).",
+          "type": "integer",
+          "minimum": 1,
+          "default": 100
+        },
+        "timezone": {
+          "description": "IANA timezone of the agent and of the gateway (`system.timezone`, `TZ`).",
+          "allOf": [{"$ref": "#/definitions/timezone"}],
+          "default": "UTC"
+        },
+        "extra": {
+          "description": "Keys merged verbatim over the rendered config.yml (deep merge, these win). Use for Wings settings the chart does not model. Paths and listeners are fixed by the pod layout; changing them breaks the agent.",
+          "type": "object",
+          "default": {},
+          "examples": [{"system": {"activity_send_interval": 60}}]
+        }
+      }
+    },
+    "defaultClass": {
+      "description": "The default GameServerClass, the cluster policy every GameServer uses unless it names another class. Fields follow the GameServerClass CRD; see docs/classes.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "description": "Create the class. With false, a class named defaultClass.name must be created separately.",
+          "type": "boolean",
+          "default": true
+        },
+        "name": {
+          "description": "Name of the class. The gateway and operator use it for GameServers that name no class.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+          "default": "default"
+        },
+        "spec": {
+          "$ref": "#/definitions/gameServerClassSpec"
+        }
+      }
+    },
+    "admissionPolicies": {
+      "description": "ValidatingAdmissionPolicies enforcing the restricted shape of game pods and the volume allow-list of install Jobs.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Install the policies and their bindings.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "networkPolicies": {
+      "description": "Chart-level NetworkPolicies: default deny and install-Job egress in the servers namespace, and the gateway's ingress policy. Per-server policies are controlled by defaultClass.spec.network.enabled.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Install the NetworkPolicies. Needs a CNI that enforces them.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "openshift": {
+      "description": "OpenShift specifics. Enabling it also sets defaultClass.spec.security.useNamespaceUIDRange and defaultClass.spec.install.disableSeccomp to true in the rendered class.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Bind the SCCs below and switch the default class to the namespace UID range.",
+          "type": "boolean",
+          "default": false
+        },
+        "gameSCC": {
+          "description": "SCC granted to game pods. `restricted-v2` works because game pods then run with the namespace's UID.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+          "default": "restricted-v2"
+        },
+        "installerSCC": {
+          "description": "SCC granted to install Jobs, which run as root.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+          "default": "anyuid"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "dnsLabel": {
+      "description": "An RFC 1123 label: lower-case alphanumerics and '-', starting and ending alphanumeric, at most 63 characters (namespace names).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "dnsSubdomain": {
+      "description": "An RFC 1123 subdomain: lower-case alphanumerics, '-' and '.', at most 253 characters (names of most Kubernetes objects).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "dnsSubdomainOrEmpty": {
+      "description": "An RFC 1123 subdomain, or empty for unset.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "hostnameOrEmpty": {
+      "description": "A DNS hostname (wildcards allowed as the first label), or empty for unset.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "configMapKey": {
+      "description": "A ConfigMap or Secret data key: alphanumerics, '-', '_' and '.'.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[-._a-zA-Z0-9]+$"
+    },
+    "stringMap": {
+      "description": "A map of string keys to string values (labels, annotations, node selectors). Quote values YAML would read as numbers or booleans.",
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "port": {
+      "description": "A TCP/UDP port number.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "serviceType": {
+      "description": "Kubernetes Service type.",
+      "type": "string",
+      "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
+    },
+    "pullPolicy": {
+      "description": "Kubernetes imagePullPolicy.",
+      "type": "string",
+      "enum": ["Always", "IfNotPresent", "Never"]
+    },
+    "logLevel": {
+      "description": "Component log level. Only `debug` changes anything; the components log at info otherwise.",
+      "type": "string",
+      "enum": ["info", "debug"]
+    },
+    "localObjectReferences": {
+      "description": "A list of LocalObjectReferences (`- name: <secret>`).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"$ref": "#/definitions/dnsSubdomain"}
+        }
+      }
+    },
+    "goDuration": {
+      "description": "A Go duration: a sequence of numbers with units ns, us, µs, ms, s, m or h, such as `90s`, `15m` or `1h30m`.",
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+    },
+    "timezone": {
+      "description": "An IANA timezone name such as `UTC`, `Europe/Berlin` or `America/Argentina/Buenos_Aires`.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
+    },
+    "ipv4": {
+      "type": "string",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$"
+    },
+    "ipv6": {
+      "$comment": "Shape check only (hex groups and colons, optional embedded IPv4); the components parse the address.",
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$"
+    },
+    "ipAddress": {
+      "description": "An IPv4 or IPv6 address.",
+      "anyOf": [{"$ref": "#/definitions/ipv4"}, {"$ref": "#/definitions/ipv6"}]
+    },
+    "ipv4CIDR": {
+      "description": "An IPv4 range in CIDR notation, such as `10.0.0.0/8`.",
+      "type": "string",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$"
+    },
+    "ipv6CIDR": {
+      "description": "An IPv6 range in CIDR notation, such as `fd00::/8`.",
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
+    },
+    "cidr": {
+      "description": "An IPv4 or IPv6 range in CIDR notation.",
+      "anyOf": [{"$ref": "#/definitions/ipv4CIDR"}, {"$ref": "#/definitions/ipv6CIDR"}]
+    },
+    "quantity": {
+      "description": "A Kubernetes resource quantity: a number with an optional suffix (`100m`, `0.5`, `1`, `512Mi`, `2Gi`, `1e3`).",
+      "anyOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "number", "minimum": 0},
+        {
+          "type": "string",
+          "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+        }
+      ]
+    },
+    "resourceList": {
+      "description": "A map of resource names (cpu, memory, ephemeral-storage, hugepages-<size>, extended resources) to quantities.",
+      "type": "object",
+      "propertyNames": {"pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"},
+      "additionalProperties": {"$ref": "#/definitions/quantity"}
+    },
+    "resourceRequirements": {
+      "description": "Container resources (`requests`, `limits`, `claims`), rendered verbatim into the container spec.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "description": "Resources the scheduler reserves for the container.",
+          "allOf": [{"$ref": "#/definitions/resourceList"}]
+        },
+        "limits": {
+          "description": "Upper bounds the kubelet enforces. A CPU limit throttles, a memory limit OOM-kills.",
+          "allOf": [{"$ref": "#/definitions/resourceList"}]
+        },
+        "claims": {
+          "description": "Dynamic resource claims of the pod used by this container.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "request": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "ingressTLS": {
+      "description": "Ingress `spec.tls` entries.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hosts": {
+            "description": "Hosts covered by the certificate.",
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "secretName": {
+            "description": "kubernetes.io/tls Secret holding the certificate. Empty lets the controller use its default certificate.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "toleration": {
+      "description": "A pod toleration.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "Taint key. Empty with operator Exists matches every taint.",
+          "type": "string"
+        },
+        "operator": {
+          "description": "Exists matches any value, Equal the given value. Lt and Gt compare numerically and need the TaintTolerationComparisonOperators feature gate.",
+          "type": "string",
+          "enum": ["Exists", "Equal", "Lt", "Gt"]
+        },
+        "value": {
+          "description": "Taint value. Leave empty with operator Exists.",
+          "type": "string"
+        },
+        "effect": {
+          "description": "Taint effect to match. Empty matches every effect.",
+          "type": "string",
+          "enum": ["", "NoSchedule", "PreferNoSchedule", "NoExecute"]
+        },
+        "tolerationSeconds": {
+          "description": "With effect NoExecute, how long the pod stays bound after the taint appears. Unset tolerates forever.",
+          "type": "integer"
+        }
+      }
+    },
+    "affinity": {
+      "description": "A Kubernetes Affinity, rendered verbatim. The three rule kinds are passed through unchecked.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": {"description": "Rules on node labels.", "type": "object"},
+        "podAffinity": {"description": "Rules attracting the pod to nodes running matching pods.", "type": "object"},
+        "podAntiAffinity": {"description": "Rules keeping the pod away from nodes running matching pods.", "type": "object"}
+      }
+    },
+    "podDisruptionBudget": {
+      "description": "A chart-managed PodDisruptionBudget.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Create the PodDisruptionBudget. Set false on single-node clusters: with two replicas on the only node, a drain waits for a second node.",
+          "type": "boolean",
+          "default": true
+        },
+        "maxUnavailable": {
+          "description": "Replicas that may be down at once, as a number or a percentage such as `50%`. maxUnavailable rather than minAvailable, so replicas: 1 can still be drained.",
+          "anyOf": [
+            {"type": "integer", "minimum": 0},
+            {"type": "string", "pattern": "^([0-9]|[1-9][0-9]|100)%$"}
+          ],
+          "default": 1
+        }
+      }
+    },
+    "containerResources": {
+      "description": "Simple resource amounts of a container the operator builds (GameServerClass ContainerResources). An unset or zero amount uses the operator's built-in default for that container.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "description": "CPU request.",
+          "allOf": [{"$ref": "#/definitions/quantity"}]
+        },
+        "memory": {
+          "description": "Memory request.",
+          "allOf": [{"$ref": "#/definitions/quantity"}]
+        },
+        "memoryLimit": {
+          "description": "Memory limit.",
+          "allOf": [{"$ref": "#/definitions/quantity"}]
+        }
+      }
+    },
+    "gameServerClassSpec": {
+      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap and serviceAccountName are filled in by the chart and cannot be set here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storage": {
+          "description": "Per-server storage: the server PVC, the scratch volume and snapshots.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "storageClassName": {
+              "description": "StorageClass of server PVCs. It must allow volume expansion, because the operator grows the PVC when the Panel raises the disk limit. Empty uses the cluster default.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+              "default": ""
+            },
+            "defaultSizeGiB": {
+              "description": "PVC size in GiB for servers whose Panel disk limit is 0 (unlimited).",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647,
+              "default": 20
+            },
+            "overheadPercent": {
+              "description": "Percent added to the Panel disk limit for logs, the activity database and install output.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "default": 10
+            },
+            "scratch": {
+              "description": "The scratch volume holding backup archives and agent temp files.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "description": "Ephemeral provisions a generic ephemeral PVC per pod; EmptyDir uses node-local disk.",
+                  "type": "string",
+                  "enum": ["Ephemeral", "EmptyDir"],
+                  "default": "Ephemeral"
+                },
+                "storageClassName": {
+                  "description": "StorageClass of the Ephemeral scratch volume. Empty uses the cluster default.",
+                  "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+                  "default": ""
+                },
+                "sizeGiB": {
+                  "description": "Scratch size in GiB. 0 uses the size of the server PVC, which fits a full backup.",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647,
+                  "default": 0
+                }
+              }
+            },
+            "deletionPolicy": {
+              "description": "What happens to the server PVC when the GameServer is deleted. SnapshotThenDelete needs volumeSnapshotClassName.",
+              "type": "string",
+              "enum": ["Delete", "Retain", "SnapshotThenDelete"],
+              "default": "Delete"
+            },
+            "volumeSnapshotClassName": {
+              "description": "VolumeSnapshotClass for SnapshotThenDelete and snapshotSchedule.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+              "default": ""
+            },
+            "snapshotSchedule": {
+              "description": "Cron schedule of crash-consistent VolumeSnapshots of every server (five fields, or a macro such as @daily). Empty takes no scheduled snapshots. Needs volumeSnapshotClassName.",
+              "type": "string",
+              "pattern": "^$|^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$|^@every [0-9a-zµ.]+$|^\\S+( +\\S+){4}$",
+              "default": "",
+              "examples": ["0 4 * * *", "@daily"]
+            },
+            "snapshotRetain": {
+              "description": "Scheduled snapshots kept per server; older ones are deleted.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647,
+              "default": 7
+            }
+          }
+        },
+        "exposure": {
+          "description": "How game ports reach players.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "description": "LoadBalancer creates a LoadBalancer Service per allocation IP. NodePort and HostPort pin the game pod to the node owning the allocation IP; HostPort also needs serversNamespace.podSecurityLevel privileged.",
+              "type": "string",
+              "enum": ["LoadBalancer", "NodePort", "HostPort"],
+              "default": "LoadBalancer"
+            },
+            "externalTrafficPolicy": {
+              "description": "externalTrafficPolicy of exposure Services. Local keeps the player's source IP.",
+              "type": "string",
+              "enum": ["Local", "Cluster"],
+              "default": "Local"
+            },
+            "loadBalancer": {
+              "description": "Annotation keys of the load balancer implementation.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "provider": {
+                  "description": "`metallb` fills in ipAnnotation (metallb.io/loadBalancerIPs) and sharingAnnotation (metallb.io/allow-shared-ip). Empty adds none; explicit keys below always win.",
+                  "type": "string",
+                  "enum": ["", "metallb"],
+                  "default": ""
+                },
+                "ipAnnotation": {
+                  "description": "Annotation key that pins a Service to the allocation IP.",
+                  "type": "string",
+                  "default": "",
+                  "examples": ["metallb.io/loadBalancerIPs"]
+                },
+                "sharingAnnotation": {
+                  "description": "Annotation key that lets several Services share one IP.",
+                  "type": "string",
+                  "default": "",
+                  "examples": ["metallb.io/allow-shared-ip"]
+                },
+                "annotations": {
+                  "description": "Annotations added verbatim to every exposure Service.",
+                  "allOf": [{"$ref": "#/definitions/stringMap"}],
+                  "default": {}
+                }
+              }
+            },
+            "externalIPs": {
+              "description": "Addresses advertised to the Panel for allocations. Empty uses node addresses (NodePort, HostPort) or the observed LoadBalancer ingress IPs.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"$ref": "#/definitions/ipAddress"},
+              "default": []
+            }
+          }
+        },
+        "network": {
+          "description": "Per-server NetworkPolicies.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Create a NetworkPolicy per GameServer.",
+              "type": "boolean",
+              "default": true
+            },
+            "inClusterEgress": {
+              "description": "In-cluster destinations game pods may reach despite blockedEgressCIDRs.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gameServers": {
+                  "description": "Allow traffic to other GameServer pods on their allocation ports.",
+                  "type": "boolean",
+                  "default": true
+                },
+                "additional": {
+                  "description": "Further allowed destinations, such as a database Service range.",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["cidr"],
+                    "properties": {
+                      "cidr": {
+                        "description": "Destination range.",
+                        "allOf": [{"$ref": "#/definitions/cidr"}]
+                      },
+                      "ports": {
+                        "description": "Destination ports. Empty allows every port.",
+                        "type": "array",
+                        "items": {"$ref": "#/definitions/port"}
+                      }
+                    }
+                  },
+                  "default": []
+                }
+              }
+            },
+            "blockedEgressCIDRs": {
+              "description": "IPv4 ranges excluded from the internet egress of game pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
+              "type": "array",
+              "items": {"$ref": "#/definitions/ipv4CIDR"},
+              "default": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]
+            },
+            "nodeCIDRs": {
+              "description": "Node ranges admitted on the agent port, for kubelet probes on CNIs that do not allow host traffic implicitly.",
+              "type": "array",
+              "items": {"$ref": "#/definitions/cidr"},
+              "default": []
+            }
+          }
+        },
+        "resources": {
+          "description": "How the Panel's build limits (memory, CPU, disk) become pod resources.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "memoryOverheadPercent": {
+              "description": "Percent added to the Panel's memory_limit for the container limit (Wings' docker.overhead).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "default": 5
+            },
+            "cpuRequestPercentOfLimit": {
+              "description": "CPU request as a percent of the Panel's cpu_limit, raised to minCpu and capped at the limit. Lower values overcommit CPU, which is compressible and only throttles. 0 uses 25.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 25
+            },
+            "memoryRequestPercentOfLimit": {
+              "description": "Memory request as a percent of the Panel's memory_limit. 100 reserves the full limit so the scheduler guarantees it; lower values overcommit, and a server growing into its limit on a full node is evicted.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            },
+            "unlimitedMemoryMiB": {
+              "description": "Memory in MiB used for servers whose memory_limit is 0 (unlimited).",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647,
+              "default": 4096
+            },
+            "unlimitedCpuPercent": {
+              "description": "CPU limit in percent of one core for servers whose cpu_limit is 0. 0 sets no CPU limit.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "default": 0
+            },
+            "minCpu": {
+              "description": "Floor of the CPU request of a game container.",
+              "allOf": [{"$ref": "#/definitions/quantity"}],
+              "default": "100m"
+            },
+            "tmpSizeMiB": {
+              "description": "Size limit in MiB of the memory-backed /tmp of game and install containers (Wings' tmpfs_size). It counts against the pod's memory. 0 uses 100.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "default": 100
+            },
+            "agent": {
+              "description": "Resources of the agent sidecar in every game pod.",
+              "allOf": [{"$ref": "#/definitions/containerResources"}],
+              "default": {"cpu": "50m", "memory": "128Mi", "memoryLimit": "512Mi"}
+            }
+          }
+        },
+        "security": {
+          "description": "The UID game containers run as.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runAsUser": {
+              "description": "Pinned non-root UID and GID of game containers. Ignored when useNamespaceUIDRange is true.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 1000
+            },
+            "generatePasswdEntry": {
+              "description": "Generate an /etc/passwd entry for the UID inside the game container (some games look up their user).",
+              "type": "boolean",
+              "default": true
+            },
+            "useNamespaceUIDRange": {
+              "description": "Use the start of the namespace's OpenShift UID range instead of runAsUser. Forced to true by openshift.enabled.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "install": {
+          "description": "Install Jobs, which run the egg's install script.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serviceAccountName": {
+              "description": "ServiceAccount of install pods in the servers namespace.",
+              "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
+              "default": "pelican-installer"
+            },
+            "resources": {
+              "description": "Resources of the install container.",
+              "allOf": [{"$ref": "#/definitions/containerResources"}],
+              "default": {"cpu": "1", "memory": "1Gi"}
+            },
+            "strictExitCode": {
+              "description": "Fail the install when the script exits non-zero. Wings ignores the exit code, and many eggs rely on that.",
+              "type": "boolean",
+              "default": false
+            },
+            "activeDeadlineSeconds": {
+              "description": "Seconds an install Job may run before Kubernetes stops it.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 3600
+            },
+            "prepareTimeoutSeconds": {
+              "description": "Seconds the operator waits for the agent to report the server prepared.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 600
+            },
+            "runAsRoot": {
+              "description": "Run the install container as UID 0. Egg install scripts expect root.",
+              "type": "boolean",
+              "default": true
+            },
+            "disableSeccomp": {
+              "description": "Leave the seccomp profile of install pods unset; OpenShift's anyuid SCC rejects pods that set one. Forced to true by openshift.enabled.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "failover": {
+          "description": "Handling of game pods on lost nodes.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "forceDeleteAfter": {
+              "description": "Force-delete a game pod stuck Terminating on a NotReady node after this Go duration (`5m`), so it reschedules. Empty never does. Safe only when the storage fences the old node or the node is confirmed down.",
+              "anyOf": [{"type": "string", "const": ""}, {"$ref": "#/definitions/goDuration"}],
+              "default": ""
+            }
+          }
+        },
+        "imageResolution": {
+          "description": "How the operator finds the ENTRYPOINT and CMD of egg images, which the shim needs to start the game.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "registryLookup": {
+              "description": "When no entrypointOverrides glob matches, read the image config from the registry. On a failed lookup the operator falls back to probing inside the image.",
+              "type": "boolean",
+              "default": false
+            },
+            "pullSecrets": {
+              "description": "Names of Secrets in the servers namespace used for registry lookups and as imagePullSecrets of game pods.",
+              "type": "array",
+              "items": {"$ref": "#/definitions/dnsSubdomain"},
+              "default": []
+            },
+            "pinDigest": {
+              "description": "Resolve the tag to a digest on every pod creation, matching Wings' pull-on-start.",
+              "type": "boolean",
+              "default": true
+            },
+            "entrypointOverrides": {
+              "description": "Map of image reference globs to the argv to run, for images whose entrypoint cannot be resolved or must be replaced.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"}
+              },
+              "default": {
+                "ghcr.io/pelican-eggs/yolks:*": ["/bin/bash", "/entrypoint.sh"],
+                "ghcr.io/pelican-eggs/steamcmd:*": ["/bin/bash", "/entrypoint.sh"],
+                "ghcr.io/pelican-eggs/games:*": ["/bin/bash", "/entrypoint.sh"]
+              }
+            }
+          }
+        },
+        "terminationGracePeriodSeconds": {
+          "description": "Grace period of game pods in seconds. Keep it above 600: Wings waits up to 10 minutes for a server to stop before killing it. 0 uses 660.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 660
+        },
+        "suspendScalesToZero": {
+          "description": "Delete the pod of a server suspended in the Panel instead of keeping it stopped.",
+          "type": "boolean",
+          "default": false
+        },
+        "nodeSelector": {
+          "description": "Node selector of game pods.",
+          "allOf": [{"$ref": "#/definitions/stringMap"}],
+          "default": {}
+        },
+        "tolerations": {
+          "description": "Tolerations of game pods.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/toleration"},
+          "default": []
+        },
+        "priorityClassName": {
+          "description": "PriorityClass of game pods. Empty uses the cluster default.",
+          "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
+          "default": ""
+        }
+      }
+    }
+  }
+}

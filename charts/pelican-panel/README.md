@@ -5,7 +5,7 @@ image `ghcr.io/pelican/panel`.
 
 | | |
 |---|---|
-| Chart version | `0.1.2` |
+| Chart version | `0.1.3` |
 | Default app version | `v1.0.0-beta38` |
 | Kubernetes | `>= 1.22` (needs the `net.ipv4.ip_unprivileged_port_start` safe sysctl) |
 | Helm | `>= 3.9` |
@@ -150,6 +150,15 @@ login form posts to `http://` and the session cookie loses its `Secure` flag.
   the OpenShift router answers 503 for a numeric `targetPort`.
 
 ## Values
+
+`values.schema.json` describes every value below with its type, allowed values
+and default. Helm checks the merged values against it on `install`, `upgrade`,
+`template` and `lint`, so a misspelt key, a wrong type or an unsupported value
+fails before anything renders. Combinations of values (more than one replica,
+https without a proxy, a redis driver without a host) are checked by the
+templates. Editors with YAML language support complete and check a values file
+against it when the file starts with
+`# yaml-language-server: $schema=<path or URL of values.schema.json>`.
 
 ### Top level
 

@@ -50,7 +50,7 @@ a way to expose the gateway: an Ingress or Route for its API, a `NodePort` or
 ([docs/panel.md](docs/panel.md) has the details).
 
 ```bash
-helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.2 \
+helm install pelican-panel oci://ghcr.io/claiyc/pelican-k8s/charts/pelican-panel --version 0.1.3 \
   -n pelican --create-namespace \
   --set panel.url=https://panel.example.com \
   --set ingress.enabled=true --set 'ingress.hosts[0].host=panel.example.com'
