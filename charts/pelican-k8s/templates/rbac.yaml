@@ -42,9 +42,16 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
 rules:
+  # Only its own host key: the release namespace also holds the node token
+  # and, with tls.enabled, the internal CA's key. Kubernetes cannot limit
+  # create by name, so create is a rule of its own.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create]
+    resourceNames: [{{ .Values.gateway.sftp.hostKeySecret | quote }}]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
