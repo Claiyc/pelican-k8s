@@ -111,7 +111,9 @@ func ipLabelValue(raw string) string {
 // containerPortName names a game container port after the port and the
 // server, so a shared Service's named target port never resolves on another
 // server's pod that still declares a port it has given up (at most 15
-// characters: t25565-1a2b3c4d).
+// characters: t25565-1a2b3c4d). The first 8 characters of a server UUID are
+// its uuid_short, which the Panel keeps unique among its servers, so the
+// names of two servers never collide.
 func containerPortName(in *Input, p int32, proto corev1.Protocol) string {
 	id := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
