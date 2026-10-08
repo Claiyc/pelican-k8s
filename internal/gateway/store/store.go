@@ -182,6 +182,36 @@ func (s *Store) PatchSpec(ctx context.Context, uuid string, spec map[string]any)
 	return s.Client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
 }
 
+// PatchSpecAt applies a JSON merge patch to the spec only if the GameServer
+// is still at resourceVersion; otherwise it fails with a conflict.
+func (s *Store) PatchSpecAt(ctx context.Context, uuid, resourceVersion string, spec map[string]any) error {
+	b, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": resourceVersion}, "spec": spec})
+	if err != nil {
+		return err
+	}
+	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
+	return s.Client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
+// UpdateSpec patches the spec with what mutate derives from the current
+// GameServer; a nil patch writes nothing. The write is conditional on the
+// version read, so a decision taken on one gateway replica never lands over
+// a change it did not see (another replica's power action, a status the
+// decision depends on); a conflict starts over with a fresh read.
+func (s *Store) UpdateSpec(ctx context.Context, uuid string, mutate func(gs *v1alpha1.GameServer) (map[string]any, error)) error {
+	return retry.OnError(conflictBackoff, apierrors.IsConflict, func() error {
+		gs, err := s.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		spec, err := mutate(gs)
+		if err != nil || spec == nil {
+			return err
+		}
+		return s.PatchSpecAt(ctx, uuid, gs.ResourceVersion, spec)
+	})
+}
+
 // PatchStatus applies a JSON merge patch to the status subresource.
 func (s *Store) PatchStatus(ctx context.Context, uuid string, status map[string]any) error {
 	b, err := json.Marshal(map[string]any{"status": status})
@@ -204,9 +234,9 @@ func (s *Store) PatchStatusAt(ctx context.Context, uuid, resourceVersion string,
 	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
 }
 
-// backupsBackoff paces the retries of a pending-backups write that lost to
+// conflictBackoff paces the retries of a conditional write that lost to
 // another write of the GameServer (another replica's, or any status change).
-var backupsBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 10, Cap: time.Second}
+var conflictBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 10, Cap: time.Second}
 
 // AgentInstance returns the current instance of the server's agent
 // (render.AgentInstance), or "" without an agent pod.
@@ -225,7 +255,7 @@ func (s *Store) AgentInstance(ctx context.Context, uuid string) (string, error) 
 // replicas never drop or bring back each other's entries; a conflict starts
 // over with a fresh read.
 func (s *Store) UpdateBackups(ctx context.Context, uuid string, mutate func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup) error {
-	return retry.OnError(backupsBackoff, apierrors.IsConflict, func() error {
+	return retry.OnError(conflictBackoff, apierrors.IsConflict, func() error {
 		gs, err := s.Get(ctx, uuid)
 		if err != nil {
 			return err

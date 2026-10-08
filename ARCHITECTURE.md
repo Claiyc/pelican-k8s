@@ -353,6 +353,12 @@ gateway polls the agent again every second for up to 30 s, writing the state it 
 answers, since no further post comes while the state stays put. After
 each post the gateway also refreshes `status.usage` from a fresh poll.
 
+The gateway's `spec` writes are conditional on the `resourceVersion` the decision was taken on, too:
+power actions and installs (the next generation), the intentional stop and the crash check (§8.3). On
+a conflict the gateway reads the GameServer again and decides again, so a write never lands over a
+power action another replica wrote meanwhile; the crash check, for example, then finds the new
+generation unobserved and leaves the server running.
+
 ### 5.9 Agent pod replacement
 
 The agent pod of a server is replaced when the operator moves it to the game pod's node (§7.7), when its
@@ -1182,6 +1188,8 @@ sequenceDiagram
   `{desired: Running, generation++}`, `restart` ⇒ the same (the operator issues `restart` when the
   process is running), `stop` ⇒ `{desired: Stopped, kill: false, generation++}`, `kill` ⇒
   `{desired: Stopped, kill: true, generation++}`.
+  The patch is conditional on the GameServer's `resourceVersion` the generation was read from (§5.8),
+  so two actions on different gateway replicas get two generations.
   `start` and `restart` first re-sync `spec.panel` from the Panel and are refused for a suspended server.
   The gateway checks the websocket's permissions (§5.5). `send command`, `send logs` and `send stats`
   pass through to the agent.

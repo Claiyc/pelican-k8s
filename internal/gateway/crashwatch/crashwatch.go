@@ -75,11 +75,22 @@ func (w *Watcher) Check(ctx context.Context) {
 			render.ContainerRestarts(agent, render.AgentContainer) != gs.Status.Agent.Restarts {
 			continue
 		}
-		if err := w.Store.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}}); err != nil {
+		// Conditional on the version checked: a start another replica writes
+		// meanwhile is checked again (and spared), not overwritten.
+		stopped := false
+		if err := w.Store.UpdateSpec(ctx, uuid, func(fresh *v1alpha1.GameServer) (map[string]any, error) {
+			stopped = w.offlineLongEnough(fresh) && sameDrivenPods(fresh, gs)
+			if !stopped {
+				return nil, nil
+			}
+			return map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}}, nil
+		}); err != nil {
 			w.Log.Warn("crash check: stop failed", "uuid", uuid, "error", err)
 			continue
 		}
-		w.Log.Info("process stayed offline after a crash; server stopped", "uuid", uuid)
+		if stopped {
+			w.Log.Info("process stayed offline after a crash; server stopped", "uuid", uuid)
+		}
 	}
 }
 
@@ -106,6 +117,13 @@ func (w *Watcher) offlineLongEnough(gs *v1alpha1.GameServer) bool {
 		return false
 	}
 	return st.Power.LastAction == nil || now.Sub(st.Power.LastAction.At.Time) >= settle
+}
+
+// sameDrivenPods reports whether the operator last drove the same pods and
+// agent container for both versions of a GameServer.
+func sameDrivenPods(a, b *v1alpha1.GameServer) bool {
+	return a.Status.Agent.PodUID == b.Status.Agent.PodUID && a.Status.Agent.Restarts == b.Status.Agent.Restarts &&
+		a.Status.Game.PodUID == b.Status.Game.PodUID
 }
 
 // driven reports a pod that exists, is the one the operator last drove, and

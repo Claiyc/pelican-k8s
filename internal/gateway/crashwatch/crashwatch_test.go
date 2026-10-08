@@ -14,6 +14,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
@@ -52,6 +53,12 @@ func crashed() (*v1alpha1.GameServer, *corev1.Pod, *corev1.Pod) {
 
 func check(t *testing.T, gs *v1alpha1.GameServer, pods ...*corev1.Pod) v1alpha1.PowerState {
 	t.Helper()
+	return checkWith(t, nil, gs, pods...)
+}
+
+// checkWith runs the check with funcs intercepting the store's client calls.
+func checkWith(t *testing.T, funcs *interceptor.Funcs, gs *v1alpha1.GameServer, pods ...*corev1.Pod) v1alpha1.PowerState {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
@@ -61,7 +68,11 @@ func check(t *testing.T, gs *v1alpha1.GameServer, pods ...*corev1.Pod) v1alpha1.
 			objs = append(objs, p)
 		}
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&v1alpha1.GameServer{}).Build()
+	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&v1alpha1.GameServer{})
+	if funcs != nil {
+		b = b.WithInterceptorFuncs(*funcs)
+	}
+	c := b.Build()
 	w := &Watcher{Store: store.New(c, ns, "default"), Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now }}
 	w.Check(context.Background())
 	out := &v1alpha1.GameServer{}
@@ -82,6 +93,38 @@ func TestSettledCrashStopsTheServer(t *testing.T) {
 	agent.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 1}}
 	if got := check(t, gs, agent, game); got != v1alpha1.PowerStopped {
 		t.Fatalf("desired %s after a driven agent restart, want Stopped", got)
+	}
+}
+
+// A change written after the check read the server wins: the check decides
+// again on the newer version. A start another gateway replica writes is kept,
+// and so is a server whose agent the operator has just recorded as fresh.
+func TestChangeDuringTheCheckIsKept(t *testing.T) {
+	cases := map[string]func(ctx context.Context, c client.WithWatch, gs client.Object) error{
+		"start on another replica": func(ctx context.Context, c client.WithWatch, gs client.Object) error {
+			return c.Patch(ctx, gs, client.RawPatch(types.MergePatchType, []byte(`{"spec":{"power":{"desired":"Running","generation":4}}}`)))
+		},
+		"fresh agent recorded": func(ctx context.Context, c client.WithWatch, gs client.Object) error {
+			return c.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, []byte(`{"status":{"agent":{"restarts":1}}}`)))
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			gs, agent, game := crashed()
+			raced := false
+			funcs := interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if !raced {
+					raced = true
+					if err := change(ctx, c, obj.DeepCopyObject().(client.Object)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			}}
+			if got := checkWith(t, &funcs, gs, agent, game); got != v1alpha1.PowerRunning || !raced {
+				t.Fatalf("desired %s (raced %v), want Running", got, raced)
+			}
+		})
 	}
 }
 

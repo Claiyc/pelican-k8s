@@ -24,6 +24,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -628,6 +629,32 @@ func TestContainerStatusIntentionalStop(t *testing.T) {
 		if stop(f) != v1alpha1.PowerRunning {
 			t.Fatalf("a stop while %s terminates must not change the desired state", name)
 		}
+	}
+}
+
+// A start another gateway replica writes while the intentional stop is
+// decided wins: the rule is checked again on the newer version.
+func TestIntentionalStopLosesToAStart(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	ctx := context.Background()
+	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+	raced := false
+	f.st.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if !raced {
+			raced = true
+			start := []byte(`{"spec":{"power":{"desired":"Running","generation":1}}}`)
+			if err := c.Patch(ctx, obj.DeepCopyObject().(client.Object), client.RawPatch(types.MergePatchType, start)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}})
+	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer); code != 204 {
+		t.Fatalf("code = %d", code)
+	}
+	if p := f.gs().Spec.Power; !raced || p.Desired != v1alpha1.PowerRunning || p.Generation != 1 {
+		t.Fatalf("power = %+v (raced %v), want the start kept", p, raced)
 	}
 }
 
