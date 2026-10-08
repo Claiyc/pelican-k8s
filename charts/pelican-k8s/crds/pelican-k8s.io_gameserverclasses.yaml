@@ -253,8 +253,10 @@ spec:
                     type: array
                   enabled:
                     default: true
-                    description: Enabled controls whether per-server NetworkPolicies
-                      are created.
+                    description: |-
+                      Enabled restricts the server's pods with per-server NetworkPolicies.
+                      false makes both policies admit all traffic, which also lifts the
+                      chart's default-deny for these pods.
                     type: boolean
                   inClusterEgress:
                     description: InClusterEgressSpec lists in-cluster destinations

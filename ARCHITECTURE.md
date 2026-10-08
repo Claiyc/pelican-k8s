@@ -820,7 +820,7 @@ With `openshift.enabled` the chart sets `security.useNamespaceUIDRange` and `ins
 | StatefulSet (game) | `gs-<uuid>` | Pod `gs-<uuid>-0`. `replicas: 1` while the server is on and 0 otherwise (§7.6); the same strategy and volume settings. At most one pod of each kind, and both on one node (§7.7), so the RWO volume is attached to one node |
 | Service (exposure) | `gs-<uuid>` | Selects the game pod. One port entry per allocation port for each of TCP and UDP; type from the class (a type change recreates it); `publishNotReadyAddresses: true`. Not created in HostPort mode or for a server without an allocation. With `sharingAnnotation`, the value is `pelican-<allocation IP>` |
 | Service (agent) | `gs-<uuid>-agent` | Headless, selects the agent pod: HTTP (8080), SFTP (2022) and shim (8082) ports, `publishNotReadyAddresses: true`; the agent StatefulSet's `serviceName` and the name the shim dials |
-| NetworkPolicy | `gs-<uuid>`, `gs-<uuid>-agent` | Ingress and egress rules of the game pod and of the agent pod (§12.4); not created with `network.enabled: false` |
+| NetworkPolicy | `gs-<uuid>`, `gs-<uuid>-agent` | Ingress and egress rules of the game pod and of the agent pod (§12.4); with `network.enabled: false`, rules that admit all traffic |
 | ConfigMap | `gs-<uuid>-install-<gen>` | Install script; created by the gateway, owned by the CR |
 | Job | `gs-<uuid>-install-<gen>` | Install run (§8.2); label `pelican-k8s.io/install-generation` |
 | VolumeSnapshot | `gs-<uuid>-<YYYYMMDD-HHMMSS>`, `gs-<uuid>-final` | Scheduled and final snapshots (§10.4); no ownerReference |
@@ -1528,6 +1528,8 @@ enforce the workload shapes:
     rule as the game pod (remote pulls, S3 uploads); `inClusterEgress.additional` CIDR/port pairs
 - Rules are additive, so DNS, the remote API, the shim port and the in-cluster rules reach their
   destinations inside the blocked ranges.
+- **Class `network.enabled: false`:** both policies admit all ingress and egress for the server's two
+  pods, which lifts the namespace's default deny for them.
 - **Install Jobs** (chart policy `install-jobs`): DNS and `0.0.0.0/0` except link-local and the default
   class's `blockedEgressCIDRs`.
 - **System namespace:** the gateway accepts 8080 and 2022 from anywhere and 8081 from the servers

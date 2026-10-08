@@ -651,17 +651,11 @@ func (r *GameServerReconciler) ensureNetworkPolicies(s *scope) error {
 	return r.applyNetworkPolicy(s, names.AgentNetworkPolicy(uuid), render.AgentNetworkPolicy(s.in))
 }
 
-// applyNetworkPolicy creates, updates or (desired nil) removes a policy.
+// applyNetworkPolicy creates or updates a policy.
 func (r *GameServerReconciler) applyNetworkPolicy(s *scope, name string, desired *networkingv1.NetworkPolicy) error {
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: name}
 	existing := &networkingv1.NetworkPolicy{}
 	err := r.Get(s.ctx, key, existing)
-	if desired == nil {
-		if err == nil {
-			return client.IgnoreNotFound(r.Delete(s.ctx, existing))
-		}
-		return client.IgnoreNotFound(err)
-	}
 	if apierrors.IsNotFound(err) {
 		if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
 			return err

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -499,9 +500,19 @@ func TestNetworkPolicy(t *testing.T) {
 		t.Fatalf("agent egress %+v", ap.Spec.Egress)
 	}
 
+	// Disabled: open policies, so the chart's default-deny does not cut the
+	// pods off.
 	off := testInput(t, func(i *Input) { i.Class.Spec.Network.Enabled = boolPtr(false) })
-	if NetworkPolicy(off) != nil || AgentNetworkPolicy(off) != nil {
-		t.Fatal("disabled network policy")
+	for _, p := range []*networkingv1.NetworkPolicy{NetworkPolicy(off), AgentNetworkPolicy(off)} {
+		if len(p.Spec.Ingress) != 1 || len(p.Spec.Egress) != 1 || len(p.Spec.Ingress[0].From) != 0 || len(p.Spec.Egress[0].To) != 0 ||
+			len(p.Spec.Ingress[0].Ports) != 0 || len(p.Spec.Egress[0].Ports) != 0 || len(p.Spec.PolicyTypes) != 2 {
+			t.Fatalf("disabled policy %s is not open: %+v", p.Name, p.Spec)
+		}
+	}
+	if NetworkPolicy(off).Name != np.Name || AgentNetworkPolicy(off).Name != ap.Name ||
+		NetworkPolicy(off).Spec.PodSelector.MatchLabels[v1alpha1.LabelComponent] != "game" ||
+		AgentNetworkPolicy(off).Spec.PodSelector.MatchLabels[v1alpha1.LabelComponent] != "agent" {
+		t.Fatal("disabled policies select the wrong pods")
 	}
 }
 

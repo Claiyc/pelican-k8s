@@ -56,7 +56,7 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 		t.Fatalf("policy not updated: %s", policyCIDRs(&np))
 	}
 
-	// Disabling policies removes it, and a missing one is not an error.
+	// Disabling policies opens them: the chart's default-deny still selects the pods.
 	if err := h.c.Get(context.Background(), types.NamespacedName{Name: "default"}, cls); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,11 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.reconcile(1)
-	if h.get(&np, names.NetworkPolicy(uuid)) || h.get(&np, names.AgentNetworkPolicy(uuid)) {
-		t.Fatal("policies must be deleted when the class disables policies")
+	for _, name := range []string{names.NetworkPolicy(uuid), names.AgentNetworkPolicy(uuid)} {
+		if !h.get(&np, name) || len(np.Spec.Ingress) != 1 || len(np.Spec.Ingress[0].From) != 0 || len(np.Spec.Egress) != 1 || len(np.Spec.Egress[0].To) != 0 {
+			t.Fatalf("policy %s not opened: %+v", name, np.Spec)
+		}
 	}
-	h.reconcile(1)
 }
 
 func policyCIDRs(np *networkingv1.NetworkPolicy) string {

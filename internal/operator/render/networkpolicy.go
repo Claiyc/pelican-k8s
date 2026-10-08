@@ -10,11 +10,12 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
 )
 
-// NetworkPolicy renders the game pod's policy (section 12.4), or nil when disabled.
+// NetworkPolicy renders the game pod's policy (section 12.4); an open one
+// when the class disables policies.
 func NetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 	net := in.Class.Spec.Network
-	if net.Enabled != nil && !*net.Enabled {
-		return nil
+	if !policiesEnabled(net) {
+		return openPolicy(in, names.NetworkPolicy(in.UUID()), ComponentGame)
 	}
 	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
 	np := &networkingv1.NetworkPolicy{
@@ -53,11 +54,12 @@ func NetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 	return np
 }
 
-// AgentNetworkPolicy renders the agent pod's policy (section 12.4), or nil when disabled.
+// AgentNetworkPolicy renders the agent pod's policy (section 12.4); an open
+// one when the class disables policies.
 func AgentNetworkPolicy(in *Input) *networkingv1.NetworkPolicy {
 	net := in.Class.Spec.Network
-	if net.Enabled != nil && !*net.Enabled {
-		return nil
+	if !policiesEnabled(net) {
+		return openPolicy(in, names.AgentNetworkPolicy(in.UUID()), ComponentAgent)
 	}
 	tcp := corev1.ProtocolTCP
 	systemPeer := networkingv1.NetworkPolicyPeer{
@@ -152,4 +154,23 @@ func BlockedEgressCIDRs(net v1alpha1.NetworkSpec) []string {
 		return v1alpha1.DefaultBlockedEgressCIDRs
 	}
 	return net.BlockedEgressCIDRs
+}
+
+func policiesEnabled(net v1alpha1.NetworkSpec) bool {
+	return net.Enabled == nil || *net.Enabled
+}
+
+// openPolicy admits all traffic to and from one of the server's pods. The
+// chart's default-deny selects every pod in the servers namespace, so a class
+// that turns its policies off needs this to leave its pods unrestricted.
+func openPolicy(in *Input, name, component string) *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: in.Meta(name, component),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: ownPod(in, component),
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{}},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
+		},
+	}
 }

@@ -603,7 +603,7 @@
       }
     },
     "networkPolicies": {
-      "description": "Chart-level NetworkPolicies: default deny and install-Job egress in the servers namespace, and the gateway's ingress policy. Per-server policies are controlled by defaultClass.spec.network.enabled.",
+      "description": "Chart-level NetworkPolicies: default deny and install-Job egress in the servers namespace, and the gateway's ingress policy. Per-server policies are controlled by defaultClass.spec.network.enabled; with false they admit all traffic for the server's pods.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
