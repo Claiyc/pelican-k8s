@@ -42,11 +42,12 @@ func crashed() (*v1alpha1.GameServer, *corev1.Pod, *corev1.Pod) {
 		Status: v1alpha1.GameServerStatus{
 			Process: v1alpha1.ProcessStatus{State: v1alpha1.ProcessOffline, Since: &ago},
 			Power:   v1alpha1.PowerStatus{ObservedGeneration: 3, LastAction: &v1alpha1.PowerActionRecord{Action: "start", At: metav1.NewTime(now.Add(-10 * time.Minute))}},
-			Agent:   v1alpha1.AgentStatus{PodUID: "agent-1"},
+			Agent:   v1alpha1.AgentStatus{PodUID: "agent-1", ContainerID: "cri://a"},
 			Game:    v1alpha1.GameStatus{PodUID: "game-1"},
 		},
 	}
-	agent := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.AgentPod(uuid), UID: "agent-1"}}
+	agent := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.AgentPod(uuid), UID: "agent-1"},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://a"}}}}
 	game := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.Pod(uuid), UID: "game-1"}}
 	return gs, agent, game
 }
@@ -89,8 +90,8 @@ func TestSettledCrashStopsTheServer(t *testing.T) {
 	}
 	// An agent container restart the operator has driven is the same agent.
 	gs, agent, game = crashed()
-	gs.Status.Agent.Restarts = 1
-	agent.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 1}}
+	gs.Status.Agent.ContainerID = "cri://b"
+	agent.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://b", RestartCount: 1}}
 	if got := check(t, gs, agent, game); got != v1alpha1.PowerStopped {
 		t.Fatalf("desired %s after a driven agent restart, want Stopped", got)
 	}
@@ -148,7 +149,11 @@ func TestNotASettledCrash(t *testing.T) {
 		"fresh game pod":  func(_ *v1alpha1.GameServer, _, game **corev1.Pod) { (*game).UID = "game-2" },
 		"fresh agent pod": func(_ *v1alpha1.GameServer, agent, _ **corev1.Pod) { (*agent).UID = "agent-2" },
 		"restarted agent container": func(_ *v1alpha1.GameServer, agent, _ **corev1.Pod) {
-			(*agent).Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 1}}
+			(*agent).Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://b"}}
+		},
+		"agent container not started": func(gs *v1alpha1.GameServer, agent, _ **corev1.Pod) {
+			gs.Status.Agent.ContainerID = ""
+			(*agent).Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer}}
 		},
 		"game pod draining": func(_ *v1alpha1.GameServer, _, game **corev1.Pod) {
 			(*game).DeletionTimestamp = &deleting

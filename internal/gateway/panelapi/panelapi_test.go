@@ -685,7 +685,7 @@ func TestBackupProxyRecordsPendingBackups(t *testing.T) {
 		t.Fatalf("agent call = %+v", last)
 	}
 	pending := f.gs().Status.Backups.Pending
-	if len(pending) != 1 || pending[0].UUID != "b-1" || pending[0].Agent != "agent-pod-1/0" {
+	if len(pending) != 1 || pending[0].UUID != "b-1" || pending[0].Agent != "agent-pod-1/" {
 		t.Fatalf("pending = %+v", pending)
 	}
 	// The same backup again is not recorded twice.
@@ -713,7 +713,7 @@ func TestBackupProxyDropsRefusedAndEndedBackups(t *testing.T) {
 	f := newFixture(t)
 	f.create()
 	f.addPod()
-	ended := []map[string]any{{"uuid": "old", "startedAt": metav1.Now(), "agent": "agent-pod-0/0"}}
+	ended := []map[string]any{{"uuid": "old", "startedAt": metav1.Now(), "agent": "agent-pod-0/"}}
 	if err := f.st.PatchStatus(context.Background(), uuid, map[string]any{"backups": map[string]any{"pending": ended}}); err != nil {
 		t.Fatal(err)
 	}

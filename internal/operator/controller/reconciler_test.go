@@ -250,7 +250,7 @@ func (h *harness) createAgentPod(ready bool) *corev1.Pod {
 	pod := h.podFrom(names.AgentStatefulSet(uuid), names.AgentPod(uuid), "agent-")
 	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.5"}
 	started := ready
-	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, Started: &started, Ready: ready}}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://agent-0", Started: &started, Ready: ready}}
 	if err := h.c.Status().Update(context.Background(), pod); err != nil {
 		h.t.Fatal(err)
 	}
@@ -1218,7 +1218,8 @@ func TestFreshAgentPodAttachesToRunningProcess(t *testing.T) {
 
 // A node reboot keeps both pods and restarts their containers: the fresh
 // agent container starts the process again, an agent restart next to a running
-// process does not.
+// process does not. The restart count stays 0, as it can after a reboot; the
+// new container ID tells.
 func TestRebootedNodeStartsTheServer(t *testing.T) {
 	gs := newGS()
 	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
@@ -1226,10 +1227,12 @@ func TestRebootedNodeStartsTheServer(t *testing.T) {
 	h.reconcile(2)
 	h.createPod(true)
 	h.reconcile(2)
+	restarts := 0
 	restart := func() {
 		t.Helper()
+		restarts++
 		a := h.agentPod()
-		a.Status.ContainerStatuses[0].RestartCount++
+		a.Status.ContainerStatuses[0].ContainerID = fmt.Sprintf("cri://agent-%d", restarts)
 		if err := h.c.Status().Update(context.Background(), a); err != nil {
 			t.Fatal(err)
 		}
@@ -1246,8 +1249,8 @@ func TestRebootedNodeStartsTheServer(t *testing.T) {
 	if got := strings.Join(h.agent.Calls(), ","); got != "power:start,power:start" {
 		t.Fatalf("calls after the reboot %s", got)
 	}
-	if st := h.gs().Status.Agent; st.Restarts != 2 {
-		t.Fatalf("agent restarts not recorded: %+v", st)
+	if st := h.gs().Status.Agent; st.ContainerID != "cri://agent-2" {
+		t.Fatalf("agent container not recorded: %+v", st)
 	}
 	h.reconcile(2)
 	if got := len(h.agent.Calls()); got != 2 {

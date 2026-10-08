@@ -681,7 +681,7 @@ status:
     lastAction: {action: start, at: "…", podUID: "…"}   # podUID: the game pod
   agent:
     podUID: "…"             # agent pod the operator last drove; a new UID means "fresh pod"
-    restarts: 0             # its agent container's restart count; a new count is a fresh agent too
+    containerID: "…"        # its agent container; a new ID is a fresh agent too (the restart count can reset on a reboot)
     node: worker-2
     templateHash: "…"       # pod template hash of the agent StatefulSet
     sftpHostKey: "SHA256:…" # pinned by the gateway on the first SFTP connection (§5.6)
@@ -707,7 +707,7 @@ status:
     reportedGeneration: 1   # result forwarded to the Panel
     observedGeneration: 1
   backups:
-    pending: [ {uuid: "…", startedAt: "…", agent: "<agent pod UID>/<agent restarts>"} ]   # gateway, §8.7
+    pending: [ {uuid: "…", startedAt: "…", agent: "<agent pod UID>/<agent container ID>"} ]   # gateway, §8.7
   endpoints:
     - {ip: "203.0.113.10", port: 25565, protocols: [TCP, UDP]}
   podImage: ghcr.io/pelican-eggs/yolks:java_21@sha256:…   # image of the current or last game pod
@@ -1007,7 +1007,7 @@ older than the one it wrote.
 | `spec.power.generation` ≠ `status.power.observedGeneration`, `desired: Running` | Refused with an event while suspended. Without a game pod: scale the game StatefulSet to 1, place the pods (§7.7), and once `GET /internal/v1/shim` names the new pod, `POST /power {start}`. With a game pod: `POST /power {restart}` if the process is not `offline`, else `{start}`; while `RecreatePending`, `stop` the process first, replace the game pod and start in the new one. The generation is observed when the power call is made |
 | `spec.power.generation` ≠ `status.power.observedGeneration`, `desired: Stopped` | `POST /power {stop}`, or `{kill}` if `kill: true`, when the process is not `offline`; record `observedGeneration` |
 | Process `offline` and `desired: Stopped` | Scale the game StatefulSet to 0. This covers Panel stops, the stop command typed into the console, suspension and a start that failed |
-| Fresh pod (`status.agent.podUID` or `status.game.podUID` ≠ the current pod, or `status.agent.restarts` ≠ the agent container's restart count; agent ready, shim attached) | Record the pods. If `desired: Running` and the server is neither suspended nor `RecreatePending`, `POST /power {start}` (Wings' "was running before reboot"); the agent attaches when the shim already runs the process. An install in flight in the previous agent is requested again |
+| Fresh pod (`status.agent.podUID` or `status.game.podUID` ≠ the current pod, or `status.agent.containerID` ≠ the agent container's ID; agent ready, shim attached) | Record the pods. If `desired: Running` and the server is neither suspended nor `RecreatePending`, `POST /power {start}` (Wings' "was running before reboot"); the agent attaches when the shim already runs the process. An install in flight in the previous agent is requested again |
 | `spec.panel.panelRevision` or the env Secret's resourceVersion changed | `POST /sync`: the agent re-fetches its configuration from the gateway (§5.7) and runs Wings' `Server.Sync` (`SyncWithConfiguration` and `SyncWithEnvironment`), which also stops a suspended server |
 | `spec.install.generation` > `status.install.observedGeneration` | `POST /install` (or `/reinstall`); once `status.install.preparedGeneration` matches, create the Job (§8.2). Without "prepared" within `install.prepareTimeoutSeconds`, the install fails |
 
@@ -1214,7 +1214,7 @@ sequenceDiagram
   60 s ago; the Panel then shows the server as offline. Every 15 s the gateway looks for servers
   with `desired: Running` whose process has been `offline` for 60 s (`status.process.since`), whose
   last power action is observed, and whose current agent and game pods are the ones the operator
-  last drove (for the agent, also its container's restart count) and are not terminating. It sets `desired: Stopped` for them, and the operator removes
+  last drove (for the agent, also its container's ID) and are not terminating. It sets `desired: Stopped` for them, and the operator removes
   the game pod. The pod conditions keep a start in progress, a drain or a lost pod from being taken
   for a settled crash.
 
@@ -1271,7 +1271,7 @@ in-flight work.
 - The gateway adds the backup to `status.backups.pending` on backup and restore requests, which lets
   the agent's remote-API calls for it through (§5.7), and removes it when the agent posts the result
   or refuses the request (any answer other than 2xx, or no agent within the wait). Each entry names
-  the agent instance that runs it, the agent pod's UID and its container's restart count: a backup
+  the agent instance that runs it, the agent pod's UID and its container's ID: a backup
   ends with its agent, so entries of an earlier instance are no longer in flight and are dropped
   with the next write. The writes are conditional on the GameServer's `resourceVersion`, so two
   gateway replicas never lose each other's entries. A pending entry of the current agent counts as
@@ -1303,10 +1303,10 @@ in-flight work.
   back on the same node, fetches its configuration from the gateway and re-attaches (§7.7). Tokens
   issued before are rejected by Wings' boot cutoff in the new agent; open consoles are carried across
   by the gateway (§5.9).
-- **Agent container restart only:** as above without a new pod. The new restart count makes it a fresh
+- **Agent container restart only:** as above without a new pod. The new container ID makes it a fresh
   agent for the fresh-pod rule, which finds the process running and issues no start.
 - **Node reboot:** the pods keep their UIDs and their containers restart. The agent boots and does not
-  start anything on its own; its new restart count triggers the fresh-pod rule, which issues `start` if
+  start anything on its own; its new container ID triggers the fresh-pod rule, which issues `start` if
   `desired: Running` and re-requests an install that was in flight. The crash check (§8.3) skips an
   agent container restart the operator has not recorded yet.
 - **Gateway restart or rollout:** live websocket and SSH connections on that replica drop and clients

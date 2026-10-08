@@ -28,8 +28,8 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 	gs := s.gs
 	recreatePending := condTrue(gs, v1alpha1.ConditionRecreatePending)
 	agentUID := string(s.agentPod.UID)
-	agentRestarts := render.ContainerRestarts(s.agentPod, render.AgentContainer)
-	freshAgent := gs.Status.Agent.PodUID != agentUID || gs.Status.Agent.Restarts != agentRestarts
+	agentContainer := render.ContainerID(s.agentPod, render.AgentContainer)
+	freshAgent := gs.Status.Agent.PodUID != agentUID || gs.Status.Agent.ContainerID != agentContainer
 	gameUID := ""
 	if s.pod != nil {
 		gameUID = string(s.pod.UID)
@@ -47,7 +47,7 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 			return r.reconcileInstall(s)
 		}
 		if freshAgent {
-			gs.Status.Agent.PodUID, gs.Status.Agent.Restarts = agentUID, agentRestarts
+			gs.Status.Agent.PodUID, gs.Status.Agent.ContainerID = agentUID, agentContainer
 			gs.Status.Agent.SyncedRevision = gs.Spec.Panel.PanelRevision
 			gs.Status.Agent.SyncedEnvVersion = r.envSecretVersion(s)
 			// An install that was in flight in the previous agent pod lost its
