@@ -1,7 +1,7 @@
 # Releases when the chart version on master has no tag yet, which is what
 # merging the release PR (release-pr.yaml) does; pushing a vX.Y.Z tag by hand
 # still works. Either way it tags the commit, pushes the images and charts and
-# publishes the GitHub release. A pre-release version (X.Y.Z-rc.N, from the
+# publishes the GitHub release. A pre-release version (X.Y.Z-betaN, from the
 # release PR's "prerelease" label) is published as a GitHub pre-release, is
 # not marked latest, and gets no X.Y image tag.
 name: Release

@@ -146,15 +146,14 @@ Mark the release PR ready and merge it. Nothing else is manual.
   `### Added`, `### Changed` or `### Deprecated` make a minor release,
   `### Removed` or the word `BREAKING` a major one.
 - **A pre-release.** Label the release PR `prerelease` and it becomes a
-  pre-release of that version, `X.Y.Z-rc.1`. Merging it publishes a GitHub
-  pre-release that is not marked latest, pushes the images tagged `X.Y.Z-rc.1`
-  only (`X.Y` stays on the last release), and pushes the chart at that
-  version, which Helm installs only when asked for with `--version`. While the
-  label stays on the release PR, the next release is `X.Y.Z-rc.2`; remove it
-  and the next release is `X.Y.Z`, with the notes for what was merged since
-  the last pre-release. A `minor` or `major` label that asks for more than
-  `X.Y.Z` already is moves the version on as usual. Only the release PR's own
-  label counts.
+  pre-release of that version, `X.Y.Z-beta1`. Merging it publishes a GitHub
+  pre-release that is not marked latest, pushes the images tagged
+  `X.Y.Z-beta1` only (`X.Y` stays on the last release), and pushes the chart
+  at that version, which Helm installs only when asked for with `--version`.
+  The release after a pre-release is that version with no suffix, `X.Y.Z`,
+  with no further bump from labels or notes; if the release PR is labelled
+  `prerelease` again, it is the next pre-release, `X.Y.Z-beta2`. Only the
+  release PR's own label counts.
 - **Merging it.** The `Release` workflow sees a chart version on master with
   no tag. It checks that the chart's `version`, `appVersion` and the
   `CHANGELOG.md` section agree, builds and pushes the images

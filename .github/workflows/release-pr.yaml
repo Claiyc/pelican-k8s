@@ -9,7 +9,7 @@
 #
 # A "minor" or "major" label on a merged PR or on the release PR itself raises
 # the version; labelling either one later refreshes the release PR too. A
-# "prerelease" label on the release PR makes it a pre-release (X.Y.Z-rc.N).
+# "prerelease" label on the release PR makes it a pre-release (X.Y.Z-betaN).
 name: Release PR
 
 on:
@@ -76,7 +76,7 @@ jobs:
           gh label create release --color 0e8a16 --description "Release PR, left out of the release notes" --force
           gh label create minor --color fbca04 --description "Merging this makes the next release a minor one" --force
           gh label create major --color d93f0b --description "Merging this makes the next release a major one" --force
-          gh label create prerelease --color c5def5 --description "On the release PR: release it as a pre-release (X.Y.Z-rc.N)" --force
+          gh label create prerelease --color c5def5 --description "On the release PR: release it as a pre-release (X.Y.Z-betaN)" --force
       - name: Prepare the release
         id: prep
         run: |
