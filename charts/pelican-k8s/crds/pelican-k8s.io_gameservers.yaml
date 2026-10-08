@@ -198,6 +198,12 @@ spec:
                     description: RelayedExit identifies the last game container termination
                       forwarded to the agent.
                     type: string
+                  restarts:
+                    description: |-
+                      Restarts is the agent container's restart count in that pod; a new count
+                      (a node reboot, a crashed agent) is a fresh agent as well.
+                    format: int32
+                    type: integer
                   sftpActiveAt:
                     description: SftpActiveAt is the last time a relayed SFTP session
                       moved data (gateway).

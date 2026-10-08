@@ -18,6 +18,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 )
 
 const (
@@ -75,6 +76,13 @@ func TestSettledCrashStopsTheServer(t *testing.T) {
 	if got := check(t, gs, agent, game); got != v1alpha1.PowerStopped {
 		t.Fatalf("desired %s, want Stopped", got)
 	}
+	// An agent container restart the operator has driven is the same agent.
+	gs, agent, game = crashed()
+	gs.Status.Agent.Restarts = 1
+	agent.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 1}}
+	if got := check(t, gs, agent, game); got != v1alpha1.PowerStopped {
+		t.Fatalf("desired %s after a driven agent restart, want Stopped", got)
+	}
 }
 
 func TestNotASettledCrash(t *testing.T) {
@@ -96,6 +104,9 @@ func TestNotASettledCrash(t *testing.T) {
 		"no agent pod":    func(_ *v1alpha1.GameServer, agent, _ **corev1.Pod) { *agent = nil },
 		"fresh game pod":  func(_ *v1alpha1.GameServer, _, game **corev1.Pod) { (*game).UID = "game-2" },
 		"fresh agent pod": func(_ *v1alpha1.GameServer, agent, _ **corev1.Pod) { (*agent).UID = "agent-2" },
+		"restarted agent container": func(_ *v1alpha1.GameServer, agent, _ **corev1.Pod) {
+			(*agent).Status.ContainerStatuses = []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 1}}
+		},
 		"game pod draining": func(_ *v1alpha1.GameServer, _, game **corev1.Pod) {
 			(*game).DeletionTimestamp = &deleting
 			(*game).Finalizers = []string{"x"}

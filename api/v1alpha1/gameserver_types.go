@@ -164,6 +164,9 @@ type PowerStatus struct {
 type AgentStatus struct {
 	// PodUID is the agent pod the operator last drove; a new UID means "fresh pod".
 	PodUID string `json:"podUID,omitempty"`
+	// Restarts is the agent container's restart count in that pod; a new count
+	// (a node reboot, a crashed agent) is a fresh agent as well.
+	Restarts int32 `json:"restarts,omitempty"`
 	// Node is the node the agent pod runs on.
 	Node string `json:"node,omitempty"`
 	// TemplateHash is the pod template hash of the agent StatefulSet.

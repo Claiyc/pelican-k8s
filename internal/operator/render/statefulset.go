@@ -260,13 +260,22 @@ func AgentInstance(pod *corev1.Pod) string {
 	if pod == nil || pod.UID == "" {
 		return ""
 	}
-	restarts := int32(0)
+	return fmt.Sprintf("%s/%d", pod.UID, ContainerRestarts(pod, AgentContainer))
+}
+
+// ContainerRestarts returns the restart count of the named container in pod,
+// 0 without a pod or a status for it. A node reboot restarts the containers
+// of the pods it keeps, so a new count is a new run of that container.
+func ContainerRestarts(pod *corev1.Pod, container string) int32 {
+	if pod == nil {
+		return 0
+	}
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == AgentContainer {
-			restarts = cs.RestartCount
+		if cs.Name == container {
+			return cs.RestartCount
 		}
 	}
-	return fmt.Sprintf("%s/%d", pod.UID, restarts)
+	return 0
 }
 
 // GamePodTemplate renders the game pod template. In.GameAffinity sets its pod

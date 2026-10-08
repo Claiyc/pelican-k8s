@@ -28,28 +28,32 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 	gs := s.gs
 	recreatePending := condTrue(gs, v1alpha1.ConditionRecreatePending)
 	agentUID := string(s.agentPod.UID)
+	agentRestarts := render.ContainerRestarts(s.agentPod, render.AgentContainer)
+	freshAgent := gs.Status.Agent.PodUID != agentUID || gs.Status.Agent.Restarts != agentRestarts
 	gameUID := ""
 	if s.pod != nil {
 		gameUID = string(s.pod.UID)
 	}
 
-	// Fresh pod: record it and restore the desired state (Wings' "was running
-	// before reboot"). With a game pod, wait until its shim is attached, so
-	// the start reaches that pod, and until the agent is on the game pod's
-	// node, so the start does not precede a move of the agent (section 7.7).
-	if gs.Status.Agent.PodUID != agentUID || gs.Status.Game.PodUID != gameUID {
+	// Fresh pod, or a fresh agent container in the same pod (a node reboot
+	// restarts the containers of the pods it keeps): record it and restore the
+	// desired state (Wings' "was running before reboot"). With a game pod,
+	// wait until its shim is attached, so the start reaches that pod, and
+	// until the agent is on the game pod's node, so the start does not precede
+	// a move of the agent (section 7.7).
+	if freshAgent || gs.Status.Game.PodUID != gameUID {
 		if s.pod != nil && (s.shim == nil || !s.shim.Attached || s.shim.PodUID != gameUID || !s.shim.Running && !colocated(s)) {
 			s.requeue = requeueFast
 			return r.reconcileInstall(s)
 		}
-		if gs.Status.Agent.PodUID != agentUID {
-			gs.Status.Agent.PodUID = agentUID
+		if freshAgent {
+			gs.Status.Agent.PodUID, gs.Status.Agent.Restarts = agentUID, agentRestarts
 			gs.Status.Agent.SyncedRevision = gs.Spec.Panel.PanelRevision
 			gs.Status.Agent.SyncedEnvVersion = r.envSecretVersion(s)
 			// An install that was in flight in the previous agent pod lost its
 			// agent-side lock and tail; ask the new agent again and start a clean Job.
 			if st := &gs.Status.Install; gs.Spec.Install.Generation > st.ObservedGeneration && st.RequestedGeneration != 0 {
-				r.event(s, corev1.EventTypeWarning, "InstallRestarted", "agent pod was recreated during install generation %d; requesting it again", gs.Spec.Install.Generation)
+				r.event(s, corev1.EventTypeWarning, "InstallRestarted", "agent restarted during install generation %d; requesting it again", gs.Spec.Install.Generation)
 				if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
 					return err
 				}

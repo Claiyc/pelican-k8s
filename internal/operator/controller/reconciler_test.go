@@ -1216,6 +1216,45 @@ func TestFreshAgentPodAttachesToRunningProcess(t *testing.T) {
 	}
 }
 
+// A node reboot keeps both pods and restarts their containers: the fresh
+// agent container starts the process again, an agent restart next to a running
+// process does not.
+func TestRebootedNodeStartsTheServer(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	restart := func() {
+		t.Helper()
+		a := h.agentPod()
+		a.Status.ContainerStatuses[0].RestartCount++
+		if err := h.c.Status().Update(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.agent.shimRunning = true
+	restart()
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start" {
+		t.Fatalf("an agent restart must not start a running process again: %s", got)
+	}
+	h.agent.shimRunning = false
+	restart()
+	h.reconcile(2)
+	if got := strings.Join(h.agent.Calls(), ","); got != "power:start,power:start" {
+		t.Fatalf("calls after the reboot %s", got)
+	}
+	if st := h.gs().Status.Agent; st.Restarts != 2 {
+		t.Fatalf("agent restarts not recorded: %+v", st)
+	}
+	h.reconcile(2)
+	if got := len(h.agent.Calls()); got != 2 {
+		t.Fatalf("duplicate start: %v", h.agent.Calls())
+	}
+}
+
 // A stop the Panel requests while the agent pod is replaced is applied by the
 // new agent pod once it attaches to the running process.
 func TestFreshAgentPodAppliesPendingStop(t *testing.T) {
