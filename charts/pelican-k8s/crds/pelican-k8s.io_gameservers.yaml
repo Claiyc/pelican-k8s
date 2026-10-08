@@ -129,8 +129,8 @@ spec:
                     description: |-
                       Settings is the raw `settings` object from GET /api/remote/servers/{uuid}
                       minus `environment`. The agent consumes it unchanged as its Wings server
-                      configuration; the operator reads only suspended, container.image, build.*
-                      and allocations.*.
+                      configuration; the operator reads only uuid, meta.name, egg.id, suspended,
+                      container.image, build.* and allocations.*.
                     x-kubernetes-preserve-unknown-fields: true
                   uuid:
                     description: UUID is the Panel server UUID.
@@ -335,8 +335,9 @@ spec:
                     description: Node is the node the game pod was scheduled to.
                     type: string
                   podUID:
-                    description: PodUID is the game pod the operator last issued start
-                      in; a new UID means "fresh pod".
+                    description: |-
+                      PodUID is the current game pod, recorded once its shim is attached (empty
+                      without a game pod); a new UID means "fresh pod".
                     type: string
                 type: object
               install:
@@ -379,8 +380,10 @@ spec:
                   output.
                 type: string
               podImage:
-                description: PodImage is the digest-pinned image of the current or
-                  last game pod.
+                description: |-
+                  PodImage is the image in the game StatefulSet's template, digest-pinned
+                  when the lookup succeeds: the current game pod's, or without one the image
+                  the next game pod gets.
                 type: string
               power:
                 description: PowerStatus tracks the operator's power actions.

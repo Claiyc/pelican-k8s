@@ -63,7 +63,7 @@ gateway:
     # Cap on the addresses offered; a large pool would flood the dropdown.
     maxAddresses: 256
   # How agents reach the gateway's remote API (in-cluster). With tls.enabled
-  # it must be an https URL whose host is the gateway Service.
+  # it must be an https URL; its host is added to the gateway's certificate.
   remoteURL: ""      # default http(s)://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
   # How long an open console is held while the server's agent pod is replaced
@@ -208,11 +208,12 @@ defaultClass:
       inClusterEgress:
         gameServers: true
         additional: []
-      # IPv4 ranges excluded from the internet egress of game pods and install
-      # Jobs: the private and shared ranges, which cover the usual pod,
-      # service, node and LAN ranges. Add any other range game pods must not
-      # reach. Link-local is always blocked. DNS, the gateway remote API and
-      # inClusterEgress are separate allow rules and keep working.
+      # IPv4 ranges excluded from the internet egress of game pods, agent
+      # pods and install Jobs: the private and shared ranges, which cover the
+      # usual pod, service, node and LAN ranges. Add any other range these
+      # pods must not reach. Link-local is always blocked. DNS, the gateway
+      # remote API and inClusterEgress are separate allow rules and keep
+      # working.
       blockedEgressCIDRs:
         - 10.0.0.0/8
         - 172.16.0.0/12
