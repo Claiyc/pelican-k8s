@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -66,7 +67,7 @@ func ExposureService(in *Input) *corev1.Service {
 		for _, proto := range []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP} {
 			sp := corev1.ServicePort{Name: portName(p, proto), Port: p, TargetPort: intstr.FromInt32(p), Protocol: proto}
 			if shared != "" {
-				sp.TargetPort = intstr.FromString(portName(p, proto))
+				sp.TargetPort = intstr.FromString(containerPortName(in, p, proto))
 			}
 			if ex.Mode == v1alpha1.ExposureNodePort {
 				sp.NodePort = p
@@ -105,6 +106,27 @@ func ipLabelValue(raw string) string {
 	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:16])
+}
+
+// containerPortName names a game container port after the port and the
+// server, so a shared Service's named target port never resolves on another
+// server's pod that still declares a port it has given up (at most 15
+// characters: t25565-1a2b3c4d).
+func containerPortName(in *Input, p int32, proto corev1.Protocol) string {
+	id := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, strings.ToLower(in.UUID()))
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	prefix := "t"
+	if proto == corev1.ProtocolUDP {
+		prefix = "u"
+	}
+	return fmt.Sprintf("%s%d-%s", prefix, p, id)
 }
 
 func portName(p int32, proto corev1.Protocol) string {

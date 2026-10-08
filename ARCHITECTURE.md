@@ -1412,8 +1412,10 @@ when their sharing keys match and, under `externalTrafficPolicy: Local`, their s
 delivers only to pods on that node. So for such a server the operator:
 - labels the game pod `pelican-k8s.io/shared-ip=<allocation IP>` (IPv6 as 32 hex digits)
 - gives the exposure Service the selector `{pelican-k8s.io/shared-ip, pelican-k8s.io/component: game}`,
-  the same for every server on the address, and named target ports (`tcp-<port>`, `udp-<port>`), which
-  the game container declares; each port therefore reaches only the pod that owns it
+  the same for every server on the address, and named target ports (`t<port>-<uuid prefix>`,
+  `u<port>-<uuid prefix>`, the first 8 characters of the server UUID), which the game container declares;
+  each port therefore reaches only its own server's pod, even while another server's pod that gave the
+  port up still runs
 - adds a required pod affinity (`kubernetes.io/hostname`) toward the game pods with the same label. The
   first one runs wherever the scheduler puts it and the others follow; a game pod that does not fit on
   that node stays `Pending` (`GamePodReady=False`, `Unschedulable`). The agent pods follow their game

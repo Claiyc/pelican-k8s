@@ -470,7 +470,7 @@ func gamePorts(in *Input) []corev1.ContainerPort {
 	hostPort := in.Class.Spec.Exposure.Mode == v1alpha1.ExposureHostPort
 	for _, p := range in.Settings.Ports() {
 		for _, proto := range []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP} {
-			cp := corev1.ContainerPort{Name: portName(p, proto), ContainerPort: p, Protocol: proto}
+			cp := corev1.ContainerPort{Name: containerPortName(in, p, proto), ContainerPort: p, Protocol: proto}
 			if hostPort {
 				cp.HostPort = p
 			}

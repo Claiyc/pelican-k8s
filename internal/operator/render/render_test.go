@@ -905,3 +905,25 @@ func TestSharedIPKeepsAgentAffinity(t *testing.T) {
 		t.Fatalf("terms %+v", terms)
 	}
 }
+
+// A port moved from server A to server B while A's pod still runs: A's pod
+// keeps declaring it until it is recreated, yet B's Service must not reach it.
+func TestSharedIPPortMovedBetweenServers(t *testing.T) {
+	a := sharedInput(t, uuid, 25565, func(i *Input) {
+		i.Settings.Allocations.Mappings["203.0.113.10"] = []int32{25565, 25566}
+	})
+	b := sharedInput(t, "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c", 25566, nil)
+	stale := GamePodTemplate(a)
+	for _, sp := range ExposureService(b).Spec.Ports {
+		if declaresPort(stale, sp.TargetPort.StrVal) {
+			t.Fatalf("port %s of B resolves on A's pod", sp.Name)
+		}
+	}
+	for _, c := range GamePodTemplate(a).Spec.Containers {
+		for _, cp := range c.Ports {
+			if errs := validation.IsValidPortName(cp.Name); len(errs) > 0 {
+				t.Fatalf("%s: %v", cp.Name, errs)
+			}
+		}
+	}
+}
