@@ -69,7 +69,7 @@ port, so `SERVER_PORT` always matches what players connect to.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | true | Create the per-server NetworkPolicies (one for the game pod, one for the agent pod) |
+| `enabled` | true | Restrict the server's pods with per-server NetworkPolicies (one for the game pod, one for the agent pod). `false` makes both policies admit all traffic, which also lifts the chart's `default-deny` for these pods |
 | `blockedEgressCIDRs` | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` | IPv4 ranges excluded from the internet egress of game and agent pods; the defaults cover the usual pod, service, node and LAN ranges. Link-local is always blocked; `[]` blocks only link-local. DNS, the gateway remote API (agent pods), the shim port and `inClusterEgress` are separate allow rules and reach these ranges regardless. The chart's `install-jobs` policy uses the default class's list |
 | `nodeCIDRs` | [] | Node addresses admitted on the agent port for kubelet probes on CNIs without implicit host access |
 | `inClusterEgress.gameServers` | true | Game pods may reach other game pods (proxies such as Velocity) |

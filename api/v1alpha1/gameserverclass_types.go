@@ -176,7 +176,9 @@ type NetworkSpec struct {
 	BlockedEgressCIDRs []string `json:"blockedEgressCIDRs,omitempty"`
 	// NodeCIDRs are admitted on the agent HTTP port for kubelet probes and hooks.
 	NodeCIDRs []string `json:"nodeCIDRs,omitempty"`
-	// Enabled controls whether per-server NetworkPolicies are created.
+	// Enabled restricts the server's pods with per-server NetworkPolicies.
+	// false makes both policies admit all traffic, which also lifts the
+	// chart's default-deny for these pods.
 	// +kubebuilder:default=true
 	Enabled *bool `json:"enabled,omitempty"`
 }
