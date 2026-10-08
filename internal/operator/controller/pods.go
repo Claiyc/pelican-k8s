@@ -146,13 +146,8 @@ func (r *GameServerReconciler) relocate(s *scope) error {
 		}
 		s.pod = nil
 	}
-	if game := s.pod; game != nil && game.DeletionTimestamp.IsZero() && game.Spec.NodeName == "" &&
-		render.SharedIP(s.in) != "" && pinnedNode(game) != s.in.SharedIPNode {
-		r.event(s, corev1.EventTypeNormal, "Replace", "replacing pending game pod %s: the other servers on its address moved", game.Name)
-		if err := r.deletePod(s, game); err != nil {
-			return err
-		}
-		s.pod = nil
+	if err := r.replaceStaleSharedIPPin(s); err != nil {
+		return err
 	}
 
 	// The game pod's node, unless the game pod went in this reconcile.

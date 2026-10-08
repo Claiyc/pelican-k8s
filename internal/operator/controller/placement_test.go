@@ -535,7 +535,7 @@ func TestSharedIPMovesToTheOthersNode(t *testing.T) {
 	}
 	h.bind(h.createGamePod(), "node-b")
 	h.reconcile(1)
-	if got := h.condReason(v1alpha1.ConditionRecreatePending); got == reasonSharedIPNodeMismatch {
+	if h.condReason(v1alpha1.ConditionRecreatePending) == reasonSharedIPNodeMismatch {
 		t.Fatal("the pod on the others' node stays")
 	}
 	if h.agentPod() != nil {

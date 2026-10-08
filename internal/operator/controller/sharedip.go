@@ -34,27 +34,12 @@ func (r *GameServerReconciler) placeSharedIP(s *scope) error {
 		client.MatchingLabels{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: render.ComponentGame}); err != nil {
 		return err
 	}
-	// Pods on a NotReady node do not count: the address moves to a node with
-	// ready endpoints, and the pods there must not follow the lost ones.
-	ready := map[string]bool{}
-	var all, others []corev1.Pod
-	for _, p := range pods.Items {
-		n := p.Spec.NodeName
-		if n == "" {
-			continue
-		}
-		if _, ok := ready[n]; !ok {
-			node := &corev1.Node{}
-			err := r.Get(s.ctx, types.NamespacedName{Name: n}, node)
-			if err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-			ready[n] = err == nil && nodeReady(node)
-		}
-		if !ready[n] {
-			continue
-		}
-		all = append(all, p)
+	all, ready, err := r.onReadyNodes(s, pods.Items)
+	if err != nil {
+		return err
+	}
+	var others []corev1.Pod
+	for _, p := range all {
 		if p.Labels[v1alpha1.LabelServerUUID] != s.in.UUID() {
 			others = append(others, p)
 		}
@@ -66,6 +51,33 @@ func (r *GameServerReconciler) placeSharedIP(s *scope) error {
 		}
 	}
 	return nil
+}
+
+// onReadyNodes keeps the pods on Ready nodes and reports the readiness of
+// each node it looked up. Pods on a NotReady node do not count: the address
+// moves to a node with ready endpoints, and the pods there must not follow
+// the lost ones.
+func (r *GameServerReconciler) onReadyNodes(s *scope, pods []corev1.Pod) ([]corev1.Pod, map[string]bool, error) {
+	ready := map[string]bool{}
+	var out []corev1.Pod
+	for _, p := range pods {
+		n := p.Spec.NodeName
+		if n == "" {
+			continue
+		}
+		if _, ok := ready[n]; !ok {
+			node := &corev1.Node{}
+			err := r.Get(s.ctx, types.NamespacedName{Name: n}, node)
+			if err != nil && !apierrors.IsNotFound(err) {
+				return nil, nil, err
+			}
+			ready[n] = err == nil && nodeReady(node)
+		}
+		if ready[n] {
+			out = append(out, p)
+		}
+	}
+	return out, ready, nil
 }
 
 // gatherNode picks the node that runs most of the given pods, a tie going to
@@ -121,5 +133,21 @@ func (r *GameServerReconciler) stopToMove(s *scope, node string) error {
 	if err := r.power(s, "stop"); err != nil {
 		return fmt.Errorf("stop to move: %w", err)
 	}
+	return nil
+}
+
+// replaceStaleSharedIPPin replaces a pending game pod pinned to a node the
+// other servers on its address have left, so the new one follows them.
+func (r *GameServerReconciler) replaceStaleSharedIPPin(s *scope) error {
+	game := s.pod
+	if game == nil || !game.DeletionTimestamp.IsZero() || game.Spec.NodeName != "" ||
+		render.SharedIP(s.in) == "" || pinnedNode(game) == s.in.SharedIPNode {
+		return nil
+	}
+	r.event(s, corev1.EventTypeNormal, "Replace", "replacing pending game pod %s: the other servers on its address moved", game.Name)
+	if err := r.deletePod(s, game); err != nil {
+		return err
+	}
+	s.pod = nil
 	return nil
 }
