@@ -1069,7 +1069,7 @@
               }
             },
             "blockedEgressCIDRs": {
-              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
+              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. Link-local is blocked as well; an empty list blocks only link-local. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
               "type": "array",
               "items": {"$ref": "#/definitions/ipv4CIDR"},
               "default": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]

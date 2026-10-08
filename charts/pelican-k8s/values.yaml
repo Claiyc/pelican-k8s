@@ -211,7 +211,7 @@ defaultClass:
       # IPv4 ranges excluded from the internet egress of game pods, agent
       # pods and install Jobs: the private and shared ranges, which cover the
       # usual pod, service, node and LAN ranges. Add any other range these
-      # pods must not reach. Link-local is always blocked. DNS, the gateway
+      # pods must not reach. Link-local is blocked as well. DNS, the gateway
       # remote API and inClusterEgress are separate allow rules and keep
       # working.
       blockedEgressCIDRs:

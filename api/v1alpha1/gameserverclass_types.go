@@ -160,7 +160,9 @@ type InClusterEgressSpec struct {
 // matches the field's CRD default.
 var DefaultBlockedEgressCIDRs = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
 
-// LinkLocalCIDR is excluded from game pod, agent pod and install Job egress in every class.
+// LinkLocalCIDR is excluded from the egress of game pods and agent pods while
+// NetworkSpec.Enabled is true, and from install Job egress while the chart's
+// networkPolicies.enabled is true.
 const LinkLocalCIDR = "169.254.0.0/16"
 
 // NetworkSpec configures NetworkPolicies.
@@ -170,7 +172,7 @@ type NetworkSpec struct {
 	// of game pods and agent pods. Unset means the private and shared ranges
 	// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the
 	// usual pod, service, node and LAN ranges; an explicit empty list blocks only
-	// link-local, which is always blocked. The DNS, remote API and
+	// link-local. The DNS, remote API and
 	// inClusterEgress rules are separate allow rules and still reach
 	// destinations in these ranges; allow further private destinations with
 	// inClusterEgress.additional.
