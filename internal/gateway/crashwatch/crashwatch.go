@@ -71,8 +71,11 @@ func (w *Watcher) Check(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		// An agent container that has not started, or one the operator has not
+		// recorded yet (a node reboot), is not the agent that saw the crash.
+		agentID := render.ContainerID(agent, render.AgentContainer)
 		if !driven(agent, gs.Status.Agent.PodUID) || !driven(game, gs.Status.Game.PodUID) ||
-			render.ContainerRestarts(agent, render.AgentContainer) != gs.Status.Agent.Restarts {
+			agentID == "" || agentID != gs.Status.Agent.ContainerID {
 			continue
 		}
 		if err := w.Store.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}}); err != nil {

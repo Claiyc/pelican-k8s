@@ -254,28 +254,29 @@ func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
 }
 
 // AgentInstance names one run of the agent: the agent pod's UID and the
-// restart count of its agent container. Work the agent runs in the background
+// ID of its agent container. Work the agent runs in the background
 // (backups, restores) ends with the instance. Empty without a pod.
 func AgentInstance(pod *corev1.Pod) string {
 	if pod == nil || pod.UID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%d", pod.UID, ContainerRestarts(pod, AgentContainer))
+	return string(pod.UID) + "/" + ContainerID(pod, AgentContainer)
 }
 
-// ContainerRestarts returns the restart count of the named container in pod,
-// 0 without a pod or a status for it. A node reboot restarts the containers
-// of the pods it keeps, so a new count is a new run of that container.
-func ContainerRestarts(pod *corev1.Pod, container string) int32 {
+// ContainerID returns the runtime ID of the named container in pod, "" without
+// a pod, a status for it or a started container. A node reboot restarts the
+// containers of the pods it keeps, so a new ID is a new run of that container.
+// The restart count cannot tell: it can start again at 0 after a node reboot.
+func ContainerID(pod *corev1.Pod, container string) string {
 	if pod == nil {
-		return 0
+		return ""
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == container {
-			return cs.RestartCount
+			return cs.ContainerID
 		}
 	}
-	return 0
+	return ""
 }
 
 // GamePodTemplate renders the game pod template. In.GameAffinity sets its pod

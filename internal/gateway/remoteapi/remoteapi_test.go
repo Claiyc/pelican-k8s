@@ -193,7 +193,7 @@ func (f *fixture) setPending(uuids ...string) {
 	f.t.Helper()
 	var pending []map[string]any
 	for _, u := range uuids {
-		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now(), "agent": agentPodUID + "/0"})
+		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now(), "agent": agentPodUID + "/"})
 	}
 	if err := f.st.PatchStatus(context.Background(), uuid, map[string]any{"backups": map[string]any{"pending": pending}}); err != nil {
 		f.t.Fatal(err)

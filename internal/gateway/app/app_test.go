@@ -389,7 +389,7 @@ func TestResetServersState(t *testing.T) {
 		},
 		"install running": func(gs *v1alpha1.GameServer) { gs.Status.Install.Result = v1alpha1.InstallRunning },
 		"restore in flight": func(gs *v1alpha1.GameServer) {
-			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/0"}}
+			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/"}}
 		},
 	}
 	// The agent pod whose instance runs the restore.
@@ -425,7 +425,7 @@ func TestResetServersState(t *testing.T) {
 		ps := httptest.NewServer(fp.Handler())
 		defer ps.Close()
 		gs := gameServer(uuid)
-		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/0"}}
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/"}}
 		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
 		g.Store.Client = interceptor.NewClient(g.Store.Client.(client.WithWatch), interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -452,7 +452,7 @@ func TestResetServersState(t *testing.T) {
 		ps := httptest.NewServer(fp.Handler())
 		defer ps.Close()
 		gs := gameServer(uuid)
-		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-0/0"}}
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-0/"}}
 		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

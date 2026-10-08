@@ -253,9 +253,9 @@ func TestPatchStatusAt(t *testing.T) {
 
 func TestUpdateBackups(t *testing.T) {
 	gs := gameServer(uid1, "")
-	gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "ended", Agent: "pod-0/0"}, {UUID: "live", Agent: "pod-1/2"}}
+	gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "ended", Agent: "pod-0/0"}, {UUID: "live", Agent: "pod-1/cri://b"}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.AgentPod(uid1), UID: "pod-1"},
-		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: render.AgentContainer, RestartCount: 2}}}}
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://b"}}}}
 	s := newStore(t, gs, pod)
 	ctx := context.Background()
 	var seen []string
@@ -270,11 +270,11 @@ func TestUpdateBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if instance != "pod-1/2" || len(seen) != 1 || seen[0] != "live" {
+	if instance != "pod-1/cri://b" || len(seen) != 1 || seen[0] != "live" {
 		t.Fatalf("agent %q, live %v", instance, seen)
 	}
 	got, _ := s.Get(ctx, uid1)
-	if p := got.Status.Backups.Pending; len(p) != 2 || p[0].UUID != "live" || p[1].UUID != "new" || p[1].Agent != "pod-1/2" {
+	if p := got.Status.Backups.Pending; len(p) != 2 || p[0].UUID != "live" || p[1].UUID != "new" || p[1].Agent != "pod-1/cri://b" {
 		t.Fatalf("pending = %+v", p)
 	}
 	// An unchanged list is not written; an empty one clears the field.
