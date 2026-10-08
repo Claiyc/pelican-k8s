@@ -106,7 +106,7 @@ func TestChangeDuringTheCheckIsKept(t *testing.T) {
 			return c.Patch(ctx, gs, client.RawPatch(types.MergePatchType, []byte(`{"spec":{"power":{"desired":"Running","generation":4}}}`)))
 		},
 		"fresh agent recorded": func(ctx context.Context, c client.WithWatch, gs client.Object) error {
-			return c.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, []byte(`{"status":{"agent":{"restarts":1}}}`)))
+			return c.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, []byte(`{"status":{"agent":{"containerID":"cri://b"}}}`)))
 		},
 	}
 	for name, change := range cases {
