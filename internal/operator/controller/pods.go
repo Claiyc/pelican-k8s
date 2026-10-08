@@ -374,7 +374,13 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 	case s.sharedIPElsewhere != "":
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonSharedIPNodeMismatch,
 			fmt.Sprintf("the other servers on this LoadBalancer address run on %s, where it is announced; the server is stopped and its game pod recreated there", s.sharedIPElsewhere))
-		if err := r.stopToMove(s, s.sharedIPElsewhere); err != nil {
+		if err := r.stopToRecreate(s, "SharedIPMove", fmt.Sprintf("its game pod moves to %s, where the other servers on its address run", s.sharedIPElsewhere)); err != nil {
+			return err
+		}
+	case s.sharedIPPortsStale:
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonSharedIPPortsOutdated,
+			"the game pod predates the named ports its shared LoadBalancer Service targets and receives no traffic; the server is stopped and its game pod recreated")
+		if err := r.stopToRecreate(s, "SharedIPPorts", "its game pod predates the named ports its shared address targets"); err != nil {
 			return err
 		}
 	case gameOutdated:
@@ -385,7 +391,7 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionFalse, "UpToDate", "")
 		return r.relocate(s)
 	}
-	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate || s.sharedIPElsewhere != ""); err != nil {
+	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate || s.sharedIPElsewhere != "" || s.sharedIPPortsStale); err != nil {
 		return err
 	}
 	return r.relocate(s)

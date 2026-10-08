@@ -137,6 +137,9 @@ type scope struct {
 	// sharedIPElsewhere is the node the game pods sharing the server's
 	// address gather on when its own game pod runs on another one.
 	sharedIPElsewhere string
+	// sharedIPPortsStale is set when the server's game pod shares its address
+	// but declares none of the named ports its Service targets.
+	sharedIPPortsStale bool
 }
 
 // Reconcile implements reconcile.Reconciler.

@@ -108,6 +108,30 @@ func ipLabelValue(raw string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// DeclaresGamePort reports whether the game container of pod declares one of
+// the named ports a shared Service targets (or the server has no port). A game
+// pod created before the names existed declares none and receives no traffic
+// through the shared Service until it is recreated.
+func DeclaresGamePort(in *Input, pod *corev1.Pod) bool {
+	ports := in.Settings.Ports()
+	if len(ports) == 0 {
+		return true
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name != GameContainer {
+			continue
+		}
+		for _, cp := range c.Ports {
+			for _, p := range ports {
+				if cp.Name == containerPortName(in, p, cp.Protocol) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // containerPortName names a game container port after the port and the
 // server, so a shared Service's named target port never resolves on another
 // server's pod that still declares a port it has given up (at most 15

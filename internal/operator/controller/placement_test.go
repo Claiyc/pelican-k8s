@@ -549,6 +549,48 @@ func TestSharedIPMovesToTheOthersNode(t *testing.T) {
 	}
 }
 
+// A running game pod created before the named target ports declares none of
+// them, so the shared Service does not reach it: the server is stopped and its
+// game pod recreated with the ports.
+func TestSharedIPRecreatesAPodWithoutTheNamedPorts(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a")
+	game := h.pod()
+	for i, c := range game.Spec.Containers {
+		for j, p := range c.Ports {
+			game.Spec.Containers[i].Ports[j].Name = strings.ToLower(string(p.Protocol)) + "-" + p.Name[1:strings.IndexByte(p.Name, '-')]
+		}
+	}
+	if err := h.c.Update(context.Background(), game); err != nil {
+		t.Fatal(err)
+	}
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != reasonSharedIPPortsOutdated {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if !slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessOffline
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	if h.pod() != nil {
+		t.Fatal("the offline game pod is recreated")
+	}
+	h.bind(h.createGamePod(), "node-a")
+	h.reconcile(1)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("the recreated pod declares the ports: RecreatePending %s", got)
+	}
+	if got := h.agent.Calls(); got[len(got)-1] != "power:start" {
+		t.Fatalf("the new pod starts the server again: %v", got)
+	}
+}
+
 // The game pod on the node most servers on the address run on stays; the
 // others come to it.
 func TestSharedIPMajorityStays(t *testing.T) {

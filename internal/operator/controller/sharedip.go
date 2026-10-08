@@ -16,19 +16,26 @@ import (
 // game pods sharing its LoadBalancer address (ARCHITECTURE.md 9.3).
 const reasonSharedIPNodeMismatch = "SharedIPNodeMismatch"
 
+// reasonSharedIPPortsOutdated marks a game pod that shares its LoadBalancer
+// address but predates the named ports its Service targets (ARCHITECTURE.md
+// 9.3).
+const reasonSharedIPPortsOutdated = "SharedIPPortsOutdated"
+
 // placeSharedIP places a game pod that shares its LoadBalancer address under
 // externalTrafficPolicy Local (ARCHITECTURE.md 9.3). The address is announced
 // from one node and only pods there receive traffic, so all game pods on it
 // gather on one node. It sets In.SharedIPNode, the node of the other pods,
 // which a new game pod is pinned to, and s.sharedIPElsewhere when the
 // server's running game pod is off the node they gather on (relabelled in
-// place, or placed before the others).
+// place, or placed before the others). It sets s.sharedIPPortsStale when the
+// game pod declares none of the named ports the Service targets.
 func (r *GameServerReconciler) placeSharedIP(s *scope) error {
-	s.in.SharedIPNode, s.sharedIPElsewhere = "", ""
+	s.in.SharedIPNode, s.sharedIPElsewhere, s.sharedIPPortsStale = "", "", false
 	shared := render.SharedIP(s.in)
 	if shared == "" {
 		return nil
 	}
+	s.sharedIPPortsStale = s.pod != nil && s.pod.DeletionTimestamp.IsZero() && !render.DeclaresGamePort(s.in, s.pod)
 	pods := &corev1.PodList{}
 	if err := r.List(s.ctx, pods, client.InNamespace(s.gs.Namespace),
 		client.MatchingLabels{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: render.ComponentGame}); err != nil {
@@ -113,11 +120,12 @@ func olderPod(a, b *corev1.Pod) bool {
 	return a.Name < b.Name
 }
 
-// stopToMove stops a running process so the game pod can be recreated on the
-// node of the other pods sharing its address; the fresh-pod rule starts it
-// again there. A pod off that node receives no traffic, so the restart costs
+// stopToRecreate stops a running process so a game pod that receives no
+// traffic through its shared address can be recreated, on the node of the
+// other pods sharing it and with the ports its Service targets; the fresh-pod
+// rule starts it again. The pod gets no traffic as it is, so the restart costs
 // the players little.
-func (r *GameServerReconciler) stopToMove(s *scope, node string) error {
+func (r *GameServerReconciler) stopToRecreate(s *scope, event, note string) error {
 	if s.agent == nil {
 		return nil
 	}
@@ -129,9 +137,9 @@ func (r *GameServerReconciler) stopToMove(s *scope, node string) error {
 	if st.State != v1alpha1.ProcessRunning && st.State != v1alpha1.ProcessStarting {
 		return nil
 	}
-	r.event(s, corev1.EventTypeNormal, "SharedIPMove", "stopping the server to move its game pod to %s, where the other servers on its address run", node)
+	r.event(s, corev1.EventTypeNormal, event, "stopping the server: %s", note)
 	if err := r.power(s, "stop"); err != nil {
-		return fmt.Errorf("stop to move: %w", err)
+		return fmt.Errorf("stop to recreate: %w", err)
 	}
 	return nil
 }

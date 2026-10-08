@@ -1434,6 +1434,9 @@ delivers only to pods on that node. So for such a server the operator:
   address picks the same node, so only the pods elsewhere move. Pods on a NotReady node do not count: the
   address moves to a node with ready endpoints, and the pods there stay. A replacement that does not fit there,
   or whose volume is bound to another node, stays `Pending`
+- recreates a running game pod that declares none of the named ports its Service targets (one created
+  before the names existed): the Service does not reach it, so the operator sets `RecreatePending` (reason
+  `SharedIPPortsOutdated`), stops the process and recreates the game pod the same way
 
 With `externalTrafficPolicy: Cluster` the Services keep their own selectors, the game pods are not
 grouped, and kube-proxy forwards from the announcing node to any node at the cost of the client IP.
