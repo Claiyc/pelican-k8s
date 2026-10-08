@@ -121,10 +121,13 @@ rules depend on them. So plan addresses like nodes:
   others on its IP and stays `Pending`; give it its own IP instead.
 - Servers whose players' addresses do not matter can use a class with
   `Cluster`, which has none of these constraints.
-- A load balancer that reaches every Service's own nodes on a shared address
-  does not need the grouping. Put its sharing annotation in
-  `loadBalancer.annotations` instead of `sharingAnnotation`: the Services then
-  share the IP while each server keeps its own selector and runs anywhere.
+- The grouping is needed when the address is announced per IP (L2 or BGP, as
+  MetalLB, kube-vip and Cilium do): traffic for every port lands on the
+  announcing node. A load balancer that forwards each Service port to that
+  Service's own nodes (cloud load balancers such as Azure's) does not need it.
+  Leave `sharingAnnotation` empty there and put any annotation it needs into
+  `loadBalancer.annotations`: the Services share the IP while each server keeps
+  its own selector and runs anywhere.
 
 ## network
 
