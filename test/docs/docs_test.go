@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -57,39 +56,40 @@ func chartVersions(t *testing.T) map[string]string {
 	return out
 }
 
-// pinned reports whether documented is what the install docs should pin for a
-// chart at version, and describes what they should pin. While the chart is at
-// a pre-release (X.Y.Z-beta1), the docs stay on the last release, which is any
-// release older than X.Y.Z: readers install releases, not betas.
-func pinned(version, documented string) (bool, string) {
-	core, _, pre := strings.Cut(version, "-")
-	if !pre {
-		return documented == version, version
+// docsPins is the version the install docs should pin for each chart: the
+// chart's version, except while charts/pelican-k8s is at a pre-release
+// (X.Y.Z-beta1). Then they stay on the last release, the newest CHANGELOG.md
+// section without a suffix: readers install releases, not betas.
+func docsPins(t *testing.T) (pins, versions map[string]string) {
+	t.Helper()
+	versions = chartVersions(t)
+	pins = map[string]string{}
+	for chart, v := range versions {
+		pins[chart] = v
 	}
-	want := "a release before the pre-release " + version
-	if strings.Contains(documented, "-") {
-		return false, want
+	if v := versions["pelican-k8s"]; strings.Contains(v, "-") {
+		b, err := os.ReadFile(filepath.Join(repoRoot, "CHANGELOG.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := lastRelease(string(b))
+		if last == "" {
+			t.Fatalf("charts/pelican-k8s/Chart.yaml is at the pre-release %s, but CHANGELOG.md has no release section to pin instead", v)
+		}
+		pins["pelican-k8s"] = last
 	}
-	return olderRelease(documented, core), want
+	return pins, versions
 }
 
-// olderRelease reports whether release a (X.Y.Z) is older than release b.
-func olderRelease(a, b string) bool {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	if len(pa) != 3 || len(pb) != 3 {
-		return false
+// releaseHeading matches a release's CHANGELOG.md section, not a pre-release's.
+var releaseHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\]`)
+
+// lastRelease is the newest release section in a CHANGELOG.md, or "".
+func lastRelease(changelog string) string {
+	if m := releaseHeading.FindStringSubmatch(changelog); m != nil {
+		return m[1]
 	}
-	for i := range pa {
-		x, errx := strconv.Atoi(pa[i])
-		y, erry := strconv.Atoi(pb[i])
-		if errx != nil || erry != nil {
-			return false
-		}
-		if x != y {
-			return x < y
-		}
-	}
-	return false
+	return ""
 }
 
 // markdownFiles is every document a reader might copy a command out of.
@@ -113,7 +113,7 @@ func markdownFiles(t *testing.T) []string {
 // names a version the tree does not release. Bumping a chart therefore has to
 // bump the docs in the same change, unless it bumps to a pre-release.
 func TestInstallCommandsPinTheChartVersion(t *testing.T) {
-	versions := chartVersions(t)
+	pins, versions := docsPins(t)
 	checked := 0
 	for _, f := range markdownFiles(t) {
 		b, err := os.ReadFile(f)
@@ -131,15 +131,15 @@ func TestInstallCommandsPinTheChartVersion(t *testing.T) {
 				continue
 			}
 			chart, documented := ref[1], ver[1]
-			want, known := versions[chart]
+			want, known := pins[chart]
 			if !known {
 				t.Errorf("%s:%d: references chart %q, which is not in charts/", f, i+1, chart)
 				continue
 			}
 			checked++
-			if ok, should := pinned(want, documented); !ok {
-				t.Errorf("%s:%d: installs %s --version %s, but charts/%s/Chart.yaml is at %s, so the docs should pin %s",
-					f, i+1, chart, documented, chart, want, should)
+			if documented != want {
+				t.Errorf("%s:%d: installs %s --version %s, but should pin %s (charts/%s/Chart.yaml is at %s)",
+					f, i+1, chart, documented, want, chart, versions[chart])
 			}
 		}
 	}
@@ -152,7 +152,8 @@ func TestInstallCommandsPinTheChartVersion(t *testing.T) {
 // TestExampleRevisionsMatchTheChart covers the Argo CD example, which pins the
 // same release through targetRevision rather than --version.
 func TestExampleRevisionsMatchTheChart(t *testing.T) {
-	want, ok := chartVersions(t)["pelican-k8s"]
+	pins, versions := docsPins(t)
+	want, ok := pins["pelican-k8s"]
 	if !ok {
 		t.Fatal("charts/pelican-k8s not found")
 	}
@@ -168,9 +169,9 @@ func TestExampleRevisionsMatchTheChart(t *testing.T) {
 				continue
 			}
 			checked++
-			if ok, should := pinned(want, m[1]); !ok {
-				t.Errorf("%s:%d: targetRevision pins %s, but charts/pelican-k8s/Chart.yaml is at %s, so the docs should pin %s",
-					f, i+1, m[1], want, should)
+			if m[1] != want {
+				t.Errorf("%s:%d: targetRevision pins %s, but should pin %s (charts/pelican-k8s/Chart.yaml is at %s)",
+					f, i+1, m[1], want, versions["pelican-k8s"])
 			}
 		}
 	}
@@ -179,24 +180,14 @@ func TestExampleRevisionsMatchTheChart(t *testing.T) {
 	}
 }
 
-func TestPinned(t *testing.T) {
-	for _, c := range []struct {
-		version, documented string
-		ok                  bool
-	}{
-		{"1.2.0", "1.2.0", true},
-		{"1.2.0", "1.1.0", false},
-		{"1.2.0", "1.2.0-beta1", false},
-		{"2.0.0-beta1", "1.1.0", true},
-		{"2.0.0-beta2", "1.9.12", true},
-		{"2.0.0-beta1", "2.0.0-beta1", false},
-		{"2.0.0-beta1", "2.0.0", false},
-		{"2.0.0-beta1", "1.1.0-beta3", false},
-		{"1.1.1-beta1", "1.1.0", true},
-		{"1.1.1-beta1", "1.10.0", false},
+func TestLastRelease(t *testing.T) {
+	for _, c := range []struct{ changelog, want string }{
+		{"## [Unreleased]\n\n## [2.0.0-beta2] - x\n\n## [2.0.0-beta1] - x\n\n## [1.1.0] - x\n\n## [1.0.2] - x\n", "1.1.0"},
+		{"## [Unreleased]\n\n## [1.2.0] - x\n\n## [1.2.0-beta1] - x\n", "1.2.0"},
+		{"## [Unreleased]\n\n## [1.0.0-beta1] - x\n", ""},
 	} {
-		if ok, _ := pinned(c.version, c.documented); ok != c.ok {
-			t.Errorf("pinned(%q, %q) = %v, want %v", c.version, c.documented, ok, c.ok)
+		if got := lastRelease(c.changelog); got != c.want {
+			t.Errorf("lastRelease(%q) = %q, want %q", c.changelog, got, c.want)
 		}
 	}
 }
