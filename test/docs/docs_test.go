@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,6 +57,41 @@ func chartVersions(t *testing.T) map[string]string {
 	return out
 }
 
+// pinned reports whether documented is what the install docs should pin for a
+// chart at version, and describes what they should pin. While the chart is at
+// a pre-release (X.Y.Z-beta1), the docs stay on the last release, which is any
+// release older than X.Y.Z: readers install releases, not betas.
+func pinned(version, documented string) (bool, string) {
+	core, _, pre := strings.Cut(version, "-")
+	if !pre {
+		return documented == version, version
+	}
+	want := "a release before the pre-release " + version
+	if strings.Contains(documented, "-") {
+		return false, want
+	}
+	return olderRelease(documented, core), want
+}
+
+// olderRelease reports whether release a (X.Y.Z) is older than release b.
+func olderRelease(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	if len(pa) != 3 || len(pb) != 3 {
+		return false
+	}
+	for i := range pa {
+		x, errx := strconv.Atoi(pa[i])
+		y, erry := strconv.Atoi(pb[i])
+		if errx != nil || erry != nil {
+			return false
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
+}
+
 // markdownFiles is every document a reader might copy a command out of.
 func markdownFiles(t *testing.T) []string {
 	t.Helper()
@@ -75,7 +111,7 @@ func markdownFiles(t *testing.T) []string {
 
 // TestInstallCommandsPinTheChartVersion fails when a documented `helm install`
 // names a version the tree does not release. Bumping a chart therefore has to
-// bump the docs in the same change.
+// bump the docs in the same change, unless it bumps to a pre-release.
 func TestInstallCommandsPinTheChartVersion(t *testing.T) {
 	versions := chartVersions(t)
 	checked := 0
@@ -101,9 +137,9 @@ func TestInstallCommandsPinTheChartVersion(t *testing.T) {
 				continue
 			}
 			checked++
-			if documented != want {
-				t.Errorf("%s:%d: installs %s --version %s, but charts/%s/Chart.yaml releases %s",
-					f, i+1, chart, documented, chart, want)
+			if ok, should := pinned(want, documented); !ok {
+				t.Errorf("%s:%d: installs %s --version %s, but charts/%s/Chart.yaml is at %s, so the docs should pin %s",
+					f, i+1, chart, documented, chart, want, should)
 			}
 		}
 	}
@@ -132,14 +168,36 @@ func TestExampleRevisionsMatchTheChart(t *testing.T) {
 				continue
 			}
 			checked++
-			if m[1] != want {
-				t.Errorf("%s:%d: targetRevision pins %s, but charts/pelican-k8s/Chart.yaml releases %s",
-					f, i+1, m[1], want)
+			if ok, should := pinned(want, m[1]); !ok {
+				t.Errorf("%s:%d: targetRevision pins %s, but charts/pelican-k8s/Chart.yaml is at %s, so the docs should pin %s",
+					f, i+1, m[1], want, should)
 			}
 		}
 	}
 	if checked == 0 {
 		t.Skip("no targetRevision examples in the docs")
+	}
+}
+
+func TestPinned(t *testing.T) {
+	for _, c := range []struct {
+		version, documented string
+		ok                  bool
+	}{
+		{"1.2.0", "1.2.0", true},
+		{"1.2.0", "1.1.0", false},
+		{"1.2.0", "1.2.0-beta1", false},
+		{"2.0.0-beta1", "1.1.0", true},
+		{"2.0.0-beta2", "1.9.12", true},
+		{"2.0.0-beta1", "2.0.0-beta1", false},
+		{"2.0.0-beta1", "2.0.0", false},
+		{"2.0.0-beta1", "1.1.0-beta3", false},
+		{"1.1.1-beta1", "1.1.0", true},
+		{"1.1.1-beta1", "1.10.0", false},
+	} {
+		if ok, _ := pinned(c.version, c.documented); ok != c.ok {
+			t.Errorf("pinned(%q, %q) = %v, want %v", c.version, c.documented, ok, c.ok)
+		}
 	}
 }
 

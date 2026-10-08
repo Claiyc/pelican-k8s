@@ -19,7 +19,9 @@
 # that version, X.Y.Z-beta1, which the Release workflow publishes as a GitHub
 # pre-release. After X.Y.Z-betaN the next version is X.Y.Z-betaN+1 while the
 # label stays, and X.Y.Z once it is removed; no label raises a version that
-# follows a pre-release.
+# follows a pre-release. A pre-release leaves the documented install commands
+# on the last release, and the release after it may have nothing new merged:
+# its notes are everything since the last release, betas included.
 #
 # The section is GitHub's generated release notes for the PRs merged since the
 # last release (the same list a GitHub release generates; .github/release.yml
@@ -31,7 +33,8 @@
 # it and pushed at that version on every release.
 #
 # Prints the version. Exits 3 when there is nothing to prepare: nothing was
-# merged since the last release, or the chart's version is not tagged yet.
+# merged since the last release (a pre-release always has its release to
+# follow), or the chart's version is not tagged yet.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -44,7 +47,8 @@ if ! git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
   exit 3
 fi
 # Release PRs only carry this script's edits; they are not changes to release.
-if [[ -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]]; then
+# A pre-release is followed by its release even with nothing new.
+if [[ $current != *-* && -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]]; then
   echo "nothing merged since v$current, nothing to release" >&2
   exit 3
 fi
@@ -118,12 +122,19 @@ fi
 [[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || { echo "not a release version: $next" >&2; exit 1; }
 [[ "$next" != "$current" ]] || { echo "$next is already the chart version" >&2; exit 1; }
 
+# The last release, not a pre-release: what the docs pin, and where a
+# release's notes start, so they cover its pre-releases too. A pre-release's
+# notes start at the version before it.
+last=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vF -- - | head -n 1 | sed 's/^v//')
+[[ -n "$last" ]] || { echo "no release tag (vX.Y.Z) found" >&2; exit 1; }
+if [[ $next == *-* ]]; then base=$current; else base=$last; fi
+
 notes=$(mktemp)
 trap 'rm -f "$notes" "$notes.section"' EXIT
 if [[ -n "${RELEASE_NOTES:-}" ]]; then
   cat "$RELEASE_NOTES" >"$notes"
 else
-  gh api "repos/$(repo)/releases/generate-notes" -f tag_name="v$next" -f previous_tag_name="v$current" \
+  gh api "repos/$(repo)/releases/generate-notes" -f tag_name="v$next" -f previous_tag_name="v$base" \
     -f target_commitish="$(git rev-parse HEAD)" --jq .body >"$notes"
 fi
 # One level down, to sit under "## [X.Y.Z]"; the compare link is the
@@ -137,27 +148,30 @@ fi
 } >"$notes.section"
 grep -q '[^[:space:]]' "$notes.section" || { echo "no release notes generated" >&2; exit 1; }
 
-export CUR="$current" NEXT="$next" DATE
+export CUR="$current" NEXT="$next" BASE="$base" LAST="$last" DATE
 DATE=$(date -u +%F)
 perl -pi -e 's/^version:.*/version: $ENV{NEXT}/; s/^appVersion:.*/appVersion: "$ENV{NEXT}"/' "$chart"
+# The docs pin the last release; a pre-release leaves them there.
 # (?![\w.-]) rather than \b, so 1.2.0 never matches the start of 1.2.0-beta1.
-perl -pi -e 's{(charts/pelican-k8s --version )\Q$ENV{CUR}\E(?![\w.-])}{$1$ENV{NEXT}}g; s{(targetRevision: v)\Q$ENV{CUR}\E(?![\w.-])}{$1$ENV{NEXT}}g' \
-  README.md docs/install.md
+if [[ $next != *-* ]]; then
+  perl -pi -e 's{(charts/pelican-k8s --version )\Q$ENV{LAST}\E(?![\w.-])}{$1$ENV{NEXT}}g; s{(targetRevision: v)\Q$ENV{LAST}\E(?![\w.-])}{$1$ENV{NEXT}}g' \
+    README.md docs/install.md
+fi
 # [Unreleased] is emptied into the new section.
 awk -v head="## [$next] - $DATE" -v body="$notes.section" '
   /^## \[Unreleased\]/ { print; print ""; print head; print ""; while ((getline l < body) > 0) print l; print ""; skip=1; next }
   skip && /^## \[/ { skip=0 }
   !skip' CHANGELOG.md >CHANGELOG.md.new
 mv CHANGELOG.md.new CHANGELOG.md
-perl -pi -e 's{^\[Unreleased\]: (\S*/compare/)v\Q$ENV{CUR}\E\.\.\.HEAD$}{[Unreleased]: $1v$ENV{NEXT}...HEAD\n[$ENV{NEXT}]: $1v$ENV{CUR}...v$ENV{NEXT}}' \
+perl -pi -e 's{^\[Unreleased\]: (\S*/compare/)v\Q$ENV{CUR}\E\.\.\.HEAD$}{[Unreleased]: $1v$ENV{NEXT}...HEAD\n[$ENV{NEXT}]: $1v$ENV{BASE}...v$ENV{NEXT}}' \
   CHANGELOG.md
 
 # Every edit above is a pattern; fail loudly if one stopped matching.
 grep -qx "version: $next" "$chart" && grep -qx "appVersion: \"$next\"" "$chart" || { echo "$chart: version not bumped" >&2; exit 1; }
 grep -qF "## [$next] - $DATE" CHANGELOG.md && grep -qF "[$next]: " CHANGELOG.md || { echo "CHANGELOG.md: section or link not added" >&2; exit 1; }
-cur_re=${current//./\\.}
-if grep -rnE -e "pelican-k8s --version $cur_re([^[:alnum:]_.-]|\$)" -e "targetRevision: v$cur_re([^[:alnum:]_.-]|\$)" README.md docs/install.md; then
-  echo "install commands above still pin $current" >&2
+last_re=${last//./\\.}
+if [[ $next != *-* ]] && grep -rnE -e "pelican-k8s --version $last_re([^[:alnum:]_.-]|\$)" -e "targetRevision: v$last_re([^[:alnum:]_.-]|\$)" README.md docs/install.md; then
+  echo "install commands above still pin $last" >&2
   exit 1
 fi
 echo "$next"
