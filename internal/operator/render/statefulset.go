@@ -428,21 +428,27 @@ func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 	case GameAffinityPreferred:
 		affinity.PodAffinity = &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 100, PodAffinityTerm: agentTerm}}}
 	}
-	if shared := SharedIP(in); shared != "" {
-		// The game pods sharing an address run on one node (section 9.3).
-		// The first one matches its own term and may run anywhere.
-		if affinity.PodAffinity == nil {
-			affinity.PodAffinity = &corev1.PodAffinity{}
-		}
-		affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution, corev1.PodAffinityTerm{
-			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: ComponentGame}},
-			TopologyKey:   corev1.LabelHostname,
-		})
-	}
+	addSharedIPAffinity(in, affinity)
 	if affinity.NodeAffinity != nil || affinity.PodAffinity != nil {
 		spec.Affinity = affinity
 	}
 	return podTemplate(in, ComponentGame, spec)
+}
+
+// addSharedIPAffinity runs the game pods sharing an address on one node
+// (section 9.3). The first one matches its own term and may run anywhere.
+func addSharedIPAffinity(in *Input, affinity *corev1.Affinity) {
+	shared := SharedIP(in)
+	if shared == "" {
+		return
+	}
+	if affinity.PodAffinity == nil {
+		affinity.PodAffinity = &corev1.PodAffinity{}
+	}
+	affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution, corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: ComponentGame}},
+		TopologyKey:   corev1.LabelHostname,
+	})
 }
 
 func nodeNameAffinity(nodes []string) *corev1.NodeAffinity {

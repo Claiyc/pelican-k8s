@@ -811,23 +811,8 @@ func TestSharedIPServicesSatisfyMetalLB(t *testing.T) {
 		t.Fatalf("selectors differ: %v / %v", sa.Spec.Selector, sb.Spec.Selector)
 	}
 	pa, pb := GamePodTemplate(a), GamePodTemplate(b)
-	for _, c := range []struct {
-		svc       *corev1.Service
-		own, peer corev1.PodTemplateSpec
-	}{{sa, pa, pb}, {sb, pb, pa}} {
-		sel := labels.SelectorFromSet(c.svc.Spec.Selector)
-		if !sel.Matches(labels.Set(c.own.Labels)) || !sel.Matches(labels.Set(c.peer.Labels)) {
-			t.Fatalf("selector %v must match every game pod on the address", c.svc.Spec.Selector)
-		}
-		for _, sp := range c.svc.Spec.Ports {
-			if sp.TargetPort.Type != intstr.String {
-				t.Fatalf("port %s must target a named container port", sp.Name)
-			}
-			if !declaresPort(c.own, sp.TargetPort.StrVal) || declaresPort(c.peer, sp.TargetPort.StrVal) {
-				t.Fatalf("port %s must reach only its own server", sp.Name)
-			}
-		}
-	}
+	checkSharedService(t, sa, pa, pb)
+	checkSharedService(t, sb, pb, pa)
 	if _, ok := AgentPodTemplate(a).Labels[v1alpha1.LabelSharedIP]; ok {
 		t.Fatal("only game pods carry the shared-IP label")
 	}
@@ -840,6 +825,24 @@ func TestSharedIPServicesSatisfyMetalLB(t *testing.T) {
 		sel, err := metav1.LabelSelectorAsSelector(terms[0].LabelSelector)
 		if err != nil || !sel.Matches(labels.Set(pa.Labels)) || !sel.Matches(labels.Set(pb.Labels)) {
 			t.Fatalf("affinity must match every game pod on the address, itself included: %v", terms[0].LabelSelector)
+		}
+	}
+}
+
+// checkSharedService checks that svc selects both game pods on its address
+// and that each of its ports reaches only its own pod.
+func checkSharedService(t *testing.T, svc *corev1.Service, own, peer corev1.PodTemplateSpec) {
+	t.Helper()
+	sel := labels.SelectorFromSet(svc.Spec.Selector)
+	if !sel.Matches(labels.Set(own.Labels)) || !sel.Matches(labels.Set(peer.Labels)) {
+		t.Fatalf("selector %v must match every game pod on the address", svc.Spec.Selector)
+	}
+	for _, sp := range svc.Spec.Ports {
+		if sp.TargetPort.Type != intstr.String {
+			t.Fatalf("port %s must target a named container port", sp.Name)
+		}
+		if !declaresPort(own, sp.TargetPort.StrVal) || declaresPort(peer, sp.TargetPort.StrVal) {
+			t.Fatalf("port %s must reach only its own server", sp.Name)
 		}
 	}
 }
