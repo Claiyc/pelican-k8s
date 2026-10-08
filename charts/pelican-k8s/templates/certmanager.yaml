@@ -1,0 +1,79 @@
+{{- if and .Values.tls.certManager.enabled (not .Values.tls.enabled) }}
+{{- fail "tls.certManager.enabled needs tls.enabled" }}
+{{- end }}
+{{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+{{- $issuer := include "pelican-k8s.certManagerIssuer" . | fromYaml }}
+{{- if not (.Values.tls.certManager.issuerRef | default dict).name }}
+# A self-signed CA and the ClusterIssuer that signs with it.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ include "pelican-k8s.fullname" . }}-selfsigned
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "pelican-k8s.caSecretName" . }}
+  namespace: {{ .Values.tls.certManager.caNamespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: pelican-k8s internal CA
+  secretName: {{ include "pelican-k8s.caSecretName" . }}
+  duration: {{ .Values.tls.certManager.caDuration }}
+  privateKey: {algorithm: ECDSA, size: 256}
+  issuerRef:
+    name: {{ include "pelican-k8s.fullname" . }}-selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ include "pelican-k8s.caSecretName" . }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "pelican-k8s.caSecretName" . }}
+---
+{{- end }}
+# The gateway's certificate: the remote API's server certificate and its
+# client certificate toward agents.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "pelican-k8s.gatewayTLSSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "pelican-k8s.gatewayTLSSecretName" . }}
+  commonName: pelican-gateway
+  dnsNames:
+    {{- range splitList "," (include "pelican-k8s.gatewayTLSNames" .) }}
+    - {{ . }}
+    {{- end }}
+  usages: [digital signature, server auth, client auth]
+  duration: 2160h
+  renewBefore: 720h
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  issuerRef: {{- toYaml $issuer | nindent 4 }}
+---
+# The operator's client certificate toward agents.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "pelican-k8s.operatorTLSSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "pelican-k8s.operatorTLSSecretName" . }}
+  commonName: pelican-operator
+  usages: [digital signature, client auth]
+  duration: 2160h
+  renewBefore: 720h
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  issuerRef: {{- toYaml $issuer | nindent 4 }}
+{{- end }}

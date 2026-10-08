@@ -60,7 +60,8 @@ type StorageSpec struct {
 	Scratch         ScratchSpec `json:"scratch,omitempty"`
 	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
-	// VolumeSnapshotClassName is required for SnapshotThenDelete and snapshotSchedule.
+	// VolumeSnapshotClassName is the VolumeSnapshotClass for SnapshotThenDelete
+	// and snapshotSchedule. Empty uses the cluster's default VolumeSnapshotClass.
 	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 	// SnapshotSchedule is an optional cron expression for crash-consistent VolumeSnapshots.
 	SnapshotSchedule string `json:"snapshotSchedule,omitempty"`
@@ -140,15 +141,16 @@ type ExposureSpec struct {
 	ExternalIPs []string `json:"externalIPs,omitempty"`
 }
 
-// EgressRule allows game pods to reach an in-cluster destination.
+// EgressRule allows game pods and agent pods to reach an in-cluster destination.
 type EgressRule struct {
 	CIDR  string  `json:"cidr"`
 	Ports []int32 `json:"ports,omitempty"`
 }
 
-// InClusterEgressSpec lists in-cluster destinations game pods may reach.
+// InClusterEgressSpec lists in-cluster destinations game pods (GameServers,
+// Additional) and agent pods (Additional) may reach.
 type InClusterEgressSpec struct {
-	// GameServers allows traffic to other GameServer pods on their allocation ports.
+	// GameServers allows game pods to reach other game pods on any port.
 	// +kubebuilder:default=true
 	GameServers *bool        `json:"gameServers,omitempty"`
 	Additional  []EgressRule `json:"additional,omitempty"`
@@ -158,17 +160,19 @@ type InClusterEgressSpec struct {
 // matches the field's CRD default.
 var DefaultBlockedEgressCIDRs = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
 
-// LinkLocalCIDR is excluded from game pod and install Job egress in every class.
+// LinkLocalCIDR is excluded from the egress of game pods and agent pods while
+// NetworkSpec.Enabled is true, and from install Job egress while the chart's
+// networkPolicies.enabled is true.
 const LinkLocalCIDR = "169.254.0.0/16"
 
 // NetworkSpec configures NetworkPolicies.
 type NetworkSpec struct {
 	InClusterEgress InClusterEgressSpec `json:"inClusterEgress,omitempty"`
 	// BlockedEgressCIDRs are IPv4 ranges excluded from the 0.0.0.0/0 egress rule
-	// of game pods. Unset means the private and shared ranges (10.0.0.0/8,
-	// 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the usual pod,
-	// service, node and LAN ranges; an explicit empty list blocks only
-	// link-local, which is always blocked. The DNS, remote API and
+	// of game pods and agent pods. Unset means the private and shared ranges
+	// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the
+	// usual pod, service, node and LAN ranges; an explicit empty list blocks only
+	// link-local. The DNS, remote API and
 	// inClusterEgress rules are separate allow rules and still reach
 	// destinations in these ranges; allow further private destinations with
 	// inClusterEgress.additional.
@@ -176,7 +180,9 @@ type NetworkSpec struct {
 	BlockedEgressCIDRs []string `json:"blockedEgressCIDRs,omitempty"`
 	// NodeCIDRs are admitted on the agent HTTP port for kubelet probes and hooks.
 	NodeCIDRs []string `json:"nodeCIDRs,omitempty"`
-	// Enabled controls whether per-server NetworkPolicies are created.
+	// Enabled restricts the server's pods with per-server NetworkPolicies.
+	// false makes both policies admit all traffic, which also lifts the
+	// chart's default-deny for these pods.
 	// +kubebuilder:default=true
 	Enabled *bool `json:"enabled,omitempty"`
 }
@@ -282,6 +288,17 @@ type ImagesSpec struct {
 	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
 }
 
+// SchedulingSpec configures where game pods are placed (ARCHITECTURE.md 7.7).
+type SchedulingSpec struct {
+	// PreferAgentNode gives the game pod a preferred pod affinity toward its
+	// agent pod's node, so the agent moves only when that node does not fit.
+	// +kubebuilder:default=true
+	PreferAgentNode *bool `json:"preferAgentNode,omitempty"`
+}
+
+// PrefersAgentNode reports the effective preferAgentNode (default true).
+func (s SchedulingSpec) PrefersAgentNode() bool { return s.PreferAgentNode == nil || *s.PreferAgentNode }
+
 // GameServerClassSpec is the cluster-side policy for a set of GameServers.
 type GameServerClassSpec struct {
 	Storage         StorageSpec         `json:"storage,omitempty"`
@@ -293,21 +310,31 @@ type GameServerClassSpec struct {
 	Failover        FailoverSpec        `json:"failover,omitempty"`
 	ImageResolution ImageResolutionSpec `json:"imageResolution,omitempty"`
 	Images          ImagesSpec          `json:"images,omitempty"`
+	Scheduling      SchedulingSpec      `json:"scheduling,omitempty"`
 	// ServiceAccountName is the ServiceAccount of game pods.
 	// +kubebuilder:default=pelican-game
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// AgentServiceAccountName is the ServiceAccount of agent pods.
+	// +kubebuilder:default=pelican-agent
+	AgentServiceAccountName string `json:"agentServiceAccountName,omitempty"`
 	// AgentConfigMap names the ConfigMap holding the agent's Wings config.yml.
 	// +kubebuilder:default=pelican-agent-config
 	AgentConfigMap string `json:"agentConfigMap,omitempty"`
-	// SuspendScalesToZero deletes the pod of a suspended server.
+	// SuspendScalesToZero also runs no agent pod for a suspended server.
 	SuspendScalesToZero bool `json:"suspendScalesToZero,omitempty"`
 	// TerminationGracePeriodSeconds must exceed Wings' 10 minute stop wait.
 	// +kubebuilder:default=660
 	TerminationGracePeriodSeconds int64 `json:"terminationGracePeriodSeconds,omitempty"`
-	// NodeSelector, Tolerations and PriorityClassName are applied to game pods.
-	NodeSelector      map[string]string   `json:"nodeSelector,omitempty"`
-	Tolerations       []corev1.Toleration `json:"tolerations,omitempty"`
-	PriorityClassName string              `json:"priorityClassName,omitempty"`
+	// NodeSelector and Tolerations are applied to both pods and install Jobs.
+	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
+	Tolerations  []corev1.Toleration `json:"tolerations,omitempty"`
+	// PriorityClassName is applied to game pods.
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+	// AgentPriorityClassName is applied to agent pods. It should rank above
+	// game pods, so an agent that follows its game pod to a full node can
+	// preempt lower-priority pods there.
+	// +kubebuilder:default=pelican-agent
+	AgentPriorityClassName string `json:"agentPriorityClassName,omitempty"`
 }
 
 // GameServerClass is admin-owned, cluster-scoped policy referenced by GameServer.spec.className.

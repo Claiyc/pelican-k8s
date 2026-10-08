@@ -49,6 +49,8 @@ const (
 	ConditionVolumeReady     = "VolumeReady"
 	ConditionExposureReady   = "ExposureReady"
 	ConditionAgentReady      = "AgentReady"
+	ConditionGamePodReady    = "GamePodReady"
+	ConditionAgentRelocating = "AgentRelocating"
 	ConditionInstallPrepared = "InstallPrepared"
 	ConditionInstalled       = "Installed"
 	ConditionResizePending   = "ResizePending"
@@ -69,8 +71,8 @@ type PanelSpec struct {
 	UUIDShort string `json:"uuidShort"`
 	// Settings is the raw `settings` object from GET /api/remote/servers/{uuid}
 	// minus `environment`. The agent consumes it unchanged as its Wings server
-	// configuration; the operator reads only suspended, container.image, build.*
-	// and allocations.*.
+	// configuration; the operator reads only uuid, meta.name, egg.id, suspended,
+	// container.image, build.* and allocations.*.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Settings apiextensionsv1.JSON `json:"settings"`
 	// EnvironmentSecretRef names the Secret holding the egg variables (`settings.environment`).
@@ -93,7 +95,7 @@ type PowerSpec struct {
 	Generation int64 `json:"generation,omitempty"`
 	// Kill requests SIGKILL instead of the graceful stop procedure when Desired is Stopped.
 	Kill bool `json:"kill,omitempty"`
-	// RestartRequest is bumped to force a pod recreate at the next safe point.
+	// RestartRequest is bumped to recreate the agent pod and the game pod at the next safe point.
 	// +kubebuilder:validation:Minimum=0
 	RestartRequest int64 `json:"restartRequest,omitempty"`
 }
@@ -160,8 +162,18 @@ type PowerStatus struct {
 
 // AgentStatus tracks the agent the operator is driving.
 type AgentStatus struct {
-	// PodUID is the pod whose agent the operator last drove.
+	// PodUID is the agent pod the operator last drove; a new UID means "fresh pod".
 	PodUID string `json:"podUID,omitempty"`
+	// ContainerID is the agent container in that pod; a new ID (a node reboot,
+	// a crashed agent) is a fresh agent as well. The restart count is not
+	// used: it can start again at 0 after a node reboot.
+	ContainerID string `json:"containerID,omitempty"`
+	// Node is the node the agent pod runs on.
+	Node string `json:"node,omitempty"`
+	// TemplateHash is the pod template hash of the agent StatefulSet.
+	TemplateHash string `json:"templateHash,omitempty"`
+	// SftpActiveAt is the last time a relayed SFTP session moved data (gateway).
+	SftpActiveAt *metav1.Time `json:"sftpActiveAt,omitempty"`
 	// SftpHostKey is the agent's SSH host key fingerprint pinned by the gateway.
 	SftpHostKey string `json:"sftpHostKey,omitempty"`
 	// RelayedExit identifies the last game container termination forwarded to the agent.
@@ -170,6 +182,15 @@ type AgentStatus struct {
 	SyncedRevision string `json:"syncedRevision,omitempty"`
 	// SyncedEnvVersion is the resourceVersion of the env Secret last synced into the agent.
 	SyncedEnvVersion string `json:"syncedEnvVersion,omitempty"`
+}
+
+// GameStatus tracks the game pod.
+type GameStatus struct {
+	// PodUID is the current game pod, recorded once its shim is attached (empty
+	// without a game pod); a new UID means "fresh pod".
+	PodUID string `json:"podUID,omitempty"`
+	// Node is the node the game pod was scheduled to.
+	Node string `json:"node,omitempty"`
 }
 
 // UsageStatus is a throttled resource usage summary.
@@ -205,11 +226,28 @@ type SnapshotStatus struct {
 type PendingBackup struct {
 	UUID      string      `json:"uuid"`
 	StartedAt metav1.Time `json:"startedAt"`
+	// Agent is the agent instance that runs the backup or restore: the agent
+	// pod's UID and its agent container's restart count. A backup does not
+	// survive its agent, so an entry of another instance is no longer in flight.
+	// +optional
+	Agent string `json:"agent,omitempty"`
 }
 
 // BackupsStatus tracks backups in flight.
 type BackupsStatus struct {
 	Pending []PendingBackup `json:"pending,omitempty"`
+}
+
+// Live returns the pending entries of the given agent instance, the backups
+// and restores that can still finish. Empty instance: no agent, none live.
+func (b BackupsStatus) Live(agent string) []PendingBackup {
+	var out []PendingBackup
+	for _, p := range b.Pending {
+		if agent != "" && p.Agent == agent {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Endpoint is an externally reachable game port.
@@ -226,13 +264,16 @@ type GameServerStatus struct {
 	Process            ProcessStatus `json:"process,omitempty"`
 	Power              PowerStatus   `json:"power,omitempty"`
 	Agent              AgentStatus   `json:"agent,omitempty"`
+	Game               GameStatus    `json:"game,omitempty"`
 	Usage              *UsageStatus  `json:"usage,omitempty"`
 	Install            InstallStatus `json:"install,omitempty"`
 	Backups            BackupsStatus `json:"backups,omitempty"`
 	Endpoints          []Endpoint    `json:"endpoints,omitempty"`
-	// PodImage is the digest-pinned image of the current pod.
+	// PodImage is the image in the game StatefulSet's template, digest-pinned
+	// when the lookup succeeds: the current game pod's, or without one the image
+	// the next game pod gets.
 	PodImage string `json:"podImage,omitempty"`
-	// TemplateHash is the pod template hash the current StatefulSet carries.
+	// TemplateHash is the pod template hash of the game StatefulSet.
 	TemplateHash string          `json:"templateHash,omitempty"`
 	Snapshot     *SnapshotStatus `json:"snapshot,omitempty"`
 	// +listType=map
@@ -240,7 +281,7 @@ type GameServerStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// GameServer is one Panel server: one pod, one PVC, one CR.
+// GameServer is one Panel server: one PVC, one agent pod, and one game pod while it is on.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

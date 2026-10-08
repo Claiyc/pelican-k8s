@@ -1,6 +1,6 @@
 // Package wsproxy relays console websockets between browsers and agents,
 // re-signing auth tokens and turning power intents into spec changes
-// (ARCHITECTURE.md 5.5, 8.3).
+// (ARCHITECTURE.md 5.5, 5.9, 8.3).
 package wsproxy
 
 import (
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/config"
@@ -22,6 +23,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/serversync"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // Message is the websocket frame format.
@@ -42,6 +44,9 @@ type Proxy struct {
 
 	// netDial overrides how agents are dialed (tests; the agent port is fixed).
 	netDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// pollEvery and grace override how often and how long a session looks
+	// for a replaced agent pod (tests).
+	pollEvery, grace time.Duration
 }
 
 var powerPermissions = map[string]string{
@@ -88,44 +93,59 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := p.Agents.Resolve(r.Context(), uuid)
+	t, err := p.Agents.Wait(r.Context(), uuid)
 	if err != nil {
 		_ = client.WriteJSON(Message{Event: "daemon error", Args: []string{"server pod unavailable"}})
 		_ = client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "server pod unavailable"), time.Now().Add(time.Second))
 		return
 	}
-	header := http.Header{}
-	if p.OriginForAgent != "" {
-		header.Set("Origin", p.OriginForAgent)
-	}
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
-	agent, resp, err := dialer.Dial("ws://"+t.PodIP+":8080/api/servers/"+uuid+"/ws", header)
-	if resp != nil {
-		_ = resp.Body.Close()
-	}
+	agent, err := p.dial(uuid, t)
 	if err != nil {
 		p.Log.Warn("agent websocket dial failed", "uuid", uuid, "error", err)
 		_ = client.WriteJSON(Message{Event: "daemon error", Args: []string{"could not reach the server agent"}})
 		return
 	}
-	defer agent.Close()
 
-	session := &session{p: p, uuid: uuid, agentToken: t.Token, client: client, agent: agent}
+	session := &session{p: p, uuid: uuid, client: client}
+	session.attach(agent, t)
 	session.run(r.Context())
 }
 
-type session struct {
-	p          *Proxy
-	uuid       string
-	agentToken string
-	client     *websocket.Conn
-	agent      *websocket.Conn
+// dial opens the agent side of a session.
+func (p *Proxy) dial(uuid string, t *agents.Target) (*websocket.Conn, error) {
+	header := http.Header{}
+	if p.OriginForAgent != "" {
+		header.Set("Origin", p.OriginForAgent)
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true, NetDialContext: p.netDial}
+	if c := p.Agents.TLSConfig(); c != nil {
+		dial := p.netDial
+		if dial == nil {
+			dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+		}
+		dialer.NetDialTLSContext = pki.TLSDialer(pki.AgentDialer(dial), c)
+	}
+	agent, resp, err := dialer.Dial(t.WSBase()+"/api/servers/"+uuid+"/ws", header)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	return agent, err
+}
 
-	mu     sync.Mutex
-	claims *jwtx.Claims
+type session struct {
+	p      *Proxy
+	uuid   string
+	client *websocket.Conn
+
+	mu         sync.Mutex
+	claims     *jwtx.Claims
+	agentToken string
+	agentPod   string
 
 	clientWriteMu sync.Mutex
-	agentWriteMu  sync.Mutex
+	// agentWriteMu guards agent, which is nil while the agent pod is replaced.
+	agentWriteMu sync.Mutex
+	agent        *websocket.Conn
 }
 
 func (s *session) writeClient(v any) error {
@@ -134,57 +154,218 @@ func (s *session) writeClient(v any) error {
 	return s.client.WriteJSON(v)
 }
 
-func (s *session) writeAgentRaw(mt int, data []byte) error {
+func (s *session) closeClient(code int, text string) {
+	s.clientWriteMu.Lock()
+	defer s.clientWriteMu.Unlock()
+	_ = s.client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, text), time.Now().Add(time.Second))
+}
+
+// writeAgentRaw forwards a frame to the agent. Without an agent (it is being
+// replaced) the frame is dropped; a failed write is noticed by the agent pump.
+func (s *session) writeAgentRaw(mt int, data []byte) {
 	s.agentWriteMu.Lock()
 	defer s.agentWriteMu.Unlock()
-	return s.agent.WriteMessage(mt, data)
+	if s.agent != nil {
+		_ = s.agent.WriteMessage(mt, data)
+	}
 }
 
+// attach makes conn, to the agent t, the agent side of the session.
+func (s *session) attach(conn *websocket.Conn, t *agents.Target) {
+	s.mu.Lock()
+	s.agentToken, s.agentPod = t.Token, t.PodUID
+	s.mu.Unlock()
+	s.agentWriteMu.Lock()
+	s.agent = conn
+	s.agentWriteMu.Unlock()
+}
+
+// detach closes the agent side, if any.
+func (s *session) detach() {
+	s.agentWriteMu.Lock()
+	defer s.agentWriteMu.Unlock()
+	if s.agent != nil {
+		_ = s.agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = s.agent.Close()
+		s.agent = nil
+	}
+}
+
+func (s *session) agentConn() *websocket.Conn {
+	s.agentWriteMu.Lock()
+	defer s.agentWriteMu.Unlock()
+	return s.agent
+}
+
+// run relays until the browser leaves or the agent side ends for good. When
+// the agent side ends because the agent pod is being replaced, the browser's
+// connection is held and the session continues with the new agent
+// (ARCHITECTURE.md 5.9).
 func (s *session) run(ctx context.Context) {
-	done := make(chan struct{}, 2)
+	clientDone := make(chan struct{})
 	go func() {
-		defer func() { done <- struct{}{} }()
-		s.pumpAgentToClient()
-	}()
-	go func() {
-		defer func() { done <- struct{}{} }()
 		s.pumpClientToAgent(ctx)
+		close(clientDone)
+		s.detach()
 	}()
-	<-done
-}
-
-// pumpAgentToClient passes agent frames through to the browser until either
-// side closes.
-func (s *session) pumpAgentToClient() {
+	defer s.detach()
 	for {
-		mt, data, err := s.agent.ReadMessage()
-		if err != nil {
+		clientGone, agentErr := s.pumpAgentToClient(s.agentConn())
+		if clientGone || closed(clientDone) {
+			return
+		}
+		if !s.agentReplaced(ctx, clientDone) {
 			var ce *websocket.CloseError
-			if errors.As(err, &ce) {
-				s.clientWriteMu.Lock()
-				_ = s.client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(ce.Code, ce.Text), time.Now().Add(time.Second))
-				s.clientWriteMu.Unlock()
+			if errors.As(agentErr, &ce) {
+				s.closeClient(ce.Code, ce.Text)
 			}
 			return
 		}
-		s.clientWriteMu.Lock()
-		err = s.client.WriteMessage(mt, data)
-		s.clientWriteMu.Unlock()
-		if err != nil {
+		s.p.Log.Info("agent pod is being replaced; holding the console", "uuid", s.uuid)
+		s.detach()
+		if !s.reattach(ctx, clientDone) {
 			return
+		}
+		s.p.Log.Info("console moved to the new agent pod", "uuid", s.uuid)
+	}
+}
+
+func closed(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
+// agentReplaced reports whether the agent pod the session was talking to is
+// going or gone. The agent closes its websockets when it is told to stop,
+// which can reach the gateway before the pod's deletion does, so a healthy
+// looking pod is checked again for a moment.
+func (s *session) agentReplaced(ctx context.Context, clientDone <-chan struct{}) bool {
+	s.mu.Lock()
+	uid := s.agentPod
+	s.mu.Unlock()
+	grace := time.NewTimer(s.p.replaceGrace())
+	defer grace.Stop()
+	tick := time.NewTicker(s.p.poll())
+	defer tick.Stop()
+	for {
+		// A deleted server's agent does not come back.
+		if gs, err := s.p.Store.Get(ctx, s.uuid); apierrors.IsNotFound(err) || err == nil && !gs.DeletionTimestamp.IsZero() {
+			return false
+		}
+		pod, err := s.p.Store.AgentPod(ctx, s.uuid)
+		if err == nil {
+			if pod == nil || !pod.DeletionTimestamp.IsZero() || string(pod.UID) != uid {
+				return true
+			}
+			if ready, _ := store.PodAgentReady(pod); !ready {
+				return true
+			}
+		}
+		select {
+		case <-grace.C:
+			return false
+		case <-clientDone:
+			return false
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
 		}
 	}
 }
 
+// reattach waits up to the configured agentWait for the new agent and
+// dials it. The browser is then asked for a fresh token ("token expiring"),
+// which the new agent needs: its boot cutoff rejects tokens issued before it
+// started. When the wait runs out the browser gets "daemon error" and 1013.
+func (s *session) reattach(ctx context.Context, clientDone <-chan struct{}) bool {
+	deadline := time.NewTimer(s.p.agentWait())
+	defer deadline.Stop()
+	tick := time.NewTicker(s.p.poll())
+	defer tick.Stop()
+	for {
+		select {
+		case <-clientDone:
+			return false
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			s.p.Log.Warn("agent pod did not come back; closing the console", "uuid", s.uuid)
+			_ = s.writeClient(Message{Event: "daemon error", Args: []string{"the server agent is unavailable"}})
+			s.closeClient(websocket.CloseTryAgainLater, "server agent unavailable")
+			return false
+		case <-tick.C:
+			t, err := s.p.Agents.Resolve(ctx, s.uuid)
+			if err != nil {
+				continue
+			}
+			conn, err := s.p.dial(s.uuid, t)
+			if err != nil {
+				continue
+			}
+			s.attach(conn, t)
+			_ = s.writeClient(Message{Event: "token expiring"})
+			return true
+		}
+	}
+}
+
+func (p *Proxy) agentWait() time.Duration {
+	if p.Cfg.AgentWait > 0 {
+		return p.Cfg.AgentWait
+	}
+	return 2 * time.Minute
+}
+
+func (p *Proxy) poll() time.Duration {
+	if p.pollEvery > 0 {
+		return p.pollEvery
+	}
+	return time.Second
+}
+
+func (p *Proxy) replaceGrace() time.Duration {
+	if p.grace > 0 {
+		return p.grace
+	}
+	return 3 * time.Second
+}
+
+// pumpAgentToClient passes agent frames through to the browser until either
+// side closes. It reports whether the browser went away, and otherwise
+// returns the agent's read error.
+func (s *session) pumpAgentToClient(agent *websocket.Conn) (clientGone bool, agentErr error) {
+	if agent == nil {
+		return false, nil
+	}
+	for {
+		mt, data, err := agent.ReadMessage()
+		if err != nil {
+			return false, err
+		}
+		if !s.writeClientRaw(mt, data) {
+			return true, nil
+		}
+	}
+}
+
+// writeClientRaw passes a frame to the browser and reports whether it went.
+func (s *session) writeClientRaw(mt int, data []byte) bool {
+	s.clientWriteMu.Lock()
+	defer s.clientWriteMu.Unlock()
+	return s.client.WriteMessage(mt, data) == nil
+}
+
 // pumpClientToAgent forwards browser frames to the agent, inspecting auth and
-// set state, until either side closes.
+// set state, until the browser closes. While the agent pod is replaced the
+// frames are dropped, except set state, which the gateway handles itself.
 func (s *session) pumpClientToAgent(ctx context.Context) {
 	for {
 		mt, data, err := s.client.ReadMessage()
 		if err != nil {
-			s.agentWriteMu.Lock()
-			_ = s.agent.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-			s.agentWriteMu.Unlock()
 			return
 		}
 		if mt != websocket.TextMessage {
@@ -192,20 +373,16 @@ func (s *session) pumpClientToAgent(ctx context.Context) {
 		}
 		var m Message
 		if err := json.Unmarshal(data, &m); err != nil {
-			_ = s.writeAgentRaw(mt, data)
+			s.writeAgentRaw(mt, data)
 			continue
 		}
 		switch m.Event {
 		case "auth":
-			if err := s.handleAuth(m); err != nil {
-				return
-			}
+			s.handleAuth(m)
 		case "set state":
 			s.setState(ctx, strings.Join(m.Args, ""))
 		default:
-			if err := s.writeAgentRaw(mt, data); err != nil {
-				return
-			}
+			s.writeAgentRaw(mt, data)
 		}
 	}
 }
@@ -213,19 +390,18 @@ func (s *session) pumpClientToAgent(ctx context.Context) {
 // handleAuth verifies the Panel-signed JWT of an auth frame, re-signs it with
 // the agent token, remembers its claims for later permission checks and
 // forwards it to the agent. A rejected token is reported to the browser as a
-// "jwt error" and is not an error here; only a failed write to the agent is
-// returned, since that ends the session.
-func (s *session) handleAuth(m Message) error {
+// "jwt error".
+func (s *session) handleAuth(m Message) {
 	claims, resigned, rejection := s.verifyAuth(m)
 	if rejection != "" {
 		_ = s.writeClient(Message{Event: "jwt error", Args: []string{rejection}})
-		return nil
+		return
 	}
 	s.mu.Lock()
 	s.claims = claims
 	s.mu.Unlock()
 	out, _ := json.Marshal(Message{Event: "auth", Args: []string{string(resigned)}})
-	return s.writeAgentRaw(websocket.TextMessage, out)
+	s.writeAgentRaw(websocket.TextMessage, out)
 }
 
 // verifyAuth checks the token of an auth frame against the node token and this
@@ -240,7 +416,10 @@ func (s *session) verifyAuth(m Message) (claims *jwtx.Claims, resigned []byte, r
 	if claims.ServerUUID != s.uuid {
 		return nil, nil, "jwt: server uuid mismatch"
 	}
-	resigned, err = jwtx.Resign(raw, []byte(s.agentToken))
+	s.mu.Lock()
+	token := s.agentToken
+	s.mu.Unlock()
+	resigned, err = jwtx.Resign(raw, []byte(token))
 	if err != nil {
 		return nil, nil, "jwt: re-sign failed"
 	}

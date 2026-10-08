@@ -38,7 +38,7 @@ file against it when the file starts with
 | `image.registry` | `ghcr.io/claiyc/pelican-k8s` | Registry holding the `shim`, `agent`, `gateway` and `operator` images |
 | `image.tag` | chart `appVersion` | Image tag for all four images |
 | `image.pullPolicy` / `image.pullSecrets` | `IfNotPresent` / `[]` | Pull settings for the pelican-k8s images |
-| `serversNamespace.name` | `pelican-servers` | Namespace holding `GameServer` objects and game pods |
+| `serversNamespace.name` | `pelican-servers` | Namespace holding `GameServer` objects, agent pods and game pods |
 | `serversNamespace.create` | `true` | Create the namespace (kept on uninstall) |
 | `serversNamespace.podSecurityLevel` | `baseline` | Pod Security Admission level (`privileged` for HostPort exposure) |
 | `gateway.replicas` / `operator.replicas` | `2` / `2` | Replica counts. Gateway replicas are active/active; operator replicas elect one leader through a Lease, the other is a standby |
@@ -53,8 +53,9 @@ file against it when the file starts with
 | `gateway.allowedOrigins` | `[]` | Extra websocket origins |
 | `gateway.externalIPs` | `[]` | Addresses returned by `/api/system/ips` (falls back to the class `exposure.externalIPs`, then the MetalLB pools with `gateway.metallb.discoverPools`, then node addresses) |
 | `gateway.metallb.discoverPools` / `.poolNames` / `.maxAddresses` | `false` / `[]` / `256` | Offer MetalLB `IPAddressPool` addresses from `/api/system/ips` (empty `poolNames` = every pool) |
-| `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` | How agents reach the gateway |
+| `gateway.remoteURL` | `http://<release>-gateway.<ns>.svc:8081` (`https://` with `tls.enabled`) | How agents reach the gateway; with `tls.enabled` an `https` URL whose host goes on the gateway's certificate |
 | `gateway.resyncInterval` | `15m` | Panel/cluster drift check |
+| `gateway.agentWait` | `120s` | How long open consoles are held while a server's agent pod is replaced |
 | `gateway.extraCA.configMap` / `.key` | `""` / `ca.crt` | ConfigMap with a PEM CA to trust for the Panel's TLS (private CAs, OpenShift router CA) |
 | `gateway.sftp.service.type` / `.port` / `.nodePort` | `NodePort` / `2022` / `30022` | How users reach SFTP |
 | `gateway.sftp.keyOnly` | `false` | Disable SFTP password logins |
@@ -65,12 +66,19 @@ file against it when the file starts with
 | `gateway.logLevel` / `operator.logLevel` | `info` | `debug` for verbose logs |
 | `operator.concurrency` | `4` | Max concurrent reconciles |
 | `operator.leaderElect` | `true` | Leader election |
+| `tls.enabled` | `false` | TLS between gateway, operator, agents and shims from an internal CA the operator keeps (Secret `<release>-ca`); switching it recreates every agent pod and running game pods |
+| `tls.ca.lifetime` | `87600h` | Lifetime of the internal CA the operator creates |
+| `tls.ca.rotation.enabled` / `.overlap` | `false` / `1h` | Replace the internal CA automatically in its last third of life; each step waits `overlap` for Secrets to reach every pod |
+| `tls.certManager.enabled` | `false` | Issue every certificate through cert-manager instead of the internal CA (needs cert-manager) |
+| `tls.certManager.issuerRef` | `{}` | The issuer, e.g. `{name: corp-ca, kind: ClusterIssuer}`; empty creates a self-signed CA and ClusterIssuer `<release>-ca` |
+| `tls.certManager.caNamespace` / `.caDuration` | `cert-manager` / `87600h` | Namespace and lifetime of the chart-created CA (cert-manager's cluster resource namespace) |
 | `agent.*` | see values | Rendered into the agent's Wings `config.yml` (crash detection, SFTP read-only, log count, upload limit, timezone); `agent.extra` is merged verbatim |
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
-| `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods and install Jobs |
+| `agentPriorityClass.create` / `.name` / `.value` | `true` / `pelican-agent` / `1000` | PriorityClass of agent pods (class `agentPriorityClassName`); must rank above game pods |
+| `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods, agent pods and install Jobs |
 | `networkPolicies.enabled` | `true` | Default deny and an install-Job egress policy in the servers namespace, plus the gateway's ingress policy |
 | `openshift.enabled` | `false` | SCC bindings, namespace UID ranges and seccomp handling for OpenShift |
-| `openshift.gameSCC` / `openshift.installerSCC` | `restricted-v2` / `anyuid` | SCCs bound to the game and installer ServiceAccounts |
+| `openshift.gameSCC` / `openshift.installerSCC` | `restricted-v2` / `anyuid` | SCCs bound to the game and agent ServiceAccounts, and to the installer ServiceAccount |
 
 ## Panel node settings
 

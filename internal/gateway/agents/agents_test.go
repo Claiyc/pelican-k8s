@@ -40,10 +40,10 @@ func newClient(t *testing.T, objs ...client.Object) client.Client {
 
 func agentPod(ip string, started bool) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(testUUID), Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(testUUID), Namespace: testNS},
 		Status: corev1.PodStatus{
-			PodIP:                 ip,
-			InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
+			PodIP:             ip,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}},
 		},
 	}
 }
@@ -79,6 +79,20 @@ func TestTargetAddresses(t *testing.T) {
 	if got := v6.SFTPAddr(); got != "[fd00::5]:2022" {
 		t.Errorf("SFTPAddr v6 = %q", got)
 	}
+	if got := v4.WSBase(); got != "ws://10.1.2.3:8080" {
+		t.Errorf("WSBase = %q", got)
+	}
+	secure := Target{UUID: testUUID, PodIP: "10.1.2.3", Namespace: testNS, TLS: true}
+	host := "10-1-2-3.gs-" + testUUID + "-agent." + testNS + ".svc:8080"
+	if got := secure.HTTPBase(); got != "https://"+host {
+		t.Errorf("HTTPBase TLS = %q", got)
+	}
+	if got := secure.WSBase(); got != "wss://"+host {
+		t.Errorf("WSBase TLS = %q", got)
+	}
+	if got := secure.SFTPAddr(); got != "10.1.2.3:2022" {
+		t.Errorf("SFTPAddr TLS = %q", got)
+	}
 }
 
 func TestResolve(t *testing.T) {
@@ -111,13 +125,58 @@ func TestResolve(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := Target{UUID: testUUID, PodIP: "10.0.0.1", TokenID: "tid", Token: "tok"}
+				want := Target{UUID: testUUID, PodIP: "10.0.0.1", TokenID: "tid", Token: "tok", Namespace: testNS}
 				if *got != want {
 					t.Fatalf("target = %+v, want %+v", *got, want)
 				}
 			}
 		})
 	}
+}
+
+// Wait holds a call while the agent pod is not ready and gives up after
+// HTTPWait.
+func TestWait(t *testing.T) {
+	ctx := context.Background()
+	t.Run("agent becomes ready", func(t *testing.T) {
+		c := newClient(t, agentPod("10.0.0.1", false), agentSecret())
+		r := NewResolver(store.New(c, testNS, "default"), time.Second)
+		r.HTTPWait, r.Poll = 5*time.Second, 10*time.Millisecond
+		errc := make(chan error, 1)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			if err := c.Delete(ctx, agentPod("10.0.0.1", false)); err != nil {
+				errc <- err
+				return
+			}
+			errc <- c.Create(ctx, agentPod("10.0.0.1", true))
+		}()
+		got, err := r.Wait(ctx, testUUID)
+		if err := <-errc; err != nil {
+			t.Fatal(err)
+		}
+		if err != nil || got.PodIP != "10.0.0.1" {
+			t.Fatalf("Wait = %+v, %v; want the agent once it is ready", got, err)
+		}
+	})
+	t.Run("gives up", func(t *testing.T) {
+		r := NewResolver(store.New(newClient(t, agentSecret()), testNS, "default"), time.Second)
+		r.HTTPWait, r.Poll = 50*time.Millisecond, 10*time.Millisecond
+		start := time.Now()
+		if _, err := r.Wait(ctx, testUUID); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+		if time.Since(start) < 50*time.Millisecond {
+			t.Fatal("Wait returned before HTTPWait")
+		}
+	})
+	t.Run("other errors are returned at once", func(t *testing.T) {
+		r := NewResolver(store.New(newClient(t, agentPod("10.0.0.1", true)), testNS, "default"), time.Second)
+		r.HTTPWait = time.Hour
+		if _, err := r.Wait(ctx, testUUID); err == nil || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want the missing secret", err)
+		}
+	})
 }
 
 func TestProxy(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
+	"github.com/Claiyc/pelican-k8s/internal/operator/certs"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 )
@@ -46,15 +47,20 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 		snapshotClass = cls.Spec.Storage.VolumeSnapshotClassName
 	}
 
-	// 1. Stop or destroy through the agent while the pod still exists.
-	if err := r.loadPodByUUID(s, uuid); err != nil {
+	// 1. Stop or destroy through the agent while its pod still exists.
+	agentPod, err := r.getPod(s, names.AgentPod(uuid))
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if s.pod != nil && s.pod.DeletionTimestamp.IsZero() {
-		if ready, ip := agentReady(s.pod); ready {
+	gamePod, err := r.getPod(s, names.Pod(uuid))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if agentPod != nil && agentPod.DeletionTimestamp.IsZero() {
+		if ready, ip := agentReady(agentPod); ready {
 			sec := &corev1.Secret{}
 			if err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.AgentSecret(uuid)}, sec); err == nil {
-				agent := r.newAgent(fmt.Sprintf("http://%s:%d", ip, render.AgentPort), string(sec.Data["token"]))
+				agent := r.newAgent(r.agentBase(ip, uuid, gs.Namespace), string(sec.Data["token"]))
 				ctx, cancel := contextWithTimeout(s, 60*time.Second)
 				if policy == v1alpha1.DeletionDelete {
 					if err := agent.Delete(ctx, uuid); err != nil {
@@ -71,13 +77,18 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 	// 2. Remove the workload and network objects.
 	for _, obj := range []client.Object{
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.StatefulSet(uuid)}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentStatefulSet(uuid)}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.ExposureService(uuid)}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentService(uuid)}},
 		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.NetworkPolicy(uuid)}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentNetworkPolicy(uuid)}},
 	} {
 		if err := r.Delete(s.ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
+	}
+	if err := r.deleteCertificate(s); err != nil {
+		return ctrl.Result{}, err
 	}
 	jobs := &batchv1.JobList{}
 	if err := r.List(s.ctx, jobs, client.InNamespace(gs.Namespace), client.MatchingLabels{v1alpha1.LabelServerUUID: uuid}); err == nil {
@@ -86,14 +97,14 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 			_ = r.Delete(s.ctx, &jobs.Items[i], &client.DeleteOptions{PropagationPolicy: &bg})
 		}
 	}
-	if s.pod != nil {
-		// Wait for the pod to go so the volume is released before the PVC is handled.
+	if agentPod != nil || gamePod != nil {
+		// Wait for the pods to go so the volume is released before the PVC is handled.
 		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 	}
 
 	// 3. Apply the deletion policy to the PVC.
 	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.PVC(uuid)}, pvc)
+	err = r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.PVC(uuid)}, pvc)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
@@ -129,20 +140,6 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
-func (r *GameServerReconciler) loadPodByUUID(s *scope, uuid string) error {
-	pod := &corev1.Pod{}
-	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.Pod(uuid)}, pod)
-	if apierrors.IsNotFound(err) {
-		s.pod = nil
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	s.pod = pod
-	return nil
-}
-
 // snapshotBeforeDelete creates the final VolumeSnapshot and reports whether it is ready.
 func (r *GameServerReconciler) snapshotBeforeDelete(s *scope, pvc *corev1.PersistentVolumeClaim, snapshotClass string) (bool, error) {
 	name := pvc.Name + "-final"
@@ -176,4 +173,24 @@ func newVolumeSnapshot(namespace, name, pvcName, class string, labels map[string
 	}
 	u.Object["spec"] = spec
 	return u
+}
+
+// deleteCertificate removes the agent's cert-manager Certificate and then
+// its Secret, which cert-manager leaves behind and the GameServer does not
+// own.
+func (r *GameServerReconciler) deleteCertificate(s *scope) error {
+	if r.CertManager == nil {
+		return nil
+	}
+	name := names.TLSSecret(s.gs.Spec.Panel.UUID)
+	crt := &unstructured.Unstructured{}
+	crt.SetGroupVersionKind(certs.CertificateGVK)
+	crt.SetNamespace(s.gs.Namespace)
+	crt.SetName(name)
+	for _, obj := range []client.Object{crt, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: s.gs.Namespace, Name: name}}} {
+		if err := r.Delete(s.ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }

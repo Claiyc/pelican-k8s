@@ -5,15 +5,22 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelican/wings/remote"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -38,6 +45,14 @@ type Handler struct {
 	Log    *slog.Logger
 	// Metrics counters (optional).
 	OnUnmatched func(method, path string)
+
+	// statusMu serialises the state posts of one server (striped by UUID).
+	statusMu [32]sync.Mutex
+	// RepollEvery and RepollFor pace the polls after a state post the agent
+	// did not answer for (default every second for 30 s).
+	RepollEvery, RepollFor time.Duration
+	// repolling holds the servers whose state is being polled again.
+	repolling sync.Map
 }
 
 type ctxKey struct{}
@@ -226,15 +241,17 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	sc := body.Data
 	h.Agents.Invalidate(uuid)
-	status := map[string]any{"process": map[string]any{"state": sc.NewState, "since": metav1.Now()}}
-	if err := h.Store.PatchStatus(r.Context(), uuid, status); err != nil {
-		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
-	}
-	if sc.PrevState == v1alpha1.ProcessStopping && sc.NewState == v1alpha1.ProcessOffline {
-		if pod, _ := h.Store.Pod(r.Context(), uuid); pod == nil || pod.DeletionTimestamp.IsZero() {
-			if gs, err := h.Store.Get(r.Context(), uuid); err == nil && gs.Spec.Power.Desired != v1alpha1.PowerStopped {
-				_ = h.Store.PatchSpec(r.Context(), uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}})
+	h.recordState(r.Context(), uuid, sc.NewState)
+	if sc.PrevState == v1alpha1.ProcessStopping && sc.NewState == v1alpha1.ProcessOffline && !h.podTerminating(r.Context(), uuid) {
+		// Conditional on the version the rule was checked against: a power
+		// action another replica writes meanwhile is checked again, not overwritten.
+		if err := h.Store.UpdateSpec(r.Context(), uuid, func(gs *v1alpha1.GameServer) (map[string]any, error) {
+			if !intentionalStop(gs) {
+				return nil, nil
 			}
+			return map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}}, nil
+		}); err != nil {
+			h.Log.Warn("cannot record the intentional stop", "uuid", uuid, "error", err)
 		}
 	}
 	// Forward with a detached context: the agent's own client timeout must not
@@ -246,6 +263,149 @@ func (h *Handler) containerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	go h.recordUsage(context.WithoutCancel(r.Context()), uuid)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordState writes a posted process state. The agent sends each change from
+// its own goroutine, so posts can arrive out of order, and with several
+// gateway replicas at different replicas. The state written is the one the
+// agent reports on a fresh poll, and the write applies only if the GameServer
+// has not changed since it was read before the poll: a poll that lost the race
+// to a newer one is retried rather than written over it. Each replica also
+// handles a server's posts one at a time. When the poll fails the posted state
+// is written and the agent is polled again in the background until it answers,
+// because no further post comes while its state stays put.
+func (h *Handler) recordState(ctx context.Context, uuid, posted string) {
+	mu := h.stateLock(uuid)
+	mu.Lock()
+	defer mu.Unlock()
+	h.writeState(ctx, uuid, func(state string, err error) (string, bool) {
+		if err == nil {
+			return state, true
+		}
+		h.Log.Debug("cannot poll the agent, recording the posted state", "uuid", uuid, "error", err)
+		if _, busy := h.repolling.LoadOrStore(uuid, true); !busy {
+			go h.repollState(context.WithoutCancel(ctx), uuid)
+		}
+		return posted, true
+	})
+}
+
+// repollState writes the agent's state once it answers a poll.
+func (h *Handler) repollState(ctx context.Context, uuid string) {
+	defer h.repolling.Delete(uuid)
+	every, total := h.RepollEvery, h.RepollFor
+	if every <= 0 {
+		every = time.Second
+	}
+	if total <= 0 {
+		total = 30 * time.Second
+	}
+	mu := h.stateLock(uuid)
+	for deadline := time.Now().Add(total); time.Now().Before(deadline); {
+		time.Sleep(every)
+		mu.Lock()
+		answered := false
+		h.writeState(ctx, uuid, func(state string, err error) (string, bool) {
+			answered = err == nil
+			return state, answered
+		})
+		mu.Unlock()
+		if answered {
+			return
+		}
+	}
+	h.Log.Warn("the agent did not answer a state poll; status.process keeps the last posted state", "uuid", uuid)
+}
+
+func (h *Handler) stateLock(uuid string) *sync.Mutex {
+	f := fnv.New32a()
+	_, _ = f.Write([]byte(uuid))
+	return &h.statusMu[f.Sum32()%uint32(len(h.statusMu))]
+}
+
+// agentState polls the agent for its process state. The poll is short: it
+// runs under the server's stripe of statusMu, which other servers share.
+func (h *Handler) agentState(ctx context.Context, uuid string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	t, err := h.Agents.Resolve(ctx, uuid)
+	if err != nil {
+		return "", err
+	}
+	body, err := h.Agents.State(ctx, t, true)
+	if err != nil {
+		return "", err
+	}
+	var st struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return "", err
+	}
+	if st.State == "" {
+		return "", errors.New("the agent reported no state")
+	}
+	return st.State, nil
+}
+
+// stateWriteBackoff paces the retries of a state write that lost to another
+// write of the GameServer (another replica's, or any other status change).
+var stateWriteBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 8, Cap: time.Second}
+
+// writeState reads the GameServer, polls the agent, and writes the state pick
+// chooses from the poll's result, conditional on the version read. A write
+// that conflicts starts over with a fresh read and poll. pick returns false
+// to write nothing.
+func (h *Handler) writeState(ctx context.Context, uuid string, pick func(state string, err error) (string, bool)) {
+	err := retry.OnError(stateWriteBackoff, apierrors.IsConflict, func() error {
+		gs, err := h.Store.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		state, ok := pick(h.agentState(ctx, uuid))
+		if !ok {
+			return nil
+		}
+		status := map[string]any{"process": map[string]any{"state": state, "since": metav1.Now()}}
+		return h.Store.PatchStatusAt(ctx, uuid, gs.ResourceVersion, status)
+	})
+	if err != nil {
+		h.Log.Warn("status patch failed", "uuid", uuid, "error", err)
+	}
+}
+
+// restartWindow is how long after the operator issued a restart its stop
+// half is not taken for an intentional stop: Wings waits up to 10 minutes for
+// the process to stop before it starts it again.
+const restartWindow = 10 * time.Minute
+
+// podTerminating reports a game or agent pod that is terminating: a drain or
+// a recreate stops the process without changing what the user wants.
+func (h *Handler) podTerminating(ctx context.Context, uuid string) bool {
+	for _, get := range []func(context.Context, string) (*corev1.Pod, error){h.Store.Pod, h.Store.AgentPod} {
+		if pod, _ := get(ctx, uuid); pod != nil && !pod.DeletionTimestamp.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+// intentionalStop reports whether a stopping → offline transition of a server
+// whose pods are not terminating is a stop the Panel should see as the
+// server's new desired state: the stop command typed into the console, a
+// suspension, or a stop the operator issued for desired Stopped. A stop the
+// operator issued for a pending power generation (a restart into a new game
+// pod under RecreatePending) or the stop half of a restart does not change
+// what the user wants. A console stop within restartWindow of a restart is
+// then settled by crashwatch.
+func intentionalStop(gs *v1alpha1.GameServer) bool {
+	if gs.Spec.Power.Desired == v1alpha1.PowerStopped {
+		return false
+	}
+	if la := gs.Status.Power.LastAction; la != nil && la.Action == "restart" && time.Since(la.At.Time) < restartWindow {
+		return false
+	}
+	return gs.Spec.Power.Generation == gs.Status.Power.ObservedGeneration
 }
 
 // recordUsage samples the agent's utilization into status.usage (throttled by the caller pattern).
@@ -351,16 +511,17 @@ func (h *Handler) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Completion posts clear the pending record.
 	if r.Method == http.MethodPost {
-		var pending []v1alpha1.PendingBackup
-		for _, p := range gs.Status.Backups.Pending {
-			if p.UUID != backup {
-				pending = append(pending, p)
+		if err := h.Store.UpdateBackups(r.Context(), uuid, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup {
+			out := []v1alpha1.PendingBackup{}
+			for _, p := range live {
+				if p.UUID != backup {
+					out = append(out, p)
+				}
 			}
+			return out
+		}); err != nil {
+			h.Log.Warn("cannot clear the pending backup", "uuid", uuid, "backup", backup, "error", err)
 		}
-		if pending == nil {
-			pending = []v1alpha1.PendingBackup{}
-		}
-		_ = h.Store.PatchStatus(r.Context(), uuid, map[string]any{"backups": map[string]any{"pending": pending}})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

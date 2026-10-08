@@ -11,8 +11,10 @@ Security tab). You will get an acknowledgement within a few days.
 The components in this repository: shim, agent, gateway, operator and the Helm
 charts. Issues in Pelican Panel or Wings themselves belong to
 [pelican/panel](https://github.com/pelican/panel) and
-[pelican/wings](https://github.com/pelican/wings); the agent embeds Wings
-unmodified, so fixes there flow in through the pinned version.
+[pelican/wings](https://github.com/pelican/wings). The agent embeds Wings from
+the `pelican-k8s-hooks` branch of [Claiyc/wings](https://github.com/Claiyc/wings),
+which adds opt-in hooks to upstream Wings; fixes there flow in when that branch
+is brought up to date and the pinned version is bumped.
 
 ## Design notes
 

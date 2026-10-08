@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -22,7 +25,7 @@ const (
 	AgentPort      = 8080
 	SFTPPort       = 2022
 	GatewayPort    = 8081
-	ShimSocket     = "/pelican/run/shim.sock"
+	ShimPort       = 8082
 	ArgvFile       = "/pelican/etc/argv"
 	PasswdFile     = "/pelican/etc/passwd"
 	GroupFile      = "/pelican/etc/group"
@@ -41,6 +44,22 @@ const (
 	PartOfValue = "pelican-k8s"
 	LabelName   = "app.kubernetes.io/name"
 )
+
+// Where the certificates are mounted when TLS is on (ARCHITECTURE.md 12.5).
+const (
+	// AgentTLSDir holds the agent's certificate Secret.
+	AgentTLSDir = "/etc/pelican-tls"
+	// GameCAFile is the CA bundle the shim verifies the agent with.
+	GameCAFile = "/pelican/tls/ca.crt"
+)
+
+// AgentURL is the base URL of the agent API on a pod IP without TLS: plain
+// HTTP on the pod network, each request carrying the agent's token, the port
+// admitted only from pelican-k8s pods by the agent pod's NetworkPolicy (12.4).
+// With TLS callers use https and a name from pki.AgentHost instead (12.6).
+func AgentURL(ip string) string {
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, strconv.Itoa(AgentPort))}).String()
+}
 
 // Input is everything needed to render the owned objects.
 type Input struct {
@@ -62,6 +81,14 @@ type Input struct {
 	// nodes that own the allocation IP under NodePort (externalTrafficPolicy
 	// Local) and HostPort exposure.
 	NodeNames []string
+	// GameAffinity is the game pod's pod affinity toward the agent pod.
+	GameAffinity GameAffinity
+	// AgentNode, when set, is the only node the agent pod may run on: the
+	// game pod's node.
+	AgentNode string
+	// TLS secures the agent's HTTP API and the shim connection with the
+	// certificate in names.TLSSecret (ARCHITECTURE.md 12.5).
+	TLS bool
 }
 
 // UUID returns the server UUID.

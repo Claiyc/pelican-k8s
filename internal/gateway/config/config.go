@@ -52,8 +52,15 @@ type Config struct {
 	SFTPKeyOnly bool
 	// StateCacheTTL bounds how often an agent is polled for GET /api/servers/:s.
 	StateCacheTTL time.Duration
+	// AgentWait is how long an open console is held while the server's agent
+	// pod is replaced (ARCHITECTURE.md 5.9).
+	AgentWait time.Duration
 	// Timezone is passed to install Jobs as TZ.
 	Timezone string
+	// TLSDir, when set, holds the gateway's certificate, key and the internal
+	// CA (pki.CertFile, pki.KeyFile, pki.CAFile): the remote API serves TLS
+	// and calls to agents are HTTPS with a client certificate.
+	TLSDir string
 }
 
 // FromEnv builds a Config from environment variables (PELICAN_GW_*).
@@ -77,8 +84,10 @@ func FromEnv() (*Config, error) {
 		SFTPHostKeySecret: envOr("PELICAN_GW_SFTP_HOSTKEY_SECRET", "pelican-gateway-sftp-hostkey"),
 		SFTPKeyOnly:       os.Getenv("PELICAN_GW_SFTP_KEY_ONLY") == "true",
 		Timezone:          envOr("TZ", "UTC"),
+		TLSDir:            os.Getenv("PELICAN_GW_TLS_DIR"),
 		ResyncInterval:    15 * time.Minute,
 		StateCacheTTL:     2 * time.Second,
+		AgentWait:         2 * time.Minute,
 	}
 	if v := os.Getenv("PELICAN_GW_RESYNC_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -86,6 +95,13 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("PELICAN_GW_RESYNC_INTERVAL: %w", err)
 		}
 		c.ResyncInterval = d
+	}
+	if v := os.Getenv("PELICAN_GW_AGENT_WAIT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("PELICAN_GW_AGENT_WAIT: %w", err)
+		}
+		c.AgentWait = d
 	}
 	if v := os.Getenv("PELICAN_GW_METALLB_MAX_ADDRESSES"); v != "" {
 		n, err := strconv.Atoi(v)

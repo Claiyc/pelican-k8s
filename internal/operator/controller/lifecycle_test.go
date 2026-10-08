@@ -280,7 +280,7 @@ func TestFinalizeSnapshotThenDelete(t *testing.T) {
 	if got := strings.Join(h.agent.Calls(), ","); got != "power:kill" {
 		t.Fatalf("agent calls %s: the data must be kept, so the server is killed rather than deleted", got)
 	}
-	if err := h.c.Delete(context.Background(), h.pod()); err != nil {
+	if err := h.deletePods(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -376,7 +376,7 @@ func TestFinalizeSnapshotErrors(t *testing.T) {
 			},
 		})
 		h.reconcile(1)
-		_ = h.c.Delete(context.Background(), h.pod())
+		_ = h.deletePods()
 		_, err := h.reconcileResult()
 		if err == nil || !strings.Contains(err.Error(), "create final snapshot") {
 			t.Fatalf("err = %v", err)
@@ -397,7 +397,7 @@ func TestFinalizeSnapshotErrors(t *testing.T) {
 			},
 		})
 		h.reconcile(1)
-		_ = h.c.Delete(context.Background(), h.pod())
+		_ = h.deletePods()
 		if _, err := h.reconcileResult(); err == nil || !strings.Contains(err.Error(), "api down") {
 			t.Fatalf("err = %v", err)
 		}
@@ -511,7 +511,7 @@ func TestFinalizePVCStepFailures(t *testing.T) {
 		cls.Spec.Storage.DeletionPolicy = policy
 		h := deletingGameServer(t, cls, interceptor.Funcs{})
 		h.reconcile(1) // agent teardown, pod still present
-		if err := h.c.Delete(context.Background(), h.pod()); err != nil {
+		if err := h.deletePods(); err != nil {
 			t.Fatal(err)
 		}
 		h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), funcs)

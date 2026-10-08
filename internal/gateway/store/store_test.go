@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -111,6 +113,9 @@ func TestPod(t *testing.T) {
 	got, err = s.Pod(ctx, uid2)
 	if err != nil || got != nil {
 		t.Fatalf("missing pod must be nil without error, got %v, %v", got, err)
+	}
+	if got, err := s.AgentPod(ctx, uid1); err != nil || got != nil {
+		t.Fatalf("the game pod is not the agent pod: %v, %v", got, err)
 	}
 }
 
@@ -228,6 +233,113 @@ func TestPatchSpecAndStatus(t *testing.T) {
 	}
 }
 
+// A write that lost to another one is decided again on the newer version.
+func TestUpdateSpec(t *testing.T) {
+	s := newStore(t, gameServer(uid1, ""))
+	ctx := context.Background()
+	calls := 0
+	err := s.UpdateSpec(ctx, uid1, func(gs *v1alpha1.GameServer) (map[string]any, error) {
+		calls++
+		gen := gs.Spec.Power.Generation + 1
+		if calls == 1 {
+			// Another replica's power action lands after this read.
+			if err := s.PatchSpec(ctx, uid1, map[string]any{"power": map[string]any{"generation": gen}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return map[string]any{"power": map[string]any{"desired": "Running", "generation": gen}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gs, _ := s.Get(ctx, uid1); calls != 2 || gs.Spec.Power.Generation != 2 || gs.Spec.Power.Desired != "Running" {
+		t.Fatalf("after %d calls: power = %+v, want generation 2", calls, gs.Spec.Power)
+	}
+	// Nothing to write: the version stays.
+	before, _ := s.Get(ctx, uid1)
+	if err := s.UpdateSpec(ctx, uid1, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.Get(ctx, uid1); after.ResourceVersion != before.ResourceVersion {
+		t.Fatal("an empty update was written")
+	}
+	boom := errors.New("boom")
+	if err := s.UpdateSpec(ctx, uid1, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Fatalf("mutate error: %v", err)
+	}
+	if err := s.UpdateSpec(ctx, uid2, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, nil }); !apierrors.IsNotFound(err) {
+		t.Fatalf("unknown server: %v", err)
+	}
+	if err := s.PatchSpecAt(ctx, uid1, "1", map[string]any{"bad": func() {}}); err == nil {
+		t.Fatal("unmarshalable spec succeeded")
+	}
+}
+
+func TestPatchStatusAt(t *testing.T) {
+	s := newStore(t, gameServer(uid1, ""))
+	ctx := context.Background()
+	gs, _ := s.Get(ctx, uid1)
+	if err := s.PatchStatusAt(ctx, uid1, gs.ResourceVersion, map[string]any{"process": map[string]any{"state": "starting"}}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.PatchStatusAt(ctx, uid1, gs.ResourceVersion, map[string]any{"process": map[string]any{"state": "offline"}})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("patch at a stale version: %v, want a conflict", err)
+	}
+	if gs, _ = s.Get(ctx, uid1); gs.Status.Process.State != "starting" {
+		t.Fatalf("status = %+v", gs.Status.Process)
+	}
+	if err := s.PatchStatusAt(ctx, uid1, "1", map[string]any{"bad": func() {}}); err == nil {
+		t.Fatal("unmarshalable status succeeded")
+	}
+}
+
+func TestUpdateBackups(t *testing.T) {
+	gs := gameServer(uid1, "")
+	gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "ended", Agent: "pod-0/0"}, {UUID: "live", Agent: "pod-1/cri://b"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: names.AgentPod(uid1), UID: "pod-1"},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: render.AgentContainer, ContainerID: "cri://b"}}}}
+	s := newStore(t, gs, pod)
+	ctx := context.Background()
+	var seen []string
+	var instance string
+	err := s.UpdateBackups(ctx, uid1, func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup {
+		seen, instance = nil, agent
+		for _, p := range live {
+			seen = append(seen, p.UUID)
+		}
+		return append(live, v1alpha1.PendingBackup{UUID: "new", Agent: agent})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance != "pod-1/cri://b" || len(seen) != 1 || seen[0] != "live" {
+		t.Fatalf("agent %q, live %v", instance, seen)
+	}
+	got, _ := s.Get(ctx, uid1)
+	if p := got.Status.Backups.Pending; len(p) != 2 || p[0].UUID != "live" || p[1].UUID != "new" || p[1].Agent != "pod-1/cri://b" {
+		t.Fatalf("pending = %+v", p)
+	}
+	// An unchanged list is not written; an empty one clears the field.
+	rv := got.ResourceVersion
+	if err := s.UpdateBackups(ctx, uid1, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); got.ResourceVersion != rv {
+		t.Fatalf("unchanged list written: version %s, was %s", got.ResourceVersion, rv)
+	}
+	if err := s.UpdateBackups(ctx, uid1, func([]v1alpha1.PendingBackup, string) []v1alpha1.PendingBackup { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, uid1); len(got.Status.Backups.Pending) != 0 {
+		t.Fatalf("pending = %+v", got.Status.Backups.Pending)
+	}
+	// An unknown server is an error.
+	if err := s.UpdateBackups(ctx, uid2, func(live []v1alpha1.PendingBackup, _ string) []v1alpha1.PendingBackup { return live }); !apierrors.IsNotFound(err) {
+		t.Fatalf("unknown server: %v", err)
+	}
+}
+
 func TestSetCondition(t *testing.T) {
 	s := newStore(t, gameServer(uid1, ""))
 	ctx := context.Background()
@@ -273,8 +385,8 @@ func TestSetCondition(t *testing.T) {
 func TestPodAgentReady(t *testing.T) {
 	podWith := func(ip string, started *bool, name string) *corev1.Pod {
 		return &corev1.Pod{Status: corev1.PodStatus{
-			PodIP:                 ip,
-			InitContainerStatuses: []corev1.ContainerStatus{{Name: name, Started: started}},
+			PodIP:             ip,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: name, Started: started}},
 		}}
 	}
 	now := metav1.Now()

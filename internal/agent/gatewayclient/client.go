@@ -23,8 +23,9 @@ type Client struct {
 }
 
 // New returns a client for the gateway at base (the Wings `remote` URL).
-func New(base, tokenID, token string) *Client {
-	return &Client{base: strings.TrimSuffix(base, "/") + "/api/remote", tokenID: tokenID, token: token, http: &http.Client{Timeout: 15 * time.Second}}
+// transport may be nil for the default.
+func New(base, tokenID, token string, transport http.RoundTripper) *Client {
+	return &Client{base: strings.TrimSuffix(base, "/") + "/api/remote", tokenID: tokenID, token: token, http: &http.Client{Timeout: 15 * time.Second, Transport: transport}}
 }
 
 // PreparedResponse is returned once the gateway recorded the prepared generation.

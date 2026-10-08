@@ -18,6 +18,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
@@ -351,6 +352,34 @@ func TestRequestInstall(t *testing.T) {
 
 	if err := f.sync.RequestInstall(ctx, "missing", false); err == nil {
 		t.Fatal("unknown server must fail")
+	}
+}
+
+// Two power actions on different gateway replicas get two generations: the
+// one that loses the write reads the other's and takes the next.
+func TestPowerTakesItsOwnGeneration(t *testing.T) {
+	f := newFixture(t)
+	f.addPanelServer(uuid, 1024)
+	ctx := context.Background()
+	if err := f.sync.Create(ctx, uuid, false); err != nil {
+		t.Fatal(err)
+	}
+	raced := false
+	f.st.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if _, ok := obj.(*v1alpha1.GameServer); ok && !raced {
+			raced = true
+			other := []byte(`{"spec":{"power":{"desired":"Running","generation":1}}}`)
+			if err := c.Patch(ctx, obj.DeepCopyObject().(client.Object), client.RawPatch(types.MergePatchType, other)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}})
+	if err := f.sync.Power(ctx, uuid, "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.gs(uuid).Spec.Power; !raced || p.Generation != 2 || p.Desired != v1alpha1.PowerStopped {
+		t.Fatalf("power = %+v (raced %v), want the stop at generation 2", p, raced)
 	}
 }
 

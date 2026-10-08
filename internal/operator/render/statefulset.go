@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,18 +13,45 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 )
 
-// StatefulSet renders the game pod controller (section 7.5).
-func StatefulSet(in *Input) *appsv1.StatefulSet {
-	tmpl := PodTemplate(in)
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: in.Meta(names.StatefulSet(in.UUID()), "game"),
+// GameAffinity is the game pod's pod affinity toward its agent pod (section 7.7).
+type GameAffinity int
+
+const (
+	// GameAffinityNone gives the agent's node no advantage.
+	GameAffinityNone GameAffinity = iota
+	// GameAffinityPreferred prefers the agent's node when the game pod fits there.
+	GameAffinityPreferred
+	// GameAffinityRequired keeps the game pod Pending until it fits on the agent's node.
+	GameAffinityRequired
+)
+
+// Component label values of the two pods.
+const (
+	ComponentAgent = "agent"
+	ComponentGame  = "game"
+)
+
+// AgentStatefulSet renders the agent pod controller (section 7.4).
+func AgentStatefulSet(in *Input) *appsv1.StatefulSet {
+	return statefulSet(in, names.AgentStatefulSet(in.UUID()), names.AgentService(in.UUID()), ComponentAgent, AgentPodTemplate(in))
+}
+
+// GameStatefulSet renders the game pod controller (section 7.4).
+func GameStatefulSet(in *Input) *appsv1.StatefulSet {
+	return statefulSet(in, names.StatefulSet(in.UUID()), names.ExposureService(in.UUID()), ComponentGame, GamePodTemplate(in))
+}
+
+func statefulSet(in *Input, name, serviceName, component string, tmpl corev1.PodTemplateSpec) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: in.Meta(name, component),
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:            int32Ptr(1),
-			ServiceName:         names.AgentService(in.UUID()),
-			Selector:            &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: "game"}},
+			ServiceName:         serviceName,
+			Selector:            &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: component}},
 			Template:            tmpl,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
 			PodManagementPolicy: appsv1.ParallelPodManagement,
@@ -33,22 +61,227 @@ func StatefulSet(in *Input) *appsv1.StatefulSet {
 			},
 		},
 	}
-	return sts
 }
 
-// TemplateHash hashes the pod template parts that require a pod recreate
-// (everything except the resources, which are resized in place).
+// TemplateHash hashes the pod template parts that require a pod recreate. It
+// leaves out the game container's resources, which are resized in place, and
+// the placement toward the other pod (the game pod's pod affinity, the agent
+// pod's node affinity), which is set per start (section 7.7). The game pod's
+// node affinity to the allocation nodes stays in. For the agent pod it also
+// leaves out what follows Panel edits of the server (its name, its egg and the
+// scratch size derived from disk_space): those reach the agent pod when it is
+// next replaced, and do not replace it by themselves.
 func TemplateHash(tmpl corev1.PodTemplateSpec) string {
 	c := tmpl.DeepCopy()
+	agent := c.Labels[v1alpha1.LabelComponent] == ComponentAgent
 	for i := range c.Spec.Containers {
-		c.Spec.Containers[i].Resources = corev1.ResourceRequirements{}
+		if c.Spec.Containers[i].Name == GameContainer {
+			c.Spec.Containers[i].Resources = corev1.ResourceRequirements{}
+		}
+	}
+	if agent {
+		delete(c.Annotations, v1alpha1.AnnotationPanelName)
+		delete(c.Labels, v1alpha1.LabelEggUUID)
+		for i := range c.Spec.Volumes {
+			if c.Spec.Volumes[i].Name == "scratch" {
+				clearScratchSize(&c.Spec.Volumes[i])
+			}
+		}
+	}
+	if a := c.Spec.Affinity; a != nil {
+		a.PodAffinity = nil
+		if agent {
+			a.NodeAffinity = nil
+		}
+		if a.NodeAffinity == nil && a.PodAntiAffinity == nil {
+			c.Spec.Affinity = nil
+		}
 	}
 	delete(c.Annotations, AnnotationTemplateHash)
 	return Hash(c)
 }
 
-// PodTemplate renders the game pod template.
-func PodTemplate(in *Input) corev1.PodTemplateSpec {
+// podSpec returns the pod-level settings both pods share (section 7.5).
+func podSpec(in *Input) corev1.PodSpec {
+	cls := in.Class.Spec
+	uid := in.UID
+	spec := corev1.PodSpec{
+		AutomountServiceAccountToken:  boolPtr(false),
+		EnableServiceLinks:            boolPtr(false),
+		TerminationGracePeriodSeconds: int64Ptr(gracePeriod(cls)),
+		RestartPolicy:                 corev1.RestartPolicyAlways,
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot:        boolPtr(true),
+			RunAsUser:           int64Ptr(uid),
+			RunAsGroup:          int64Ptr(uid),
+			FSGroup:             int64Ptr(uid),
+			FSGroupChangePolicy: fsGroupPolicy(corev1.FSGroupChangeOnRootMismatch),
+			SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+		NodeSelector: cls.NodeSelector,
+		Tolerations:  cls.Tolerations,
+	}
+	for _, s := range cls.ImageResolution.PullSecrets {
+		spec.ImagePullSecrets = append(spec.ImagePullSecrets, corev1.LocalObjectReference{Name: s})
+	}
+	return spec
+}
+
+func podTemplate(in *Input, component string, spec corev1.PodSpec) corev1.PodTemplateSpec {
+	annotations := map[string]string{}
+	if in.Settings.Meta.Name != "" {
+		annotations[v1alpha1.AnnotationPanelName] = in.Settings.Meta.Name
+	}
+	tmpl := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: in.Labels(component), Annotations: annotations},
+		Spec:       spec,
+	}
+	tmpl.Annotations[AnnotationTemplateHash] = TemplateHash(tmpl)
+	return tmpl
+}
+
+func gracePeriod(cls v1alpha1.GameServerClassSpec) int64 {
+	if cls.TerminationGracePeriodSeconds <= 0 {
+		return 660
+	}
+	return cls.TerminationGracePeriodSeconds
+}
+
+func pullPolicy(cls v1alpha1.GameServerClassSpec) corev1.PullPolicy {
+	if cls.Images.PullPolicy == "" {
+		return corev1.PullIfNotPresent
+	}
+	return cls.Images.PullPolicy
+}
+
+func restrictedContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: boolPtr(false),
+		ReadOnlyRootFilesystem:   boolPtr(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+func dataVolume(uuid string) corev1.Volume {
+	return corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: names.PVC(uuid)}}}
+}
+
+// AgentPodTemplate renders the agent pod template. In.AgentNode, when set,
+// becomes a required node affinity: the agent follows its game pod.
+func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
+	cls := in.Class.Spec
+	uuid := in.UUID()
+	sa := cls.AgentServiceAccountName
+	if sa == "" {
+		sa = "pelican-agent"
+	}
+	priority := cls.AgentPriorityClassName
+	if priority == "" {
+		priority = "pelican-agent"
+	}
+	agentCfg := cls.AgentConfigMap
+	if agentCfg == "" {
+		agentCfg = "pelican-agent-config"
+	}
+	restricted := restrictedContext()
+	pvcSize := PVCSize(in.Settings.Build, cls.Storage)
+
+	prepare := corev1.Container{
+		Name:            "prepare",
+		Image:           cls.Images.Shim,
+		ImagePullPolicy: pullPolicy(cls),
+		Command:         []string{"/shim", "prepare", "--data", "/data", "--uuid", uuid},
+		SecurityContext: restricted,
+		VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
+		Resources:       smallResources(),
+	}
+	agent := corev1.Container{
+		Name:            AgentContainer,
+		Image:           cls.Images.Agent,
+		ImagePullPolicy: pullPolicy(cls),
+		Args:            []string{"--config", "/etc/pelican/config.yml", "--shim-listen", fmt.Sprintf(":%d", ShimPort)},
+		Ports: []corev1.ContainerPort{
+			{Name: "agent", ContainerPort: AgentPort, Protocol: corev1.ProtocolTCP},
+			{Name: "sftp", ContainerPort: SFTPPort, Protocol: corev1.ProtocolTCP},
+			{Name: "shim", ContainerPort: ShimPort, Protocol: corev1.ProtocolTCP},
+		},
+		StartupProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 2, FailureThreshold: 60},
+		LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 10, FailureThreshold: 6},
+		Lifecycle:     &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/prestop", Port: intstr.FromString("agent")}}},
+		Env: []corev1.EnvVar{
+			{Name: "PELICAN_SERVER_UUID", Value: uuid},
+			{Name: "WINGS_TOKEN_ID", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: names.AgentSecret(uuid)}, Key: "token_id"}}},
+			{Name: "WINGS_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: names.AgentSecret(uuid)}, Key: "token"}}},
+			shimTokenEnv(uuid),
+		},
+		SecurityContext: restricted,
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: AgentRoot},
+			{Name: "scratch", MountPath: ScratchDir},
+			{Name: "agent-config", MountPath: "/etc/pelican", ReadOnly: true},
+			{Name: "tmp", MountPath: "/tmp"},
+		},
+		Resources: agentResources(cls.Resources.Agent),
+	}
+
+	if in.TLS {
+		agent.Args = append(agent.Args, "--tls-dir", AgentTLSDir)
+		for _, p := range []*corev1.Probe{agent.StartupProbe, agent.LivenessProbe} {
+			p.HTTPGet.Scheme = corev1.URISchemeHTTPS
+		}
+		agent.Lifecycle.PreStop.HTTPGet.Scheme = corev1.URISchemeHTTPS
+		agent.VolumeMounts = append(agent.VolumeMounts, corev1.VolumeMount{Name: "tls", MountPath: AgentTLSDir, ReadOnly: true})
+	}
+
+	spec := podSpec(in)
+	spec.ServiceAccountName = sa
+	spec.PriorityClassName = priority
+	spec.InitContainers = []corev1.Container{prepare}
+	spec.Containers = []corev1.Container{agent}
+	spec.Volumes = []corev1.Volume{
+		dataVolume(uuid),
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "agent-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: agentCfg}}}},
+		scratchVolume(cls.Storage, pvcSize),
+	}
+	if in.TLS {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: names.TLSSecret(uuid)}}})
+	}
+	if in.AgentNode != "" {
+		spec.Affinity = &corev1.Affinity{NodeAffinity: nodeNameAffinity([]string{in.AgentNode})}
+	}
+	return podTemplate(in, ComponentAgent, spec)
+}
+
+// AgentInstance names one run of the agent: the agent pod's UID and the
+// ID of its agent container. Work the agent runs in the background
+// (backups, restores) ends with the instance. Empty without a pod.
+func AgentInstance(pod *corev1.Pod) string {
+	if pod == nil || pod.UID == "" {
+		return ""
+	}
+	return string(pod.UID) + "/" + ContainerID(pod, AgentContainer)
+}
+
+// ContainerID returns the runtime ID of the named container in pod, "" without
+// a pod, a status for it or a started container. A node reboot restarts the
+// containers of the pods it keeps, so a new ID is a new run of that container.
+// The restart count cannot tell: it can start again at 0 after a node reboot.
+func ContainerID(pod *corev1.Pod, container string) string {
+	if pod == nil {
+		return ""
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == container {
+			return cs.ContainerID
+		}
+	}
+	return ""
+}
+
+// GamePodTemplate renders the game pod template. In.GameAffinity sets its pod
+// affinity toward the agent pod.
+func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 	cls := in.Class.Spec
 	uuid := in.UUID()
 	uid := in.UID
@@ -59,54 +292,25 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 	if cls.Exposure.Mode == v1alpha1.ExposureHostPort {
 		sa += "-hostport"
 	}
-	grace := cls.TerminationGracePeriodSeconds
-	if grace <= 0 {
-		grace = 660
-	}
 	tmpMiB := cls.Resources.TmpSizeMiB
 	if tmpMiB <= 0 {
 		tmpMiB = 100
-	}
-	agentCfg := cls.AgentConfigMap
-	if agentCfg == "" {
-		agentCfg = "pelican-agent-config"
-	}
-	pullPolicy := cls.Images.PullPolicy
-	if pullPolicy == "" {
-		pullPolicy = corev1.PullIfNotPresent
 	}
 	gamePull := corev1.PullAlways
 	if in.NeverPull || strings.Contains(in.Image, "@sha256:") {
 		gamePull = corev1.PullIfNotPresent
 	}
 	generatePasswd := cls.Security.GeneratePasswdEntry == nil || *cls.Security.GeneratePasswdEntry
-
-	restricted := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: boolPtr(false),
-		ReadOnlyRootFilesystem:   boolPtr(true),
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-	}
-
-	pvcSize := PVCSize(in.Settings.Build, cls.Storage)
-	volumes := []corev1.Volume{
-		{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: names.PVC(uuid)}}},
-		{Name: "pelican", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: resource.NewQuantity(int64(tmpMiB)*1024*1024, resource.BinarySI)}}},
-		{Name: "agent-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: agentCfg}}}},
-		scratchVolume(cls.Storage, pvcSize),
-	}
+	restricted := restrictedContext()
 
 	prepare := corev1.Container{
 		Name:            "prepare",
 		Image:           cls.Images.Shim,
-		ImagePullPolicy: pullPolicy,
-		Command:         []string{"/shim", "prepare", "--bin", "/pelican/bin/shim", "--shared", "/pelican", "--data", "/data", "--uuid", uuid},
+		ImagePullPolicy: pullPolicy(cls),
+		Command:         []string{"/shim", "prepare", "--bin", "/pelican/bin/shim", "--shared", "/pelican"},
 		SecurityContext: restricted,
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "pelican", MountPath: "/pelican"},
-			{Name: "data", MountPath: "/data"},
-		},
-		Resources: smallResources(),
+		VolumeMounts:    []corev1.VolumeMount{{Name: "pelican", MountPath: "/pelican"}},
+		Resources:       smallResources(),
 	}
 
 	probeCmd := []string{"/pelican/bin/shim", "probe", "--out", ArgvFile, "--name", "container", "--home", ContainerHome, "--uid", fmtUID(uid), "--gid", fmtUID(uid)}
@@ -126,47 +330,13 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 		Resources:       smallResources(),
 	}
 
-	always := corev1.ContainerRestartPolicyAlways
-	agent := corev1.Container{
-		Name:            AgentContainer,
-		Image:           cls.Images.Agent,
-		ImagePullPolicy: pullPolicy,
-		RestartPolicy:   &always,
-		Args:            []string{"--config", "/etc/pelican/config.yml", "--shim-socket", ShimSocket},
-		Ports: []corev1.ContainerPort{
-			{Name: "agent", ContainerPort: AgentPort, Protocol: corev1.ProtocolTCP},
-			{Name: "sftp", ContainerPort: SFTPPort, Protocol: corev1.ProtocolTCP},
-		},
-		StartupProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 2, FailureThreshold: 60},
-		LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/healthz", Port: intstr.FromString("agent")}}, PeriodSeconds: 10, FailureThreshold: 6},
-		Lifecycle:     &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/prestop", Port: intstr.FromString("agent")}}},
-		Env: []corev1.EnvVar{
-			{Name: "PELICAN_SERVER_UUID", Value: uuid},
-			{Name: "PELICAN_POD_IMAGE", Value: in.Image},
-			{Name: "PELICAN_POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
-			{Name: "WINGS_TOKEN_ID", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: names.AgentSecret(uuid)}, Key: "token_id"}}},
-			{Name: "WINGS_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: names.AgentSecret(uuid)}, Key: "token"}}},
-			shimTokenEnv(uuid),
-		},
-		SecurityContext: restricted,
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: AgentRoot},
-			{Name: "scratch", MountPath: ScratchDir},
-			{Name: "pelican", MountPath: "/pelican/run", SubPath: "run"},
-			{Name: "agent-config", MountPath: "/etc/pelican", ReadOnly: true},
-			{Name: "tmp", MountPath: "/tmp"},
-		},
-		Resources: agentResources(cls.Resources.Agent),
-	}
-
 	gameMounts := []corev1.VolumeMount{
 		{Name: "data", MountPath: ContainerHome, SubPath: "volumes/" + uuid},
 		{Name: "data", MountPath: "/etc/machine-id", SubPath: "machine-id", ReadOnly: true},
 		{Name: "pelican", MountPath: "/pelican/bin", SubPath: "bin", ReadOnly: true},
 		{Name: "pelican", MountPath: "/pelican/etc", SubPath: "etc", ReadOnly: true},
-		// The agent listens on the shim socket here. Read-only, the game
-		// process cannot replace it; connecting still works.
-		{Name: "pelican", MountPath: "/pelican/run", SubPath: "run", ReadOnly: true},
+		// The shim's readiness file.
+		{Name: "pelican", MountPath: "/pelican/run", SubPath: "run"},
 		{Name: "tmp", MountPath: "/tmp"},
 	}
 	if generatePasswd {
@@ -175,7 +345,14 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			corev1.VolumeMount{Name: "pelican", MountPath: "/etc/group", SubPath: "etc/group", ReadOnly: true},
 		)
 	}
-	gameCmd := []string{"/pelican/bin/shim", "run", "--socket", ShimSocket, "--argv-file", ArgvFile, "--dir", ContainerHome, "--"}
+	agentAddr := fmt.Sprintf("%s:%d", names.AgentService(uuid), ShimPort)
+	gameCmd := []string{"/pelican/bin/shim", "run", "--agent", agentAddr, "--argv-file", ArgvFile, "--dir", ContainerHome, "--grace-period", fmt.Sprintf("%ds", gracePeriod(cls))}
+	if in.TLS {
+		// Only the CA bundle: the agent's key never enters the game pod.
+		gameCmd = append(gameCmd, "--agent-ca", GameCAFile)
+		gameMounts = append(gameMounts, corev1.VolumeMount{Name: "agent-ca", MountPath: path.Dir(GameCAFile), ReadOnly: true})
+	}
+	gameCmd = append(gameCmd, "--")
 	game := corev1.Container{
 		Name:            GameContainer,
 		Image:           in.Image,
@@ -190,71 +367,75 @@ func PodTemplate(in *Input) corev1.PodTemplateSpec {
 			{ResourceName: corev1.ResourceMemory, RestartPolicy: corev1.NotRequired},
 		},
 		// Ready means what the Panel calls "running" (the agent saw the egg's
-		// done line), so a stopped or still starting server shows 1/2 instead of
-		// looking healthy. Readiness never restarts anything: only
-		// liveness and startup probes do, and the game container must never get
-		// either (a stopped server would be killed in a loop). Nothing else may
-		// depend on it: both Services publish not-ready addresses, the operator
-		// judges the agent by its own container status, and the StatefulSet is
-		// OnDelete + Parallel so an unready pod never blocks a recreate.
+		// done line and told the shim), so a starting or stopping server is
+		// not ready. Readiness never restarts anything: only liveness and
+		// startup probes do, and the game container must never get either.
+		// Nothing else may depend on it: the Services publish not-ready
+		// addresses and the StatefulSet is OnDelete + Parallel, so an unready
+		// pod never blocks a recreate. There is no preStop hook: on SIGTERM
+		// the shim stops the process itself with the stop configuration.
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/ready", Port: intstr.FromInt(AgentPort)}},
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/pelican/bin/shim", "ready"}}},
 			PeriodSeconds:    5,
 			TimeoutSeconds:   3,
 			FailureThreshold: 1,
 		},
-		Lifecycle:       &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/internal/v1/prestop", Port: intstr.FromInt(AgentPort)}}},
 		SecurityContext: restricted,
 		Env: []corev1.EnvVar{
 			{Name: "HOME", Value: ContainerHome},
 			{Name: "USER", Value: "container"},
+			// The shim sends the pod UID in its handshake, so the agent and
+			// the operator know which game pod holds the connection.
+			{Name: "PELICAN_POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
+			{Name: "INTERNAL_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 			// Read by the shim, which removes it from the game process environment.
 			shimTokenEnv(uuid),
 		},
 		VolumeMounts: gameMounts,
 	}
 
-	labels := in.Labels("game")
-	annotations := map[string]string{}
-	if in.Settings.Meta.Name != "" {
-		annotations[v1alpha1.AnnotationPanelName] = in.Settings.Meta.Name
+	spec := podSpec(in)
+	spec.ServiceAccountName = sa
+	spec.PriorityClassName = cls.PriorityClassName
+	spec.InitContainers = []corev1.Container{prepare, probe}
+	spec.Containers = []corev1.Container{game}
+	spec.Volumes = []corev1.Volume{
+		dataVolume(uuid),
+		{Name: "pelican", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: resource.NewQuantity(int64(tmpMiB)*1024*1024, resource.BinarySI)}}},
 	}
-	tmpl := corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annotations},
-		Spec: corev1.PodSpec{
-			AutomountServiceAccountToken:  boolPtr(false),
-			ServiceAccountName:            sa,
-			EnableServiceLinks:            boolPtr(false),
-			TerminationGracePeriodSeconds: int64Ptr(grace),
-			RestartPolicy:                 corev1.RestartPolicyAlways,
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot:        boolPtr(true),
-				RunAsUser:           int64Ptr(uid),
-				RunAsGroup:          int64Ptr(uid),
-				FSGroup:             int64Ptr(uid),
-				FSGroupChangePolicy: fsGroupPolicy(corev1.FSGroupChangeOnRootMismatch),
-				SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-			},
-			InitContainers:    []corev1.Container{prepare, probe, agent},
-			Containers:        []corev1.Container{game},
-			Volumes:           volumes,
-			NodeSelector:      cls.NodeSelector,
-			Tolerations:       cls.Tolerations,
-			PriorityClassName: cls.PriorityClassName,
-		},
+	if in.TLS {
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "agent-ca", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: names.TLSSecret(uuid),
+			Items:      []corev1.KeyToPath{{Key: pki.CAFile, Path: path.Base(GameCAFile)}},
+		}}})
 	}
+	affinity := &corev1.Affinity{}
 	if len(in.NodeNames) > 0 {
-		tmpl.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-				MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: in.NodeNames}},
-			}}},
-		}}
+		affinity.NodeAffinity = nodeNameAffinity(in.NodeNames)
 	}
-	for _, s := range cls.ImageResolution.PullSecrets {
-		tmpl.Spec.ImagePullSecrets = append(tmpl.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: s})
+	agentTerm := corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: ComponentAgent}},
+		TopologyKey:   corev1.LabelHostname,
 	}
-	tmpl.Annotations[AnnotationTemplateHash] = TemplateHash(tmpl)
-	return tmpl
+	switch in.GameAffinity {
+	case GameAffinityRequired:
+		affinity.PodAffinity = &corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{agentTerm}}
+	case GameAffinityPreferred:
+		affinity.PodAffinity = &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 100, PodAffinityTerm: agentTerm}}}
+	}
+	if affinity.NodeAffinity != nil || affinity.PodAffinity != nil {
+		spec.Affinity = affinity
+	}
+	return podTemplate(in, ComponentGame, spec)
+}
+
+func nodeNameAffinity(nodes []string) *corev1.NodeAffinity {
+	return &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: nodes}},
+		}}},
+	}
 }
 
 func shimTokenEnv(uuid string) corev1.EnvVar {
@@ -300,6 +481,17 @@ func scratchVolume(s v1alpha1.StorageSpec, pvcSize resource.Quantity) corev1.Vol
 			Spec:       spec,
 		},
 	}}}
+}
+
+// clearScratchSize removes the size from the scratch volume for the template
+// hash.
+func clearScratchSize(v *corev1.Volume) {
+	if v.EmptyDir != nil {
+		v.EmptyDir.SizeLimit = nil
+	}
+	if v.Ephemeral != nil && v.Ephemeral.VolumeClaimTemplate != nil {
+		delete(v.Ephemeral.VolumeClaimTemplate.Spec.Resources.Requests, corev1.ResourceStorage)
+	}
 }
 
 func agentResources(r v1alpha1.ContainerResources) corev1.ResourceRequirements {

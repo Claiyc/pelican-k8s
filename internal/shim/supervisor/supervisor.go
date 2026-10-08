@@ -1,12 +1,14 @@
 // Package supervisor is the shim's process supervisor: it spawns the egg's
 // entrypoint in a PTY, relays its output, forwards stdin and signals, samples
-// resource usage and reports exits over the unix socket protocol. The shim
-// connects to the agent's socket and authenticates with the shared token
-// before it serves requests.
+// resource usage and reports exits over the shim protocol. The shim dials the
+// agent over TCP and both sides authenticate with the shared token before it
+// serves requests. When its container is terminated, the shim stops the
+// process by itself with the stop configuration the agent gave it.
 package supervisor
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +28,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 	"github.com/Claiyc/pelican-k8s/internal/shim/cgroup"
 	"github.com/Claiyc/pelican-k8s/internal/shim/protocol"
 	"github.com/Claiyc/pelican-k8s/internal/shim/ringbuf"
@@ -33,11 +36,27 @@ import (
 
 // Options configure a Supervisor.
 type Options struct {
-	// Socket is the agent's unix socket the shim connects to.
-	Socket string
-	// Token is the shared secret proven to the agent on every connection. It
-	// is never passed to the game process.
+	// Agent is the agent's shim address (host:port) the shim dials.
+	Agent string
+	// Token is the shared secret both sides prove on every connection. It is
+	// never passed to the game process.
 	Token []byte
+	// PodUID is sent to the agent in the handshake.
+	PodUID string
+	// AgentCA, when set, is the CA bundle the agent's certificate must chain
+	// to: the connection is TLS, verified against the host name in Agent. It
+	// is read on every dial, so a renewed bundle needs no restart.
+	AgentCA string
+	// ReadyFile is present exactly while the agent reports the process as
+	// running; the container's readiness probe checks it. Empty disables it.
+	ReadyFile string
+	// GracePeriod is the pod's termination grace period. On SIGTERM the shim
+	// applies the stop configuration and sends SIGTERM to the process group
+	// TermLead before the grace period ends, then SIGKILL after KillGrace.
+	GracePeriod time.Duration
+	// TermLead is how long before the end of GracePeriod the process group
+	// gets SIGTERM when the stop configuration has not ended it.
+	TermLead time.Duration
 	// Argv is the command to run. When empty, ArgvFile is read (a JSON array).
 	Argv []string
 	// ArgvFile holds the argv written by the probe init container.
@@ -52,6 +71,9 @@ type Options struct {
 	StatsInterval time.Duration
 	// KillGrace is the time between SIGTERM and SIGKILL when the shim itself is terminated.
 	KillGrace time.Duration
+	// Stop is the initial stop configuration; the agent replaces it with
+	// start and configure. Without one, termination sends SIGTERM.
+	Stop *protocol.StopConfig
 	// Stdout receives a copy of all PTY output (container logs).
 	Stdout io.Writer
 	// Cgroup samples resource usage; nil disables stats.
@@ -75,6 +97,8 @@ type Supervisor struct {
 	lastExit  *protocol.ExitState
 	oomBase   uint64
 	stopping  bool
+	stop      *protocol.StopConfig
+	state     string        // the agent's process state
 	exited    chan struct{} // closed when the current process has exited
 
 	ring  *ringbuf.Buffer
@@ -108,6 +132,12 @@ func New(o Options) *Supervisor {
 	if o.KillGrace <= 0 {
 		o.KillGrace = 10 * time.Second
 	}
+	if o.TermLead <= 0 {
+		o.TermLead = 20 * time.Second
+	}
+	if o.GracePeriod <= 0 {
+		o.GracePeriod = 660 * time.Second
+	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
@@ -116,6 +146,7 @@ func New(o Options) *Supervisor {
 	}
 	return &Supervisor{
 		o:         o,
+		stop:      o.Stop,
 		log:       o.Logger,
 		ring:      ringbuf.New(o.RingSize),
 		conns:     map[*conn]struct{}{},
@@ -124,13 +155,15 @@ func New(o Options) *Supervisor {
 }
 
 // Run keeps a connection to the agent and serves it until ctx is cancelled or
-// SIGTERM/SIGINT arrives. On termination a running process is stopped
-// (SIGTERM, then SIGKILL after KillGrace) before Run returns.
+// SIGTERM/SIGINT arrives. On termination a running process is stopped with
+// the stop configuration, then SIGTERM and SIGKILL (see Options.GracePeriod),
+// before Run returns.
 func (s *Supervisor) Run(ctx context.Context) error {
 	if len(s.o.Token) == 0 {
 		return errors.New("no shim token configured")
 	}
-	s.log.Info("shim started", "socket", s.o.Socket, "pid", os.Getpid())
+	s.setReady(false)
+	s.log.Info("shim started", "agent", s.o.Agent, "pid", os.Getpid())
 
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -149,10 +182,11 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	case sig := <-sigs:
 		s.log.Info("shim received signal, shutting down", "signal", sig.String())
 	}
-	// Stop connecting first so the agent does not latch onto a shim that is
-	// about to exit; the current connection stays to report the exit.
+	termAt := time.Now()
+	// Keep connecting while the process stops: an agent that restarts
+	// meanwhile sees the shutdown through on its new connection.
+	s.shutdown(termAt)
 	stopConnecting()
-	s.shutdown()
 	// Drop the agent connection; the next shim connects on its own.
 	s.mu.Lock()
 	for c := range s.conns {
@@ -162,17 +196,32 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *Supervisor) shutdown() {
+// shutdown stops a running process by itself, with or without an agent: it
+// reports terminating, applies the stop configuration, waits until TermLead
+// before the grace period (counted from termAt) ends, then sends SIGTERM and,
+// KillGrace later, SIGKILL to the process group.
+func (s *Supervisor) shutdown(termAt time.Time) {
 	s.mu.Lock()
 	s.stopping = true
 	running := s.pid != 0
 	pid := s.pid
 	exited := s.exited
+	ptmx := s.ptmx
+	stop := s.stop
 	s.mu.Unlock()
+	s.setReady(false)
+	s.broadcast(&protocol.Message{Type: protocol.TypeTerminating})
 	if !running {
 		return
 	}
-	s.log.Info("terminating process group", "pid", pid)
+	s.applyStop(pid, ptmx, stop)
+	wait := time.Until(termAt.Add(s.o.GracePeriod - s.o.TermLead))
+	select {
+	case <-exited:
+		return
+	case <-time.After(wait):
+	}
+	s.log.Warn("process did not stop in time, terminating process group", "pid", pid)
 	_ = unix.Kill(-pid, unix.SIGTERM)
 	select {
 	case <-exited:
@@ -186,6 +235,65 @@ func (s *Supervisor) shutdown() {
 	case <-time.After(5 * time.Second):
 		s.log.Error("process still alive after SIGKILL")
 	}
+}
+
+// applyStop runs the stop configuration: the stop command on stdin, or the
+// signal to the process group (Wings' mapping, unknown signals are SIGKILL).
+// Without a configuration the process group gets SIGTERM.
+func (s *Supervisor) applyStop(pid int, ptmx *os.File, stop *protocol.StopConfig) {
+	if stop != nil && stop.Type == protocol.StopCommand && ptmx != nil {
+		s.log.Info("stopping process with the stop command", "pid", pid)
+		if _, err := ptmx.Write([]byte(stop.Value + "\n")); err == nil {
+			return
+		}
+	}
+	sig := unix.SIGTERM
+	if stop != nil && stop.Type == protocol.StopSignal {
+		sig = StopSignal(stop.Value)
+	}
+	s.log.Info("stopping process with a signal", "pid", pid, "signal", unix.SignalName(sig))
+	_ = unix.Kill(-pid, sig)
+}
+
+// StopSignal maps a Wings stop signal value to a signal the way Wings does:
+// SIGABRT, SIGINT (or "C") and SIGTERM are kept, anything else is SIGKILL.
+func StopSignal(value string) unix.Signal {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "SIGABRT":
+		return unix.SIGABRT
+	case "SIGINT", "C":
+		return unix.SIGINT
+	case "SIGTERM":
+		return unix.SIGTERM
+	default:
+		return unix.SIGKILL
+	}
+}
+
+// setReady creates or removes the readiness file.
+func (s *Supervisor) setReady(ready bool) {
+	if s.o.ReadyFile == "" {
+		return
+	}
+	if ready {
+		if err := os.WriteFile(s.o.ReadyFile, nil, 0o600); err != nil {
+			s.log.Warn("cannot write the readiness file", "path", s.o.ReadyFile, "error", err)
+		}
+		return
+	}
+	if err := os.Remove(s.o.ReadyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.log.Warn("cannot remove the readiness file", "path", s.o.ReadyFile, "error", err)
+	}
+}
+
+// updateReady keeps the readiness file in line with the agent's state: present
+// while the agent reports running, the process runs and the shim is not
+// shutting down.
+func (s *Supervisor) updateReady() {
+	s.mu.Lock()
+	ready := s.state == "running" && s.pid != 0 && !s.stopping
+	s.mu.Unlock()
+	s.setReady(ready)
 }
 
 // reaper collects exit statuses of every child, including orphans re-parented
@@ -207,20 +315,19 @@ func (s *Supervisor) reaper(ctx context.Context) {
 	}
 }
 
-// connectLoop dials the agent's socket, answers its challenge and serves the
-// connection, reconnecting until ctx ends (agent restarts, rejected
-// handshakes). A shim that is shutting down stops dialing.
+// connectLoop dials the agent, runs the mutual handshake and serves the
+// connection, reconnecting until ctx ends (agent restarts and replacements,
+// rejected handshakes).
 func (s *Supervisor) connectLoop(ctx context.Context) {
 	backoff := 100 * time.Millisecond
 	for ctx.Err() == nil {
-		var d net.Dialer
-		c, err := d.DialContext(ctx, "unix", s.o.Socket)
+		c, err := s.dial(ctx)
 		if err == nil {
 			enc := protocol.NewEncoder(c)
 			var dec *protocol.Decoder
-			dec, err = protocol.Answer(c, enc, s.o.Token, protocol.HandshakeTimeout)
+			dec, err = protocol.Answer(c, enc, s.o.Token, s.o.PodUID, protocol.HandshakeTimeout)
 			if err == nil {
-				s.log.Info("connected to agent", "socket", s.o.Socket)
+				s.log.Info("connected to agent", "agent", s.o.Agent)
 				since := time.Now()
 				s.serve(c, enc, dec)
 				s.log.Info("agent connection ended")
@@ -234,7 +341,7 @@ func (s *Supervisor) connectLoop(ctx context.Context) {
 			}
 		}
 		if err != nil {
-			s.log.Debug("agent not reachable", "socket", s.o.Socket, "error", err)
+			s.log.Debug("agent not reachable", "agent", s.o.Agent, "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -245,6 +352,33 @@ func (s *Supervisor) connectLoop(ctx context.Context) {
 			backoff *= 2
 		}
 	}
+}
+
+// dial connects to the agent, over TLS when AgentCA is set.
+func (s *Supervisor) dial(ctx context.Context) (net.Conn, error) {
+	d := net.Dialer{Timeout: protocol.HandshakeTimeout}
+	c, err := d.DialContext(ctx, "tcp", s.o.Agent)
+	if err != nil || s.o.AgentCA == "" {
+		return c, err
+	}
+	host, _, err := net.SplitHostPort(s.o.Agent)
+	if err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	roots, err := pki.LoadPool(s.o.AgentCA)
+	if err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: host})
+	hctx, cancel := context.WithTimeout(ctx, protocol.HandshakeTimeout)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("tls: %w", err)
+	}
+	return tc, nil
 }
 
 func (s *Supervisor) serve(c net.Conn, enc *protocol.Encoder, dec *protocol.Decoder) {
@@ -295,10 +429,25 @@ func (s *Supervisor) handle(cn *conn, m *protocol.Message) *protocol.Message {
 		}
 		return &protocol.Message{OK: true, Status: s.status()}
 	case protocol.TypeStart:
+		if m.Stop != nil {
+			s.setStop(m.Stop)
+		}
 		if err := s.start(m.Env); err != nil {
 			return &protocol.Message{Error: err.Error(), Status: s.status()}
 		}
 		return &protocol.Message{OK: true, Status: s.status()}
+	case protocol.TypeConfigure:
+		if m.Stop == nil {
+			return &protocol.Message{Error: "configure without a stop configuration"}
+		}
+		s.setStop(m.Stop)
+		return &protocol.Message{OK: true}
+	case protocol.TypeState:
+		s.mu.Lock()
+		s.state = m.Value
+		s.mu.Unlock()
+		s.updateReady()
+		return &protocol.Message{OK: true}
 	case protocol.TypeStdin:
 		s.mu.Lock()
 		ptmx := s.ptmx
@@ -329,10 +478,17 @@ func (s *Supervisor) handle(cn *conn, m *protocol.Message) *protocol.Message {
 	}
 }
 
+func (s *Supervisor) setStop(c *protocol.StopConfig) {
+	cp := *c
+	s.mu.Lock()
+	s.stop = &cp
+	s.mu.Unlock()
+}
+
 func (s *Supervisor) status() *protocol.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := &protocol.Status{Version: protocol.Version, Running: s.pid != 0, PID: s.pid, LastExit: s.lastExit, Stopping: s.stopping}
+	st := &protocol.Status{Version: protocol.Version, Running: s.pid != 0, PID: s.pid, LastExit: s.lastExit, Stopping: s.stopping, PodUID: s.o.PodUID}
 	if s.pid != 0 {
 		t := s.startedAt
 		st.StartedAt = &t
@@ -574,6 +730,7 @@ func (s *Supervisor) waitLoop(pid int, cmd *exec.Cmd, ptmx *os.File, exited chan
 	s.ptmx = nil
 	s.lastExit = ex
 	s.mu.Unlock()
+	s.updateReady()
 	s.log.Info("process exited", "pid", pid, "code", ex.Code, "signal", ex.Signal, "oom", ex.OOMKilled)
 	// Tell the agents before unblocking shutdown, which may close their connections.
 	s.broadcast(&protocol.Message{Type: protocol.TypeExited, Exit: ex})

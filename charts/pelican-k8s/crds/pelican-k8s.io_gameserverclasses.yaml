@@ -58,6 +58,18 @@ spec:
                 description: AgentConfigMap names the ConfigMap holding the agent's
                   Wings config.yml.
                 type: string
+              agentPriorityClassName:
+                default: pelican-agent
+                description: |-
+                  AgentPriorityClassName is applied to agent pods. It should rank above
+                  game pods, so an agent that follows its game pod to a full node can
+                  preempt lower-priority pods there.
+                type: string
+              agentServiceAccountName:
+                default: pelican-agent
+                description: AgentServiceAccountName is the ServiceAccount of agent
+                  pods.
+                type: string
               exposure:
                 description: ExposureSpec configures how game ports reach players.
                 properties:
@@ -229,10 +241,10 @@ spec:
                     - 100.64.0.0/10
                     description: |-
                       BlockedEgressCIDRs are IPv4 ranges excluded from the 0.0.0.0/0 egress rule
-                      of game pods. Unset means the private and shared ranges (10.0.0.0/8,
-                      172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the usual pod,
-                      service, node and LAN ranges; an explicit empty list blocks only
-                      link-local, which is always blocked. The DNS, remote API and
+                      of game pods and agent pods. Unset means the private and shared ranges
+                      (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the
+                      usual pod, service, node and LAN ranges; an explicit empty list blocks only
+                      link-local. The DNS, remote API and
                       inClusterEgress rules are separate allow rules and still reach
                       destinations in these ranges; allow further private destinations with
                       inClusterEgress.additional.
@@ -241,17 +253,20 @@ spec:
                     type: array
                   enabled:
                     default: true
-                    description: Enabled controls whether per-server NetworkPolicies
-                      are created.
+                    description: |-
+                      Enabled restricts the server's pods with per-server NetworkPolicies.
+                      false makes both policies admit all traffic, which also lifts the
+                      chart's default-deny for these pods.
                     type: boolean
                   inClusterEgress:
-                    description: InClusterEgressSpec lists in-cluster destinations
-                      game pods may reach.
+                    description: |-
+                      InClusterEgressSpec lists in-cluster destinations game pods (GameServers,
+                      Additional) and agent pods (Additional) may reach.
                     properties:
                       additional:
                         items:
-                          description: EgressRule allows game pods to reach an in-cluster
-                            destination.
+                          description: EgressRule allows game pods and agent pods
+                            to reach an in-cluster destination.
                           properties:
                             cidr:
                               type: string
@@ -266,8 +281,8 @@ spec:
                         type: array
                       gameServers:
                         default: true
-                        description: GameServers allows traffic to other GameServer
-                          pods on their allocation ports.
+                        description: GameServers allows game pods to reach other game
+                          pods on any port.
                         type: boolean
                     type: object
                   nodeCIDRs:
@@ -280,10 +295,11 @@ spec:
               nodeSelector:
                 additionalProperties:
                   type: string
-                description: NodeSelector, Tolerations and PriorityClassName are applied
-                  to game pods.
+                description: NodeSelector and Tolerations are applied to both pods
+                  and install Jobs.
                 type: object
               priorityClassName:
+                description: PriorityClassName is applied to game pods.
                 type: string
               resources:
                 description: ResourcesSpec maps Panel build limits to pod resources.
@@ -359,6 +375,17 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                type: object
+              scheduling:
+                description: SchedulingSpec configures where game pods are placed
+                  (ARCHITECTURE.md 7.7).
+                properties:
+                  preferAgentNode:
+                    default: true
+                    description: |-
+                      PreferAgentNode gives the game pod a preferred pod affinity toward its
+                      agent pod's node, so the agent moves only when that node does not fit.
+                    type: boolean
                 type: object
               security:
                 description: SecuritySpec pins the UID game pods run as.
@@ -447,12 +474,14 @@ spec:
                       selects the cluster default.
                     type: string
                   volumeSnapshotClassName:
-                    description: VolumeSnapshotClassName is required for SnapshotThenDelete
-                      and snapshotSchedule.
+                    description: |-
+                      VolumeSnapshotClassName is the VolumeSnapshotClass for SnapshotThenDelete
+                      and snapshotSchedule. Empty uses the cluster's default VolumeSnapshotClass.
                     type: string
                 type: object
               suspendScalesToZero:
-                description: SuspendScalesToZero deletes the pod of a suspended server.
+                description: SuspendScalesToZero also runs no agent pod for a suspended
+                  server.
                 type: boolean
               terminationGracePeriodSeconds:
                 default: 660

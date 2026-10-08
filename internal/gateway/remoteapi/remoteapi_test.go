@@ -3,6 +3,7 @@ package remoteapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -10,16 +11,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pelican/wings/remote"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -57,6 +62,11 @@ type fixture struct {
 	srv      *httptest.Server
 	agent    *httptest.Server
 	agentHit chan string
+	// agentState is the process state the fake agent reports.
+	agentState atomic.Value
+	// onPoll, when set, runs once during the next agent request, after the
+	// reported state was read.
+	onPoll atomic.Pointer[func()]
 }
 
 type options struct {
@@ -91,9 +101,14 @@ func newFixture(t *testing.T, o options) *fixture {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	f := &fixture{t: t, c: c, st: st, fp: fp, agentHit: make(chan string, 16)}
+	f.agentState.Store("running")
 	f.agent = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.agentHit <- r.Method + " " + r.URL.Path
-		_, _ = w.Write([]byte(`{"state":"running","utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`))
+		state := f.agentState.Load()
+		if hook := f.onPoll.Swap(nil); hook != nil {
+			(*hook)()
+		}
+		_, _ = fmt.Fprintf(w, `{"state":%q,"utilization":{"memory_bytes":4096,"cpu_absolute":12.34,"disk_bytes":99}}`, state)
 	}))
 	t.Cleanup(f.agent.Close)
 
@@ -105,6 +120,7 @@ func newFixture(t *testing.T, o options) *fixture {
 	}
 	f.h = &Handler{
 		Store: st, Panel: pc, Agents: res, Log: log,
+		RepollEvery: 10 * time.Millisecond, RepollFor: 300 * time.Millisecond,
 		Sync: &serversync.Syncer{Store: st, Panel: pc, Timezone: "UTC", Log: log},
 		Sftp: fakeSessions{"user:pw": {Server: uuid, User: "u-1"}, "user:foreign": {Server: otherID, User: "u-2"}},
 	}
@@ -137,11 +153,11 @@ func (f *fixture) addPod(ip string) {
 	f.t.Helper()
 	ctx := context.Background()
 	started := true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: agentPodUID}}
 	if err := f.c.Create(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
-	pod.Status = corev1.PodStatus{PodIP: ip, InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
+	pod.Status = corev1.PodStatus{PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}}
 	if err := f.c.Status().Update(ctx, pod); err != nil {
 		f.t.Fatal(err)
 	}
@@ -171,11 +187,14 @@ func (f *fixture) gs() *v1alpha1.GameServer {
 	return gs
 }
 
+// agentPodUID is the UID of the fixture's agent pod.
+const agentPodUID = "agent-pod-1"
+
 func (f *fixture) setPending(uuids ...string) {
 	f.t.Helper()
 	var pending []map[string]any
 	for _, u := range uuids {
-		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now()})
+		pending = append(pending, map[string]any{"uuid": u, "startedAt": metav1.Now(), "agent": agentPodUID + "/"})
 	}
 	if err := f.st.PatchStatus(context.Background(), uuid, map[string]any{"backups": map[string]any{"pending": pending}}); err != nil {
 		f.t.Fatal(err)
@@ -439,6 +458,7 @@ func TestContainerStatusRecordsAndForwards(t *testing.T) {
 	if err := f.st.PatchSpec(context.Background(), uuid, map[string]any{"power": map[string]any{"desired": "Running"}}); err != nil {
 		t.Fatal(err)
 	}
+	f.agentState.Store("starting")
 	code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"offline","new_state":"starting"}}`, bearer)
 	if code != 204 {
 		t.Fatalf("code = %d", code)
@@ -453,14 +473,16 @@ func TestContainerStatusRecordsAndForwards(t *testing.T) {
 	if gs.Spec.Power.Desired != v1alpha1.PowerRunning {
 		t.Fatal("a normal transition must not change the desired power state")
 	}
-	// The usage sample comes from the agent.
-	select {
-	case hit := <-f.agentHit:
-		if hit != "GET /api/servers/"+uuid {
-			t.Fatalf("agent hit %q", hit)
+	// The state is read back from the agent, and the usage sample comes from it.
+	for range 2 {
+		select {
+		case hit := <-f.agentHit:
+			if hit != "GET /api/servers/"+uuid {
+				t.Fatalf("agent hit %q", hit)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("state and usage were not read from the agent")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("usage was not sampled from the agent")
 	}
 	waitFor(t, func() bool {
 		u := f.gs().Status.Usage
@@ -479,32 +501,160 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
+// The agent posts each state change from its own goroutine, so "starting"
+// can arrive after "running". The status keeps the agent's current state.
+func TestContainerStatusOutOfOrder(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	post := func(prev, next string) {
+		t.Helper()
+		body := fmt.Sprintf(`{"data":{"previous_state":%q,"new_state":%q}}`, prev, next)
+		if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
+			t.Fatalf("code = %d", code)
+		}
+	}
+	f.agentState.Store("running")
+	post("starting", "running")
+	post("offline", "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
+		t.Fatalf("process state %q after a late starting post, want running", got)
+	}
+	if !f.fp.WaitForState(uuid, "starting", time.Second) {
+		t.Fatal("the posted change was not forwarded to the Panel")
+	}
+
+	// Without a ready agent the posted state is recorded, and the agent is
+	// polled again until it answers: a late post must not stay recorded.
+	ctx := context.Background()
+	pod, _ := f.st.AgentPod(ctx, uuid)
+	ip := pod.Status.PodIP
+	pod.Status.PodIP = ""
+	_ = f.c.Status().Update(ctx, pod)
+	post("offline", "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessStarting {
+		t.Fatalf("process state %q without an agent, want the posted starting", got)
+	}
+	pod, _ = f.st.AgentPod(ctx, uuid)
+	pod.Status.PodIP = ip
+	_ = f.c.Status().Update(ctx, pod)
+	deadline := time.Now().Add(time.Second)
+	for f.gs().Status.Process.State != v1alpha1.ProcessRunning {
+		if time.Now().After(deadline) {
+			t.Fatalf("process state %q once the agent answers, want running", f.gs().Status.Process.State)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With several gateway replicas, a post's poll can return before another
+// replica's newer poll and be written after it. The older result must not
+// stay recorded.
+func TestContainerStatusAcrossReplicas(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	other := &Handler{Store: f.h.Store, Panel: f.h.Panel, Agents: f.h.Agents, Log: f.h.Log, Sync: f.h.Sync}
+	f.agentState.Store("starting")
+	hook := func() {
+		// The agent reaches running while this replica's poll is in flight,
+		// and the other replica records it first.
+		f.agentState.Store("running")
+		other.recordState(context.Background(), uuid, "running")
+	}
+	f.onPoll.Store(&hook)
+	f.h.recordState(context.Background(), uuid, "starting")
+	if got := f.gs().Status.Process.State; got != v1alpha1.ProcessRunning {
+		t.Fatalf("process state %q, want running", got)
+	}
+}
+
 func TestContainerStatusIntentionalStop(t *testing.T) {
+	body := `{"data":{"previous_state":"stopping","new_state":"offline"}}`
+	stop := func(f *fixture) v1alpha1.PowerState {
+		f.t.Helper()
+		if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
+			f.t.Fatalf("code = %d", code)
+		}
+		return f.gs().Spec.Power.Desired
+	}
+	ctx := context.Background()
+
+	f := newFixture(t, options{})
+	f.withServer(false)
+	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+	if stop(f) != v1alpha1.PowerStopped {
+		t.Fatal("stopping -> offline must record an intentional stop")
+	}
+
+	// A stop the operator issued for a pending power generation (a restart
+	// into a new game pod) is not the user's.
+	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running", "generation": 2}})
+	if stop(f) != v1alpha1.PowerRunning {
+		t.Fatal("a stop for a pending power generation must not change the desired state")
+	}
+
+	// The stop half of a restart the operator issued is not the user's; a
+	// stop long after the restart is.
+	for _, c := range []struct {
+		ago  time.Duration
+		want v1alpha1.PowerState
+	}{{time.Minute, v1alpha1.PowerRunning}, {restartWindow + time.Minute, v1alpha1.PowerStopped}} {
+		f := newFixture(t, options{})
+		f.withServer(false)
+		_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+		_ = f.st.PatchStatus(ctx, uuid, map[string]any{"power": map[string]any{"lastAction": map[string]any{"action": "restart", "at": metav1.NewTime(time.Now().Add(-c.ago))}}})
+		if got := stop(f); got != c.want {
+			t.Fatalf("restart %s ago: desired %s, want %s", c.ago, got, c.want)
+		}
+	}
+
+	// While either pod is terminating (eviction, drain) the stop is not intentional.
+	for _, name := range []string{names.AgentPod(uuid), names.Pod(uuid)} {
+		f := newFixture(t, options{})
+		f.withServer(false)
+		_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+		pod := &corev1.Pod{}
+		if err := f.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, pod); apierrors.IsNotFound(err) {
+			pod = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+			if err := f.c.Create(ctx, pod); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pod.Finalizers = []string{"test/keep"}
+		if err := f.c.Update(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		if stop(f) != v1alpha1.PowerRunning {
+			t.Fatalf("a stop while %s terminates must not change the desired state", name)
+		}
+	}
+}
+
+// A start another gateway replica writes while the intentional stop is
+// decided wins: the rule is checked again on the newer version.
+func TestIntentionalStopLosesToAStart(t *testing.T) {
 	f := newFixture(t, options{})
 	f.withServer(false)
 	ctx := context.Background()
 	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
-	body := `{"data":{"previous_state":"stopping","new_state":"offline"}}`
-	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer); code != 204 {
+	raced := false
+	f.st.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if !raced {
+			raced = true
+			start := []byte(`{"spec":{"power":{"desired":"Running","generation":1}}}`)
+			if err := c.Patch(ctx, obj.DeepCopyObject().(client.Object), client.RawPatch(types.MergePatchType, start)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}})
+	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer); code != 204 {
 		t.Fatalf("code = %d", code)
 	}
-	if f.gs().Spec.Power.Desired != v1alpha1.PowerStopped {
-		t.Fatal("stopping -> offline must record an intentional stop")
-	}
-
-	// While the pod is terminating (eviction) the stop is not intentional.
-	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
-	pod, _ := f.st.Pod(ctx, uuid)
-	pod.Finalizers = []string{"test/keep"}
-	if err := f.c.Update(ctx, pod); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.c.Delete(ctx, pod); err != nil {
-		t.Fatal(err)
-	}
-	f.do("POST", "/api/remote/servers/"+uuid+"/container/status", body, bearer)
-	if f.gs().Spec.Power.Desired != v1alpha1.PowerRunning {
-		t.Fatal("a stop during pod termination must not change the desired state")
+	if p := f.gs().Spec.Power; !raced || p.Desired != v1alpha1.PowerRunning || p.Generation != 1 {
+		t.Fatalf("power = %+v (raced %v), want the start kept", p, raced)
 	}
 }
 
@@ -516,7 +666,7 @@ func TestContainerStatusBadBodyAndNoPod(t *testing.T) {
 	}
 	// Without a pod the stop is still intentional.
 	ctx := context.Background()
-	pod, _ := f.st.Pod(ctx, uuid)
+	pod, _ := f.st.AgentPod(ctx, uuid)
 	_ = f.c.Delete(ctx, pod)
 	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
 	f.do("POST", "/api/remote/servers/"+uuid+"/container/status", `{"data":{"previous_state":"stopping","new_state":"offline"}}`, bearer)
@@ -530,7 +680,7 @@ func TestRecordUsageIgnoresAgentProblems(t *testing.T) {
 	f.withServer(false)
 	// No usable agent: unready pod.
 	ctx := context.Background()
-	pod, _ := f.st.Pod(ctx, uuid)
+	pod, _ := f.st.AgentPod(ctx, uuid)
 	pod.Status.PodIP = ""
 	_ = f.c.Status().Update(ctx, pod)
 	f.h.recordUsage(ctx, uuid)

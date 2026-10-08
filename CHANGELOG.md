@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- BREAKING: every server runs in two pods. The agent pod `gs-<uuid>-agent-0` (StatefulSet `gs-<uuid>-agent`) serves files, SFTP, the console and backups for as long as the server exists. The game pod `gs-<uuid>-0` (StatefulSet `gs-<uuid>`) runs only while the server is on, so a stopped server requests no game resources. `kubectl logs gs-<uuid>-0 -c agent` becomes `kubectl logs gs-<uuid>-agent-0`; `kubectl logs gs-<uuid>-0` still shows the console.
+- BREAKING: the shim reaches the agent over TCP, on port 8082 of the headless Service `gs-<uuid>-agent`, and stops the process with the egg's stop configuration on SIGTERM. Each pod has its own NetworkPolicy: `gs-<uuid>` for the game pod and `gs-<uuid>-agent` for the agent pod.
+- The scheduler places the game pod and the agent follows it. The game pod prefers the agent's node (class `scheduling.preferAgentNode`, default `true`) and requires it while the agent has in-flight work. An agent pod on another node is moved to the game pod's node once it is idle (`AgentRelocating`). Archives of the local backup adapter live on the agent pod's scratch volume and are lost when it moves.
+- Agent pods run under their own ServiceAccount `pelican-agent` (class `agentServiceAccountName`) and PriorityClass `pelican-agent` (class `agentPriorityClassName`, chart `agentPriorityClass`), which ranks above game pods.
+- A process that exits without Wings restarting it leaves the server stopped: after a minute offline the gateway sets `desired: Stopped` and the game pod goes, as the Panel shows it.
+- New conditions `GamePodReady` and `AgentRelocating`; `status.game` records the game pod and its node, `status.agent.node` the agent's.
+
+### Fixed
+- A restart from the Panel no longer records the server as stopped. The gateway took the restart's own `stopping` → `offline` for a stop typed into the console and set `desired: Stopped`, so after a node drain or pod recreation the server stayed off.
+- A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now records the state the agent reports on a fresh poll, and writes it only if the GameServer did not change since before the poll, so with several gateway replicas an older poll cannot overwrite a newer one. When that poll fails it records the posted state and polls the agent again until it answers.
+
+### Added
+- Open consoles survive an agent pod replacement: the gateway holds the browser's websocket for up to `gateway.agentWait` (default `120s`), moves it to the new agent and asks the Panel for a fresh token. File-manager and other HTTP calls wait up to 10 s for the new agent.
+- `tls.enabled` (default `false`) encrypts the traffic between the gateway, the operator, the agents and the shims with TLS 1.3 from an internal CA the operator keeps in Secret `<release>-ca` (#76). The gateway and the operator present client certificates to agents in addition to the agent token, the agent's remote API calls verify the gateway, and the shim verifies its agent. The operator issues and renews the certificates (`gs-<uuid>-tls`, `<release>-gateway-tls`); the components reload them without a restart. `tls.ca.rotation.enabled` (default `false`) replaces the internal CA automatically before it expires, without restarts, and `tls.certManager.enabled` (default `false`) issues every certificate through cert-manager instead (a configured issuer or a chart-created self-signed CA). Agents accept only the gateway's and the operator's client certificates.
+- The *Placement* workflow (`hack/e2e-placement.sh`, `test/placement`) runs the placement scenarios on a kind cluster with three workers.
+
 ## [1.1.0] - 2026-10-06
 
 ### What's Changed

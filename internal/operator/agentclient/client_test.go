@@ -28,7 +28,7 @@ func server(t *testing.T, status int, resp string) (*Client, *seen) {
 		_, _ = w.Write([]byte(resp))
 	}))
 	t.Cleanup(srv.Close)
-	return New(srv.URL+"/", "tok"), s
+	return New(srv.URL+"/", "tok", nil), s
 }
 
 func TestHealthy(t *testing.T) {
@@ -40,11 +40,11 @@ func TestHealthy(t *testing.T) {
 	if c.Healthy(context.Background()) {
 		t.Fatal("503 must be unhealthy")
 	}
-	c = New("http://127.0.0.1:1", "t")
+	c = New("http://127.0.0.1:1", "t", nil)
 	if c.Healthy(context.Background()) {
 		t.Fatal("unreachable must be unhealthy")
 	}
-	c = New("http://bad host", "t")
+	c = New("http://bad host", "t", nil)
 	if c.Healthy(context.Background()) {
 		t.Fatal("bad URL must be unhealthy")
 	}
@@ -66,6 +66,32 @@ func TestGetServer(t *testing.T) {
 	c, _ = server(t, 200, `not json`)
 	if _, err := c.GetServer(context.Background(), "u1"); err == nil {
 		t.Fatal("expected decode error")
+	}
+}
+
+func TestShimAndActivity(t *testing.T) {
+	c, s := server(t, 200, `{"attached":true,"podUID":"p1","running":true}`)
+	sh, err := c.Shim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sh.Attached || sh.PodUID != "p1" || !sh.Running || sh.Terminating {
+		t.Fatalf("shim: %+v", sh)
+	}
+	if s.method != "GET" || s.path != "/internal/v1/shim" || s.auth != "Bearer tok" {
+		t.Fatalf("request: %+v", s)
+	}
+
+	c, s = server(t, 200, `{"busy":true,"reasons":["files","pull"]}`)
+	act, err := c.Activity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !act.Busy || len(act.Reasons) != 2 || act.Reasons[1] != "pull" {
+		t.Fatalf("activity: %+v", act)
+	}
+	if s.path != "/internal/v1/activity" {
+		t.Fatalf("request: %+v", s)
 	}
 }
 
@@ -126,11 +152,11 @@ func TestErrors(t *testing.T) {
 	if errors.Is(err, ErrConflict) || errors.Is(err, ErrUnavailable) {
 		t.Fatal("500 must not map to a sentinel")
 	}
-	c = New("http://127.0.0.1:1", "t")
+	c = New("http://127.0.0.1:1", "t", nil)
 	if err := c.Sync(ctx, "u"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable: %v", err)
 	}
-	c = New("http://bad host", "t")
+	c = New("http://bad host", "t", nil)
 	if err := c.Sync(ctx, "u"); err == nil {
 		t.Fatal("bad URL must error")
 	}

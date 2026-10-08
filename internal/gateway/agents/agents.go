@@ -4,6 +4,7 @@ package agents
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/render"
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 // Target is a resolved agent.
@@ -26,11 +28,38 @@ type Target struct {
 	PodIP   string
 	TokenID string
 	Token   string
+	// PodUID identifies the agent pod, so a caller can tell a replacement.
+	PodUID string
+	// Namespace is the agent pod's namespace.
+	Namespace string
+	// TLS selects HTTPS and WSS to a name the agent's certificate carries
+	// (pki.AgentHost); the resolver's transport dials the pod address.
+	TLS bool
+}
+
+// host returns the agent's host and port.
+func (t Target) host() string {
+	if t.TLS {
+		return net.JoinHostPort(pki.AgentHost(t.PodIP, t.UUID, t.Namespace), strconv.Itoa(render.AgentPort))
+	}
+	return net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
 }
 
 // HTTPBase returns the agent's HTTP base URL.
 func (t Target) HTTPBase() string {
-	return "http://" + net.JoinHostPort(t.PodIP, strconv.Itoa(render.AgentPort))
+	return t.base("http", "https")
+}
+
+// WSBase returns the agent's websocket base URL.
+func (t Target) WSBase() string {
+	return t.base("ws", "wss")
+}
+
+func (t Target) base(plain, secure string) string {
+	if t.TLS {
+		return (&url.URL{Scheme: secure, Host: t.host()}).String()
+	}
+	return (&url.URL{Scheme: plain, Host: t.host()}).String()
 }
 
 // SFTPAddr returns the agent's SFTP address.
@@ -44,6 +73,17 @@ type Resolver struct {
 	Store *store.Store
 	// Transport is shared by all proxied requests.
 	Transport *http.Transport
+
+	// HTTPWait is how long Wait holds a request for an agent that is being
+	// replaced (ARCHITECTURE.md 5.9); Poll is how often it looks.
+	HTTPWait time.Duration
+	Poll     time.Duration
+
+	// tls, when set, returns the client configuration toward agents: their
+	// certificates are verified against the internal CA and the gateway
+	// presents its own (ARCHITECTURE.md 12.5). It is called per connection
+	// so a renewed CA bundle is picked up.
+	tls func() *tls.Config
 
 	cacheMu sync.Mutex
 	cache   map[string]cachedState
@@ -66,14 +106,29 @@ func NewResolver(s *store.Store, ttl time.Duration) *Resolver {
 			ResponseHeaderTimeout: 20 * time.Minute, // compress/decompress can take up to 15 min
 			DisableCompression:    true,
 		},
-		cache: map[string]cachedState{},
-		ttl:   ttl,
+		HTTPWait: 10 * time.Second,
+		Poll:     500 * time.Millisecond,
+		cache:    map[string]cachedState{},
+		ttl:      ttl,
 	}
 }
 
+// EnableTLS makes every call to an agent HTTPS with the client
+// configuration that config returns for each connection. Call it before the
+// resolver is used.
+func (r *Resolver) EnableTLS(config func() *tls.Config) {
+	r.tls = config
+	r.Transport.DialContext = pki.AgentDialer(r.Transport.DialContext)
+	r.Transport.DialTLSContext = pki.TLSDialer(r.Transport.DialContext, config)
+}
+
+// TLSConfig returns the per-connection client configuration toward agents,
+// nil without TLS.
+func (r *Resolver) TLSConfig() func() *tls.Config { return r.tls }
+
 // Resolve returns the agent target of a server, or ErrUnavailable.
 func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
-	pod, err := r.Store.Pod(ctx, uuid)
+	pod, err := r.Store.AgentPod(ctx, uuid)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +140,38 @@ func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token}, nil
+	return &Target{UUID: uuid, PodIP: ip, TokenID: id, Token: token, PodUID: string(pod.UID), Namespace: pod.Namespace, TLS: r.tls != nil}, nil
+}
+
+// Wait is Resolve for HTTP calls: while the agent pod is not ready (being
+// replaced, starting) it retries for up to HTTPWait before returning
+// ErrUnavailable.
+func (r *Resolver) Wait(ctx context.Context, uuid string) (*Target, error) {
+	t, err := r.Resolve(ctx, uuid)
+	if !errors.Is(err, ErrUnavailable) || r.HTTPWait <= 0 {
+		return t, err
+	}
+	poll := r.Poll
+	if poll <= 0 {
+		poll = 500 * time.Millisecond
+	}
+	deadline := time.NewTimer(r.HTTPWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(poll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ErrUnavailable
+		case <-deadline.C:
+			return nil, ErrUnavailable
+		case <-tick.C:
+			t, err = r.Resolve(ctx, uuid)
+			if !errors.Is(err, ErrUnavailable) {
+				return t, err
+			}
+		}
+	}
 }
 
 // Proxy forwards the request to the agent with the agent token. The path and

@@ -24,7 +24,7 @@
       "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     },
     "image": {
-      "description": "Images of the gateway, operator, agent and shim. Every image is `<registry>/<component>:<tag>`; the agent and shim images are written into the default GameServerClass and injected into game pods by the operator.",
+      "description": "Images of the gateway, operator, agent and shim. Every image is `<registry>/<component>:<tag>`; the agent and shim images are written into the default GameServerClass, and the operator runs them in agent pods and game pods.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -56,7 +56,7 @@
       }
     },
     "serversNamespace": {
-      "description": "The namespace holding GameServer objects, game pods, their volumes and install Jobs. It is separate from the release namespace (which holds the gateway and operator).",
+      "description": "The namespace holding GameServer objects, agent pods, game pods, their volumes and install Jobs. It is separate from the release namespace (which holds the gateway and operator).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -188,7 +188,7 @@
           }
         },
         "remoteURL": {
-          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081`.",
+          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081` (`https://` when `tls.enabled` is true). With `tls.enabled` a set value must be an https URL; its host is added to the gateway's certificate next to the Service names.",
           "type": "string",
           "pattern": "^$|^https?://[^\\s/]+(/[^\\s]*)?$",
           "default": ""
@@ -197,6 +197,11 @@
           "description": "How often the gateway re-reads every server from the Panel, as a Go duration (`30s`, `15m`, `1h`).",
           "allOf": [{"$ref": "#/definitions/goDuration"}],
           "default": "15m"
+        },
+        "agentWait": {
+          "description": "How long the gateway holds an open console while the server's agent pod is replaced (moved to the game pod's node, recreated with a new template, evicted), as a Go duration (`30s`, `2m`).",
+          "allOf": [{"$ref": "#/definitions/goDuration"}],
+          "default": "120s"
         },
         "extraCA": {
           "description": "Extra CA certificates trusted for the Panel's TLS (a private CA, the OpenShift router CA). Mounted next to the system bundle.",
@@ -406,7 +411,7 @@
       }
     },
     "agent": {
-      "description": "The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config in the servers namespace and read by the agent sidecar of every game pod.",
+      "description": "The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config in the servers namespace and read by the agent pod of every server.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -463,6 +468,108 @@
         }
       }
     },
+    "tls": {
+      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace or from cert-manager (docs/security.md). Turning it on or off recreates every agent pod, and running game pods with them through the usual RecreatePending path.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Serve the gateway remote API, the agent API and the shim connections over TLS. The operator creates the CA and issues the certificates; nothing has to be supplied.",
+          "type": "boolean",
+          "default": false
+        },
+        "ca": {
+          "description": "The internal CA, when cert-manager is not used (ARCHITECTURE.md 12.6).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lifetime": {
+              "description": "Lifetime of the CA the operator creates, as a Go duration.",
+              "allOf": [{"$ref": "#/definitions/goDuration"}],
+              "default": "87600h"
+            },
+            "rotation": {
+              "description": "Automatic replacement of the CA once it enters the last third of its lifetime: the new CA is trusted everywhere first, then signs, then the old one is dropped, with no pod restarted.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "description": "Rotate the CA automatically.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "overlap": {
+                  "description": "How long each rotation step waits for the new trust bundle to reach every pod, as a Go duration.",
+                  "allOf": [{"$ref": "#/definitions/goDuration"}],
+                  "default": "1h"
+                }
+              }
+            }
+          }
+        },
+        "certManager": {
+          "description": "Issue every certificate through cert-manager instead of the internal CA. Needs cert-manager installed and tls.enabled.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Use cert-manager.",
+              "type": "boolean",
+              "default": false
+            },
+            "issuerRef": {
+              "description": "The issuer, as a Certificate's spec.issuerRef. It must issue in both the release and the servers namespace, so use a ClusterIssuer. Empty: the chart creates a self-signed CA in caNamespace and a ClusterIssuer for it.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {"description": "Issuer name.", "type": "string"},
+                "kind": {"description": "Issuer kind; ClusterIssuer when empty.", "type": "string", "enum": ["", "Issuer", "ClusterIssuer"]},
+                "group": {"description": "Issuer API group; cert-manager.io when empty.", "type": "string"}
+              },
+              "default": {}
+            },
+            "caNamespace": {
+              "description": "cert-manager's cluster resource namespace, where a chart-created CA lives.",
+              "type": "string",
+              "default": "cert-manager"
+            },
+            "caDuration": {
+              "description": "Lifetime of a chart-created CA, as a Go duration. cert-manager renews it on its own; see docs/security.md before shortening it.",
+              "allOf": [{"$ref": "#/definitions/goDuration"}],
+              "default": "87600h"
+            }
+          }
+        }
+      }
+    },
+    "agentPriorityClass": {
+      "description": "PriorityClass of agent pods, written into the default class as agentPriorityClassName. It must rank above game pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "description": "Create the PriorityClass (preemptionPolicy PreemptLowerPriority, not the global default). With false, a PriorityClass named `name` must exist.",
+          "type": "boolean",
+          "default": true
+        },
+        "name": {
+          "description": "Name of the PriorityClass. Names starting with `system-` are reserved by Kubernetes.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "not": {"pattern": "^system-"},
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "default": "pelican-agent"
+        },
+        "value": {
+          "description": "Priority value. Must exceed the priority of game pods (defaultClass.spec.priorityClassName, 0 when unset). User-defined classes are limited to 1000000000.",
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 1000000000,
+          "default": 1000
+        }
+      }
+    },
     "defaultClass": {
       "description": "The default GameServerClass, the cluster policy every GameServer uses unless it names another class. Fields follow the GameServerClass CRD; see docs/classes.md.",
       "type": "object",
@@ -496,7 +603,7 @@
       }
     },
     "networkPolicies": {
-      "description": "Chart-level NetworkPolicies: default deny and install-Job egress in the servers namespace, and the gateway's ingress policy. Per-server policies are controlled by defaultClass.spec.network.enabled.",
+      "description": "Chart-level NetworkPolicies: default deny and install-Job egress in the servers namespace, and the gateway's ingress policy. Per-server policies are controlled by defaultClass.spec.network.enabled; with false they admit all traffic for the server's pods.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -782,7 +889,7 @@
       }
     },
     "gameServerClassSpec": {
-      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap and serviceAccountName are filled in by the chart and cannot be set here.",
+      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap, serviceAccountName, agentServiceAccountName and agentPriorityClassName are filled in by the chart and cannot be set here; agentPriorityClassName comes from agentPriorityClass.name.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -836,18 +943,18 @@
               }
             },
             "deletionPolicy": {
-              "description": "What happens to the server PVC when the GameServer is deleted. SnapshotThenDelete needs volumeSnapshotClassName.",
+              "description": "What happens to the server PVC when the GameServer is deleted. SnapshotThenDelete first takes a VolumeSnapshot of class volumeSnapshotClassName.",
               "type": "string",
               "enum": ["Delete", "Retain", "SnapshotThenDelete"],
               "default": "Delete"
             },
             "volumeSnapshotClassName": {
-              "description": "VolumeSnapshotClass for SnapshotThenDelete and snapshotSchedule.",
+              "description": "VolumeSnapshotClass for SnapshotThenDelete and snapshotSchedule. Empty uses the cluster's default VolumeSnapshotClass.",
               "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
               "default": ""
             },
             "snapshotSchedule": {
-              "description": "Cron schedule of crash-consistent VolumeSnapshots of every server (five fields, or a macro such as @daily). Empty takes no scheduled snapshots. Needs volumeSnapshotClassName.",
+              "description": "Cron schedule of crash-consistent VolumeSnapshots of every server (five fields, or a macro such as @daily). Empty takes no scheduled snapshots. Uses volumeSnapshotClassName.",
               "type": "string",
               "pattern": "^$|^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$|^@every [0-9a-zµ.]+$|^\\S+( +\\S+){4}$",
               "default": "",
@@ -929,12 +1036,12 @@
               "default": true
             },
             "inClusterEgress": {
-              "description": "In-cluster destinations game pods may reach despite blockedEgressCIDRs.",
+              "description": "In-cluster destinations that game pods (gameServers, additional) and agent pods (additional) may reach despite blockedEgressCIDRs.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
                 "gameServers": {
-                  "description": "Allow traffic to other GameServer pods on their allocation ports.",
+                  "description": "Allow game pods to reach other game pods on any port.",
                   "type": "boolean",
                   "default": true
                 },
@@ -962,7 +1069,7 @@
               }
             },
             "blockedEgressCIDRs": {
-              "description": "IPv4 ranges excluded from the internet egress of game pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
+              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. Link-local is blocked as well; an empty list blocks only link-local. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
               "type": "array",
               "items": {"$ref": "#/definitions/ipv4CIDR"},
               "default": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]
@@ -1028,7 +1135,7 @@
               "default": 100
             },
             "agent": {
-              "description": "Resources of the agent sidecar in every game pod.",
+              "description": "Resources of the agent pod of every server. This is all a stopped server requests.",
               "allOf": [{"$ref": "#/definitions/containerResources"}],
               "default": {"cpu": "50m", "memory": "128Mi", "memoryLimit": "512Mi"}
             }
@@ -1107,7 +1214,7 @@
           "additionalProperties": false,
           "properties": {
             "forceDeleteAfter": {
-              "description": "Force-delete a game pod stuck Terminating on a NotReady node after this Go duration (`5m`), so it reschedules. Empty never does. Safe only when the storage fences the old node or the node is confirmed down.",
+              "description": "Force-delete a server's pods stuck Terminating on a NotReady node after this Go duration (`5m`), so it reschedules. Empty never does. Safe only when the storage fences the old node or the node is confirmed down.",
               "anyOf": [{"type": "string", "const": ""}, {"$ref": "#/definitions/goDuration"}],
               "default": ""
             }
@@ -1124,7 +1231,7 @@
               "default": false
             },
             "pullSecrets": {
-              "description": "Names of Secrets in the servers namespace used for registry lookups and as imagePullSecrets of game pods.",
+              "description": "Names of Secrets in the servers namespace used for registry lookups and as imagePullSecrets of agent pods, game pods and install Jobs.",
               "type": "array",
               "items": {"$ref": "#/definitions/dnsSubdomain"},
               "default": []
@@ -1156,18 +1263,30 @@
           "minimum": 0,
           "default": 660
         },
+        "scheduling": {
+          "description": "Placement of game pods relative to their agent pod (ARCHITECTURE.md 7.7).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preferAgentNode": {
+              "description": "Give the game pod a preferred pod affinity toward the node of its agent pod, so the agent moves only when that node does not fit. false gives the agent's node no advantage, so the agent moves more often.",
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
         "suspendScalesToZero": {
-          "description": "Delete the pod of a server suspended in the Panel instead of keeping it stopped.",
+          "description": "Run no agent pod for a server suspended in the Panel.",
           "type": "boolean",
           "default": false
         },
         "nodeSelector": {
-          "description": "Node selector of game pods.",
+          "description": "Node selector of agent pods, game pods and install Jobs.",
           "allOf": [{"$ref": "#/definitions/stringMap"}],
           "default": {}
         },
         "tolerations": {
-          "description": "Tolerations of game pods.",
+          "description": "Tolerations of agent pods, game pods and install Jobs.",
           "type": "array",
           "items": {"$ref": "#/definitions/toleration"},
           "default": []

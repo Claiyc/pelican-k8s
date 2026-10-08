@@ -44,18 +44,31 @@ func startSupervisor(t *testing.T, argv []string, reap bool) (*protocol.Client, 
 	return c, out, cancel
 }
 
-// startSupervisorListener plays the agent: it listens on the socket, lets the
-// supervisor connect and authenticate, and subscribes to its events.
+// startSupervisorListener plays the agent: it listens, lets the supervisor
+// connect and authenticate, and subscribes to its events.
 func startSupervisorListener(t *testing.T, argv []string, reap bool) (*protocol.Client, *safeBuf, context.CancelFunc, *protocol.Listener) {
 	t.Helper()
+	return startWith(t, Options{Argv: argv, ReapOrphans: reap})
+}
+
+// startWith starts a supervisor with o, filling in the agent address, the
+// token, the directory, the output and short shutdown timings.
+func startWith(t *testing.T, o Options) (*protocol.Client, *safeBuf, context.CancelFunc, *protocol.Listener) {
+	t.Helper()
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
-	ln, err := protocol.Listen(sock, testToken, nil)
+	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := &safeBuf{}
-	s := New(Options{Socket: sock, Token: testToken, Argv: argv, Dir: dir, RingSize: 64, Stdout: out, KillGrace: time.Second, ReapOrphans: reap})
+	o.Agent, o.Token, o.Dir, o.RingSize, o.Stdout = ln.Addr(), testToken, dir, 64, out
+	if o.KillGrace == 0 {
+		o.KillGrace = time.Second
+	}
+	if o.GracePeriod == 0 {
+		o.GracePeriod, o.TermLead = 3*time.Second, 2*time.Second
+	}
+	s := New(o)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
@@ -116,11 +129,11 @@ func TestLifecycle(t *testing.T) {
 			if err != nil || st.Running {
 				t.Fatalf("initial status %+v %v", st, err)
 			}
-			st, err = c.Start(ctx, []string{"GREETING=world"})
+			st, err = c.Start(ctx, []string{"GREETING=world"}, nil)
 			if err != nil || !st.Running || st.PID == 0 {
 				t.Fatalf("start %+v %v", st, err)
 			}
-			if _, err := c.Start(ctx, nil); err == nil {
+			if _, err := c.Start(ctx, nil, nil); err == nil {
 				t.Fatal("second start should fail")
 			}
 			waitEvent(t, c, protocol.TypeStarted, 2*time.Second)
@@ -146,7 +159,7 @@ func TestLifecycle(t *testing.T) {
 			}
 
 			// Restart is possible after exit, replay returns the ring buffer tail.
-			if _, err := c.Start(ctx, nil); err != nil {
+			if _, err := c.Start(ctx, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			waitEvent(t, c, protocol.TypeStarted, 2*time.Second)
@@ -165,7 +178,7 @@ func TestSignalAndReplay(t *testing.T) {
 	c, _, _, ln := startSupervisorListener(t, []string{"/bin/sh", "-c", `trap 'echo term; exit 0' TERM; echo ready; while true; do sleep 0.1; done`}, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := c.Start(ctx, nil); err != nil {
+	if _, err := c.Start(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var collected string
@@ -217,7 +230,7 @@ func TestShutdownTerminatesProcess(t *testing.T) {
 	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
 	ctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer ccancel()
-	if _, err := c.Start(ctx, nil); err != nil {
+	if _, err := c.Start(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitEvent(t, c, protocol.TypeStarted, 2*time.Second)
@@ -227,13 +240,131 @@ func TestShutdownTerminatesProcess(t *testing.T) {
 		collected += string(ev.Data)
 	}
 	start := time.Now()
-	cancel() // Run must SIGTERM, wait KillGrace (1s), then SIGKILL
+	// Without a stop configuration Run sends SIGTERM, again TermLead before
+	// the grace period ends (after 1s), then SIGKILL after KillGrace (1s).
+	cancel()
+	waitEvent(t, c, protocol.TypeTerminating, 2*time.Second)
 	ev := waitEvent(t, c, protocol.TypeExited, 10*time.Second)
 	if ev.Exit.Signal != "SIGKILL" {
 		t.Fatalf("expected SIGKILL after grace, got %+v", ev.Exit)
 	}
-	if time.Since(start) < 900*time.Millisecond {
+	if time.Since(start) < 1900*time.Millisecond {
 		t.Fatal("killed before grace period")
+	}
+}
+
+// On termination the shim stops the process with the stop command it holds,
+// without any help from the agent.
+func TestShutdownRunsStopCommand(t *testing.T) {
+	c, _, cancel, _ := startWith(t, Options{Argv: []string{"/bin/sh", "-c", `echo ready; while read line; do if [ "$line" = "halt" ]; then echo bye; exit 0; fi; done`}, GracePeriod: time.Minute, TermLead: 20 * time.Second})
+	ctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ccancel()
+	if _, err := c.Start(ctx, nil, &protocol.StopConfig{Type: protocol.StopCommand, Value: "halt"}); err != nil {
+		t.Fatal(err)
+	}
+	var collected string
+	for !strings.Contains(collected, "ready") {
+		collected += string(waitEvent(t, c, protocol.TypeOutput, 3*time.Second).Data)
+	}
+	start := time.Now()
+	cancel()
+	waitEvent(t, c, protocol.TypeTerminating, 2*time.Second)
+	ev := waitEvent(t, c, protocol.TypeExited, 5*time.Second)
+	if ev.Exit.Code != 0 || ev.Exit.Signal != "" {
+		t.Fatalf("exit %+v", ev.Exit)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("the stop command did not end the process; it waited for the grace period")
+	}
+}
+
+// configure replaces the stop configuration; a signal configuration is sent
+// to the process group.
+func TestShutdownRunsConfiguredStopSignal(t *testing.T) {
+	c, _, cancel, _ := startWith(t, Options{Argv: []string{"/bin/sh", "-c", `trap 'echo int; exit 7' INT; trap '' TERM; echo ready; while true; do sleep 0.1; done`}, GracePeriod: time.Minute, TermLead: 20 * time.Second})
+	ctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ccancel()
+	if _, err := c.Start(ctx, nil, &protocol.StopConfig{Type: protocol.StopCommand, Value: "stop"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Configure(ctx, protocol.StopConfig{Type: protocol.StopSignal, Value: "SIGINT"}); err != nil {
+		t.Fatal(err)
+	}
+	var collected string
+	for !strings.Contains(collected, "ready") {
+		collected += string(waitEvent(t, c, protocol.TypeOutput, 3*time.Second).Data)
+	}
+	cancel()
+	ev := waitEvent(t, c, protocol.TypeExited, 5*time.Second)
+	if ev.Exit.Code != 7 {
+		t.Fatalf("exit %+v", ev.Exit)
+	}
+}
+
+// A shim with no process exits at once on termination.
+func TestShutdownWithoutProcessIsImmediate(t *testing.T) {
+	c, _, cancel, _ := startWith(t, Options{Argv: []string{"/bin/true"}, GracePeriod: time.Minute, TermLead: 20 * time.Second})
+	start := time.Now()
+	cancel()
+	waitEvent(t, c, protocol.TypeTerminating, 2*time.Second)
+	select {
+	case <-c.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the shim kept running")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("shutdown waited without a process")
+	}
+}
+
+// The readiness file follows the state the agent pushes, and only while a
+// process runs.
+func TestReadyFile(t *testing.T) {
+	ready := filepath.Join(t.TempDir(), "ready")
+	c, _, _, _ := startWith(t, Options{Argv: []string{"/bin/sh", "-c", `read line; exit 0`}, ReadyFile: ready, PodUID: "pod-7"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	exists := func() bool { _, err := os.Stat(ready); return err == nil }
+
+	if err := c.State(ctx, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if exists() {
+		t.Fatal("ready without a process")
+	}
+	st, err := c.Start(ctx, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PodUID != "pod-7" {
+		t.Fatalf("status pod UID %q", st.PodUID)
+	}
+	if err := c.State(ctx, "starting"); err != nil {
+		t.Fatal(err)
+	}
+	if exists() {
+		t.Fatal("ready while starting")
+	}
+	if err := c.State(ctx, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if !exists() {
+		t.Fatal("not ready while running")
+	}
+	if err := c.Stdin(ctx, []byte("x\n")); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent(t, c, protocol.TypeExited, 5*time.Second)
+	if exists() {
+		t.Fatal("ready after the process exited")
+	}
+}
+
+func TestStopSignal(t *testing.T) {
+	for in, want := range map[string]syscall.Signal{"SIGABRT": syscall.SIGABRT, "sigint": syscall.SIGINT, "C": syscall.SIGINT, "SIGTERM": syscall.SIGTERM, "SIGHUP": syscall.SIGKILL, "": syscall.SIGKILL} {
+		if got := StopSignal(in); got != want {
+			t.Errorf("StopSignal(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -272,7 +403,7 @@ func TestReaperKeepsReapingWhileIdle(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := c.Start(ctx, nil); err != nil {
+	if _, err := c.Start(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if m := waitEvent(t, c, protocol.TypeExited, 5*time.Second); m.Exit == nil || m.Exit.Code != 7 {
@@ -341,7 +472,7 @@ func TestTokenNotInProcessEnvironment(t *testing.T) {
 	c, _, _ := startSupervisor(t, []string{"/bin/sh", "-c", `echo "token:${` + protocol.TokenEnv + `:-none}:$GREETING"`}, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := c.Start(ctx, []string{protocol.TokenEnv + "=from-agent", "GREETING=hi"}); err != nil {
+	if _, err := c.Start(ctx, []string{protocol.TokenEnv + "=from-agent", "GREETING=hi"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	var collected string
@@ -364,7 +495,7 @@ func TestWithoutKey(t *testing.T) {
 // Without a token the shim refuses to run rather than serve an
 // unauthenticated channel.
 func TestRunRequiresToken(t *testing.T) {
-	s := New(Options{Socket: filepath.Join(t.TempDir(), "shim.sock"), Argv: []string{"/bin/true"}})
+	s := New(Options{Agent: "127.0.0.1:1", Argv: []string{"/bin/true"}})
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("Run without a token succeeded")
 	}
@@ -374,15 +505,14 @@ func TestRunRequiresToken(t *testing.T) {
 // agent's handshake: the agent never hands its connection out.
 func TestImpostorIsNotAccepted(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "shim.sock")
-	ln, err := protocol.Listen(sock, testToken, nil)
+	ln, err := protocol.Listen("127.0.0.1:0", testToken, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	impostor := New(Options{Socket: sock, Token: []byte("guessed"), Argv: []string{"/bin/true"}, Dir: dir})
+	impostor := New(Options{Agent: ln.Addr(), Token: []byte("guessed"), Argv: []string{"/bin/true"}, Dir: dir})
 	go func() { _ = impostor.Run(ctx) }()
 	actx, acancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer acancel()

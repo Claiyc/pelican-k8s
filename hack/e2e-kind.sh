@@ -161,22 +161,34 @@ power() {
   echo "power $1 -> $code"; [[ "$code" = "$2" ]]
 }
 curl -sf -o /dev/null -X POST -H "Authorization: Bearer $TOKEN" --data-binary 'eula=true' "$G/api/servers/$UUID/files/write?file=%2Feula.txt"
+# A stopped server keeps its agent pod and loses its game pod once the process is offline.
+game_pod_gone() {
+  kubectl -n pelican-servers wait --for=delete "pod/gs-$UUID-0" --timeout=180s
+  kubectl -n pelican-servers get "pod/gs-$UUID-agent-0" >/dev/null
+  echo "game pod gone, agent pod kept"
+}
 
 log "test/e2e against the gateway"
 PELICAN_E2E_GATEWAY=$G PELICAN_E2E_TOKEN=$TOKEN PELICAN_E2E_PANEL_URL=http://pelican-panel.pelican.svc PELICAN_E2E_SERVER=$UUID \
   PELICAN_E2E_SFTP=127.0.0.1:12022 PELICAN_E2E_SFTP_USER=admin PELICAN_E2E_SFTP_PASSWORD="$ADMIN_PW" \
   go test -count=1 -tags e2e ./test/e2e -v -timeout 20m
+# The power test ends with a stop over the websocket.
+game_pod_gone
 
 log "Panel-side contract: status, backup, suspension, deletion"
 power start 202
 for i in $(seq 1 60); do st=$(panel_status); [[ "$st" = running ]] && break; sleep 5; done
 echo "panel retrieveStatus=$st"; [[ "$st" = running ]]
+an=$(kubectl -n pelican-servers get "pod/gs-$UUID-agent-0" -o jsonpath='{.spec.nodeName}')
+gn=$(kubectl -n pelican-servers get "pod/gs-$UUID-0" -o jsonpath='{.spec.nodeName}')
+echo "agent pod on $an, game pod on $gn"; [[ -n "$gn" && "$an" = "$gn" ]]
 tinker '$s = App\Models\Server::find(1); $s->update(["backup_limit" => 3]); $b = app(App\Services\Backups\InitiateBackupService::class)->setIgnoredFiles([])->handle($s->fresh(), "contract"); echo "backup ", $b->uuid, PHP_EOL;'
 for i in $(seq 1 30); do ok=$(tinker 'echo App\Models\Backup::latest("id")->first()->is_successful ? "ok" : "pending", PHP_EOL;'); [[ "$ok" = ok ]] && break; sleep 5; done
 echo "backup=$ok"; [[ "$ok" = ok ]]
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Suspend); echo "suspended", PHP_EOL;'
 for i in $(seq 1 40); do st=$(panel_status); [[ "$st" = offline ]] && break; sleep 5; done
 echo "after suspend=$st"; [[ "$st" = offline ]]
+game_pod_gone
 power start 400
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Unsuspend); echo "unsuspended", PHP_EOL;'
 tinker 'app(App\Services\Servers\ServerDeletionService::class)->handle(App\Models\Server::find(1)); echo App\Models\Server::count(), " servers left", PHP_EOL;'

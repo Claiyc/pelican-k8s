@@ -1,10 +1,11 @@
-// Package protocol defines the newline-delimited JSON protocol spoken over the
-// shim socket. The agent listens on the socket and sends requests; the shim
-// connects, proves knowledge of the shared token (auth.go) and answers them.
+// Package protocol defines the newline-delimited JSON protocol spoken between
+// the agent and the shim over TCP. The agent listens and sends requests; the
+// shim dials, both sides prove knowledge of the shared token (auth.go), and
+// the shim answers the requests.
 //
 // Requests carry an ID; the shim answers every request with a Reply of the same
-// ID. Events (output, stats, started, exited) are pushed to every connection
-// without a request.
+// ID. Events (output, stats, started, exited, terminating) are pushed to every
+// subscribed connection without a request.
 package protocol
 
 import (
@@ -19,7 +20,9 @@ import (
 
 // Message types.
 const (
-	TypeStart     = "start"     // request: start the process with the given environment
+	TypeStart     = "start"     // request: start the process with the given environment and stop configuration
+	TypeConfigure = "configure" // request: replace the stop configuration
+	TypeState     = "state"     // request: the agent's process state (drives the readiness file)
 	TypeStdin     = "stdin"     // request: write bytes to the process stdin
 	TypeSignal    = "signal"    // request: send a signal to the process group
 	TypeKill      = "kill"      // request: SIGKILL the process group
@@ -30,10 +33,27 @@ const (
 	TypeStarted   = "started"   // event: process spawned
 	TypeExited    = "exited"    // event: process exited
 	TypeStats     = "stats"     // event: resource usage sample
+	// TypeTerminating is the event sent when the shim received SIGTERM and
+	// stops the process by itself.
+	TypeTerminating = "terminating"
 )
 
 // Version of the protocol; bumped on incompatible changes.
-const Version = 1
+const Version = 2
+
+// Stop types of a StopConfig, as in Wings' process configuration.
+const (
+	StopCommand = "command"
+	StopSignal  = "signal"
+)
+
+// StopConfig is Wings' stop configuration: a command written to stdin, or a
+// signal sent to the process group. The shim keeps it to stop the process by
+// itself when its container is terminated.
+type StopConfig struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
 
 // Message is the wire format for both directions.
 type Message struct {
@@ -42,10 +62,16 @@ type Message struct {
 	ID uint64 `json:"id,omitempty"`
 
 	// Request fields.
-	Env    []string `json:"env,omitempty"`    // start
-	Data   []byte   `json:"data,omitempty"`   // stdin, output (base64 in JSON)
-	Signal string   `json:"signal,omitempty"` // signal
-	Replay bool     `json:"replay,omitempty"` // subscribe
+	Env    []string    `json:"env,omitempty"`    // start
+	Stop   *StopConfig `json:"stop,omitempty"`   // start, configure
+	Value  string      `json:"value,omitempty"`  // state
+	Data   []byte      `json:"data,omitempty"`   // stdin, output (base64 in JSON)
+	Signal string      `json:"signal,omitempty"` // signal
+	Replay bool        `json:"replay,omitempty"` // subscribe
+
+	// Handshake fields.
+	Challenge []byte `json:"challenge,omitempty"`
+	PodUID    string `json:"podUID,omitempty"`
 
 	// Reply fields.
 	OK     bool    `json:"ok,omitempty"`
@@ -67,6 +93,8 @@ type Status struct {
 	LastExit  *ExitState `json:"lastExit,omitempty"`
 	// Stopping is set once the shim itself received SIGTERM.
 	Stopping bool `json:"stopping,omitempty"`
+	// PodUID is the UID of the shim's pod.
+	PodUID string `json:"podUID,omitempty"`
 }
 
 // ExitState is the exit of the supervised process.

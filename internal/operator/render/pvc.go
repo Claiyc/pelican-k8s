@@ -33,7 +33,7 @@ func AgentSecret(in *Input, tokenID, token string) *corev1.Secret {
 	}
 }
 
-// ShimSecret renders the Secret with the shim socket token. The agent and the
+// ShimSecret renders the Secret with the shim token. The agent and the
 // game container get it as PELICAN_SHIM_TOKEN; the shim keeps it from the game
 // process.
 func ShimSecret(in *Input, token string) *corev1.Secret {
@@ -41,6 +41,16 @@ func ShimSecret(in *Input, token string) *corev1.Secret {
 		ObjectMeta: in.Meta(names.ShimSecret(in.UUID()), "agent"),
 		Type:       corev1.SecretTypeOpaque,
 		StringData: map[string]string{ShimTokenKey: token},
+	}
+}
+
+// TLSSecret renders the agent's certificate Secret with the given data
+// (pki.CertFile, pki.KeyFile, pki.CAFile).
+func TLSSecret(in *Input, data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: in.Meta(names.TLSSecret(in.UUID()), "agent"),
+		Type:       corev1.SecretTypeTLS,
+		Data:       data,
 	}
 }
 

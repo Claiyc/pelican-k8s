@@ -17,7 +17,8 @@
 
 pelican-k8s presents a whole cluster to the Panel as a single Wings node.
 Each game server becomes a `GameServer` custom resource, which an operator
-reconciles into an ordinary pod with Wings embedded as a library. The Panel,
+reconciles into ordinary pods: a small agent pod with Wings embedded as a
+library, and a game pod that exists only while the server is on. The Panel,
 the eggs and the Wings core logic stay unmodified.
 
 ```
@@ -25,16 +26,17 @@ Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
                         │                           │
                         │ proxied data path         │ operator reconciles
                         ▼                           ▼
-                      agent ◀──── unix socket ───▶ shim ──▶ egg entrypoint
-              (Wings as a library)    (PID 1 of the game container)
+                      agent ◀──── shim protocol ──── shim ──▶ egg entrypoint
+              (Wings as a library,          (PID 1 of the game pod,
+               always running)               only while the server is on)
 ```
 
 | Component | What it does |
 |---|---|
 | **gateway** | Looks like one Wings node to the Panel. Turns Panel calls into `GameServer` changes and proxies console, files and SFTP to the right pod |
-| **operator** | Reconciles each `GameServer` into a StatefulSet, PVC, Services, NetworkPolicy and install Jobs |
-| **agent** | [Wings](https://github.com/pelican/wings) as a Go library, running as a sidecar for exactly one server |
-| **shim** | Entrypoint of the game container: PTY, signals, exit codes, stats and the console buffer |
+| **operator** | Reconciles each `GameServer` into an agent pod, a game pod per run, PVC, Services, NetworkPolicies and install Jobs |
+| **agent** | [Wings](https://github.com/pelican/wings) as a Go library, one pod per server: files, SFTP, console and backups whether the game runs or not |
+| **shim** | Entrypoint of the game pod: PTY, signals, exit codes, stats and the console buffer |
 
 [ARCHITECTURE.md](ARCHITECTURE.md) describes how the system works.
 

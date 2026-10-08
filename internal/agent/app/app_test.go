@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
 var fullBootDone atomic.Bool
@@ -40,7 +43,7 @@ type gateway struct {
 	listCalls atomic.Int32
 }
 
-func newGateway(t *testing.T, withServer bool) *gateway {
+func newGateway(t *testing.T, withServer bool, tlsConfig *tls.Config) *gateway {
 	t.Helper()
 	g := &gateway{}
 	list := []map[string]any{}
@@ -59,7 +62,7 @@ func newGateway(t *testing.T, withServer bool) *gateway {
 		})
 	}
 	g.servers.Store(&list)
-	g.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.requests.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/remote/servers" {
@@ -75,8 +78,47 @@ func newGateway(t *testing.T, withServer bool) *gateway {
 		}
 		_, _ = io.WriteString(w, "{}")
 	}))
+	if tlsConfig != nil {
+		g.TLS = tlsConfig
+		g.StartTLS()
+	} else {
+		g.Start()
+	}
 	t.Cleanup(g.Close)
 	return g
+}
+
+// testPKI writes the agent's certificate directory and returns a gateway
+// server configuration for "localhost" and the gateway's client configuration
+// toward the agent, all from one CA.
+func testPKI(t *testing.T) (agentDir string, gatewayServer, gatewayClient *tls.Config) {
+	t.Helper()
+	now := time.Now()
+	ca, _, err := pki.NewCA(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentDir = t.TempDir()
+	certPEM, keyPEM, err := ca.Issue("agent", []string{"localhost"}, pki.Server, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{pki.CertFile: certPEM, pki.KeyFile: keyPEM, pki.CAFile: ca.CertPEM} {
+		if err := os.WriteFile(filepath.Join(agentDir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	certPEM, keyPEM, err = ca.Issue(pki.GatewayName, []string{"localhost"}, pki.Server|pki.Client, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayServer = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{gw}}
+	gatewayClient = &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: ca.Pool(), Certificates: []tls.Certificate{gw}}
+	return agentDir, gatewayServer, gatewayClient
 }
 
 type agentConfig struct {
@@ -167,6 +209,12 @@ func TestRunConfigErrors(t *testing.T) {
 	}
 
 	dir, c = baseConfig(t, "http://127.0.0.1:1")
+	err = Run(ctx, Options{ConfigPath: writeConfig(t, dir, c), TLSDir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "tls:") {
+		t.Fatalf("empty certificate directory: %v", err)
+	}
+
+	dir, c = baseConfig(t, "http://127.0.0.1:1")
 	if err := os.WriteFile(filepath.Join(dir, "root"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -176,15 +224,17 @@ func TestRunConfigErrors(t *testing.T) {
 	}
 }
 
-// TestRunServesAndShutsDown boots the whole agent against a fake gateway. It
-// must be the only test that gets past the cron scheduler, which Wings allows
-// once per process.
+// TestRunServesAndShutsDown boots the whole agent against a fake gateway,
+// with TLS on both sides (ARCHITECTURE.md 12.5). It must be the only test that
+// gets past the cron scheduler, which Wings allows once per process.
 func TestRunServesAndShutsDown(t *testing.T) {
 	if fullBootDone.Swap(true) {
 		t.Skip("Wings initialises its database once per process; run without -count>1")
 	}
-	gw := newGateway(t, true)
-	dir, c := baseConfig(t, gw.URL)
+	tlsDir, gwServer, gwClient := testPKI(t)
+	gw := newGateway(t, true, gwServer)
+	// The fake gateway's certificate is for localhost, not its address.
+	dir, c := baseConfig(t, strings.Replace(gw.URL, "127.0.0.1", "localhost", 1))
 	ready := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -192,8 +242,9 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	go func() {
 		done <- Run(ctx, Options{
 			ConfigPath: writeConfig(t, dir, c),
-			ShimSocket: filepath.Join(dir, "shim.sock"),
+			ShimListen: "127.0.0.1:0",
 			ShimToken:  "s",
+			TLSDir:     tlsDir,
 			Ready:      ready,
 		})
 	}()
@@ -206,8 +257,29 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatal("agent did not start listening")
 	}
 
-	base := fmt.Sprintf("http://127.0.0.1:%d", c.apiPort)
-	res, err := http.Get(base + "/internal/v1/healthz")
+	// Wings' SFTP server starts in its own goroutine and writes its host key
+	// into the data directory first. Wait for it to listen, so it does not
+	// write into the directory while the test removes it.
+	sftpAddr := fmt.Sprintf("127.0.0.1:%d", c.sftpPort)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", sftpAddr, time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the SFTP server is not listening: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	base := fmt.Sprintf("https://localhost:%d", c.apiPort)
+	gateway := &http.Client{Transport: &http.Transport{TLSClientConfig: gwClient}}
+	// Kubelet's probes: no client certificate. (Kubelet does not verify the
+	// server either; the test does, so it needs no insecure configuration.)
+	kubelet := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: gwClient.RootCAs}}}
+	res, err := kubelet.Get(base + "/internal/v1/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,18 +295,43 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatalf("healthz: %d %+v", res.StatusCode, health)
 	}
 
-	// The game is not running: not ready, and the agent never auto-starts it.
-	res, err = http.Get(base + "/internal/v1/ready")
+	// Everything but kubelet's paths needs a client certificate, even with the token.
+	req, _ := http.NewRequest("GET", base+"/internal/v1/shim", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	res, err = kubelet.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("ready: %d", res.StatusCode)
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("call without a client certificate: %d", res.StatusCode)
+	}
+	// Plain HTTP is not served.
+	if res, err := http.Get(strings.Replace(base, "https:", "http:", 1) + "/internal/v1/healthz"); err == nil {
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK {
+			t.Fatal("plain HTTP served")
+		}
+	}
+
+	// No shim has connected, and the agent never auto-starts the game.
+	res, err = gateway.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shim struct {
+		Attached bool `json:"attached"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&shim); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || shim.Attached {
+		t.Fatalf("shim: %d %+v", res.StatusCode, shim)
 	}
 
 	// The Wings API is reachable behind the same listener and requires the token.
-	res, err = http.Get(base + "/api/servers/" + serverUUID)
+	res, err = gateway.Get(base + "/api/servers/" + serverUUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +353,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		t.Fatal("Run did not return after cancel")
 	}
 	// The listener is closed after shutdown.
-	if res, err := http.Get(base + "/internal/v1/healthz"); err == nil {
+	if res, err := kubelet.Get(base + "/internal/v1/healthz"); err == nil {
 		res.Body.Close()
 		t.Fatal("the HTTP server is still serving")
 	}

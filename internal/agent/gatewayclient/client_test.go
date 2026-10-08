@@ -19,7 +19,7 @@ func TestInstallPrepared(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL+"/", "id", "secret")
+	c := New(srv.URL+"/", "id", "secret", nil)
 	got, err := c.InstallPrepared(context.Background(), "u1")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestGetInstallState(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := New(srv.URL, "id", "s").GetInstallState(context.Background(), "u1", 7)
+	got, err := New(srv.URL, "id", "s", nil).GetInstallState(context.Background(), "u1", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestErrors(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
-	c := New(srv.URL, "id", "s")
+	c := New(srv.URL, "id", "s", nil)
 
 	_, err := c.InstallPrepared(ctx, "u")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500: nope") {
@@ -83,7 +83,7 @@ func TestErrors(t *testing.T) {
 	if _, err := c.InstallPrepared(ctx, "u"); err == nil {
 		t.Fatal("unreachable gateway must error")
 	}
-	if _, err := New("http://bad host", "i", "s").InstallPrepared(ctx, "u"); err == nil {
+	if _, err := New("http://bad host", "i", "s", nil).InstallPrepared(ctx, "u"); err == nil {
 		t.Fatal("bad URL must error")
 	}
 	if err := c.do(ctx, "POST", "/x", make(chan int), nil); err == nil {
@@ -101,7 +101,7 @@ func TestDoSendsBodyAndIgnoresResponseWhenOutNil(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	if err := New(srv.URL, "i", "s").do(context.Background(), "POST", "/x", map[string]int{"a": 1}, nil); err != nil {
+	if err := New(srv.URL, "i", "s", nil).do(context.Background(), "POST", "/x", map[string]int{"a": 1}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ctype != "application/json" || strings.TrimSpace(got) != `{"a":1}` {

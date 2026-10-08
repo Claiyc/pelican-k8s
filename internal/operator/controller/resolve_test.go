@@ -23,6 +23,9 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 	h := newHarness(t, newGS(), newClass())
 	h.reconcile(2)
 	var np networkingv1.NetworkPolicy
+	if !h.get(&np, names.AgentNetworkPolicy(uuid)) {
+		t.Fatal("agent network policy not created")
+	}
 	if !h.get(&np, names.NetworkPolicy(uuid)) {
 		t.Fatal("network policy not created")
 	}
@@ -43,7 +46,7 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 	if err := h.c.Get(context.Background(), types.NamespacedName{Name: "default"}, cls); err != nil {
 		t.Fatal(err)
 	}
-	cls.Spec.Network.NodeCIDRs = []string{"192.0.2.0/24"}
+	cls.Spec.Network.InClusterEgress.Additional = []v1alpha1.EgressRule{{CIDR: "192.0.2.0/24"}}
 	if err := h.c.Update(context.Background(), cls); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +56,7 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 		t.Fatalf("policy not updated: %s", policyCIDRs(&np))
 	}
 
-	// Disabling policies removes it, and a missing one is not an error.
+	// Disabling policies opens them: the chart's default-deny still selects the pods.
 	if err := h.c.Get(context.Background(), types.NamespacedName{Name: "default"}, cls); err != nil {
 		t.Fatal(err)
 	}
@@ -62,16 +65,24 @@ func TestNetworkPolicyFollowsTheClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.reconcile(1)
-	if h.get(&np, names.NetworkPolicy(uuid)) {
-		t.Fatal("policy must be deleted when the class disables policies")
+	for _, name := range []string{names.NetworkPolicy(uuid), names.AgentNetworkPolicy(uuid)} {
+		if !h.get(&np, name) || len(np.Spec.Ingress) != 1 || len(np.Spec.Ingress[0].From) != 0 || len(np.Spec.Egress) != 1 || len(np.Spec.Egress[0].To) != 0 {
+			t.Fatalf("policy %s not opened: %+v", name, np.Spec)
+		}
 	}
-	h.reconcile(1)
 }
 
 func policyCIDRs(np *networkingv1.NetworkPolicy) string {
 	var out []string
 	for _, r := range np.Spec.Ingress {
 		for _, p := range r.From {
+			if p.IPBlock != nil {
+				out = append(out, p.IPBlock.CIDR)
+			}
+		}
+	}
+	for _, r := range np.Spec.Egress {
+		for _, p := range r.To {
 			if p.IPBlock != nil {
 				out = append(out, p.IPBlock.CIDR)
 			}
@@ -228,7 +239,7 @@ func TestResolveImage(t *testing.T) {
 func TestAgentReady(t *testing.T) {
 	bt := true
 	pod := func(ip string, phase corev1.PodPhase, statuses ...corev1.ContainerStatus) *corev1.Pod {
-		return &corev1.Pod{Status: corev1.PodStatus{PodIP: ip, Phase: phase, InitContainerStatuses: statuses}}
+		return &corev1.Pod{Status: corev1.PodStatus{PodIP: ip, Phase: phase, ContainerStatuses: statuses}}
 	}
 	agent := func(started *bool, ready bool) corev1.ContainerStatus {
 		return corev1.ContainerStatus{Name: render.AgentContainer, Started: started, Ready: ready}

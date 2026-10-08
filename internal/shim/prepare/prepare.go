@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,17 +21,18 @@ import (
 type Layout struct {
 	// Bin is where the shim binary is copied to (e.g. /pelican/bin/shim). Empty skips the copy.
 	Bin string
-	// Shared is the emptyDir shared with the game container (e.g. /pelican).
+	// Shared is the game pod's emptyDir (e.g. /pelican). Empty skips it.
 	Shared string
-	// Data is the PVC root (Wings root_directory).
+	// Data is the PVC root (Wings root_directory), laid out by the agent pod.
+	// Empty skips the PVC layout.
 	Data string
-	// UUID is the server UUID.
+	// UUID is the server UUID; required with Data.
 	UUID string
 }
 
 // Run performs the preparation.
 func (l Layout) Run() error {
-	if l.UUID == "" {
+	if l.Data != "" && l.UUID == "" {
 		return errors.New("prepare: uuid is required")
 	}
 	if l.Bin != "" {
@@ -44,6 +46,9 @@ func (l Layout) Run() error {
 				return err
 			}
 		}
+	}
+	if l.Data == "" {
+		return nil
 	}
 	dirs := []string{
 		filepath.Join("volumes", l.UUID),
@@ -78,8 +83,18 @@ func copySelf(dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	// The copy and the rename stay inside dst's directory.
+	dir, err := os.OpenRoot(filepath.Dir(dst))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	name := filepath.Base(dst)
+	// A leftover copy is execute-only and cannot be reopened for writing.
+	if err := dir.Remove(name + ".tmp"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := dir.OpenFile(name+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700)
 	if err != nil {
 		return err
 	}
@@ -87,10 +102,20 @@ func copySelf(dst string) error {
 		out.Close()
 		return err
 	}
+	// Execute-only: the kernel makes a process non-dumpable from the moment it
+	// executes a file its user cannot read. The game container's readiness
+	// probe (shim ready) inherits the container environment with the shim
+	// token, and the game process runs as the same UID; non-dumpable, the
+	// probe's /proc/<pid>/environ and memory are closed to it from exec on, as
+	// are the shim's own before it clears the token (ARCHITECTURE.md 6.4).
+	if err := out.Chmod(0o111); err != nil {
+		out.Close()
+		return err
+	}
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	return dir.Rename(name+".tmp", name)
 }
 
 // Probe resolves the egg image entrypoint by convention and generates passwd

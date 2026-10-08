@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
@@ -80,10 +83,19 @@ func (s *Store) Class(ctx context.Context, gs *v1alpha1.GameServer) (*v1alpha1.G
 	return cls, nil
 }
 
-// Pod returns the server pod, or nil.
+// Pod returns the game pod of a server, or nil.
 func (s *Store) Pod(ctx context.Context, uuid string) (*corev1.Pod, error) {
+	return s.pod(ctx, names.Pod(uuid))
+}
+
+// AgentPod returns the agent pod of a server, or nil.
+func (s *Store) AgentPod(ctx context.Context, uuid string) (*corev1.Pod, error) {
+	return s.pod(ctx, names.AgentPod(uuid))
+}
+
+func (s *Store) pod(ctx context.Context, name string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{}
-	err := s.Client.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: names.Pod(uuid)}, pod)
+	err := s.Client.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: name}, pod)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -170,6 +182,36 @@ func (s *Store) PatchSpec(ctx context.Context, uuid string, spec map[string]any)
 	return s.Client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
 }
 
+// PatchSpecAt applies a JSON merge patch to the spec only if the GameServer
+// is still at resourceVersion; otherwise it fails with a conflict.
+func (s *Store) PatchSpecAt(ctx context.Context, uuid, resourceVersion string, spec map[string]any) error {
+	b, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": resourceVersion}, "spec": spec})
+	if err != nil {
+		return err
+	}
+	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
+	return s.Client.Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
+// UpdateSpec patches the spec with what mutate derives from the current
+// GameServer; a nil patch writes nothing. The write is conditional on the
+// version read, so a decision taken on one gateway replica never lands over
+// a change it did not see (another replica's power action, a status the
+// decision depends on); a conflict starts over with a fresh read.
+func (s *Store) UpdateSpec(ctx context.Context, uuid string, mutate func(gs *v1alpha1.GameServer) (map[string]any, error)) error {
+	return retry.OnError(conflictBackoff, apierrors.IsConflict, func() error {
+		gs, err := s.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		spec, err := mutate(gs)
+		if err != nil || spec == nil {
+			return err
+		}
+		return s.PatchSpecAt(ctx, uuid, gs.ResourceVersion, spec)
+	})
+}
+
 // PatchStatus applies a JSON merge patch to the status subresource.
 func (s *Store) PatchStatus(ctx context.Context, uuid string, status map[string]any) error {
 	b, err := json.Marshal(map[string]any{"status": status})
@@ -178,6 +220,71 @@ func (s *Store) PatchStatus(ctx context.Context, uuid string, status map[string]
 	}
 	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
 	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
+// PatchStatusAt applies a JSON merge patch to the status subresource only if
+// the GameServer is still at resourceVersion; otherwise it fails with a
+// conflict.
+func (s *Store) PatchStatusAt(ctx context.Context, uuid, resourceVersion string, status map[string]any) error {
+	b, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": resourceVersion}, "status": status})
+	if err != nil {
+		return err
+	}
+	gs := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: names.ForUUID(uuid)}}
+	return s.Client.Status().Patch(ctx, gs, client.RawPatch(types.MergePatchType, b))
+}
+
+// conflictBackoff paces the retries of a conditional write that lost to
+// another write of the GameServer (another replica's, or any status change).
+var conflictBackoff = wait.Backoff{Duration: 20 * time.Millisecond, Factor: 2, Jitter: 0.1, Steps: 10, Cap: time.Second}
+
+// AgentInstance returns the current instance of the server's agent
+// (render.AgentInstance), or "" without an agent pod.
+func (s *Store) AgentInstance(ctx context.Context, uuid string) (string, error) {
+	pod, err := s.AgentPod(ctx, uuid)
+	if err != nil {
+		return "", err
+	}
+	return render.AgentInstance(pod), nil
+}
+
+// UpdateBackups rewrites status.backups.pending. mutate gets the entries of
+// the current agent instance (entries of an earlier one ended with it and are
+// dropped) and that instance, and returns the new list. The write is
+// conditional on the version read, so concurrent writers on several gateway
+// replicas never drop or bring back each other's entries; a conflict starts
+// over with a fresh read.
+func (s *Store) UpdateBackups(ctx context.Context, uuid string, mutate func(live []v1alpha1.PendingBackup, agent string) []v1alpha1.PendingBackup) error {
+	return retry.OnError(conflictBackoff, apierrors.IsConflict, func() error {
+		gs, err := s.Get(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		agent, err := s.AgentInstance(ctx, uuid)
+		if err != nil {
+			return err
+		}
+		pending := mutate(gs.Status.Backups.Live(agent), agent)
+		if pending == nil {
+			pending = []v1alpha1.PendingBackup{}
+		}
+		if equalBackups(pending, gs.Status.Backups.Pending) {
+			return nil
+		}
+		return s.PatchStatusAt(ctx, uuid, gs.ResourceVersion, map[string]any{"backups": map[string]any{"pending": pending}})
+	})
+}
+
+func equalBackups(a, b []v1alpha1.PendingBackup) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].UUID != b[i].UUID || a[i].Agent != b[i].Agent {
+			return false
+		}
+	}
+	return true
 }
 
 // SetCondition sets one status condition through a merge patch (the operator
@@ -214,12 +321,12 @@ func (s *Store) ClassSpec(ctx context.Context, gs *v1alpha1.GameServer) v1alpha1
 	return cls.Spec
 }
 
-// PodAgentReady reports whether the agent container of the server pod is up and returns the pod IP.
+// PodAgentReady reports whether the agent container of the agent pod is up and returns the pod IP.
 func PodAgentReady(pod *corev1.Pod) (bool, string) {
 	if pod == nil || pod.Status.PodIP == "" || !pod.DeletionTimestamp.IsZero() {
 		return false, ""
 	}
-	for _, cs := range pod.Status.InitContainerStatuses {
+	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == render.AgentContainer {
 			return cs.Started != nil && *cs.Started, pod.Status.PodIP
 		}

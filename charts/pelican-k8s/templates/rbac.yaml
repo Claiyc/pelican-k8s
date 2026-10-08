@@ -42,9 +42,16 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
 rules:
+  # Only its own host key: the release namespace also holds the node token
+  # and, with tls.enabled, the internal CA's key. Kubernetes cannot limit
+  # create by name, so create is a rule of its own.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create]
+    resourceNames: [{{ .Values.gateway.sftp.hostKeySecret | quote }}]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -107,9 +114,16 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims, services, events]
     verbs: [get, list, watch, create, update, patch, delete]
+  # update: agent certificates are renewed in place. delete: cert-manager
+  # leaves a deleted server's certificate Secret behind.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch, create]
+    verbs: [get, list, watch, create, update{{ if and .Values.tls.enabled .Values.tls.certManager.enabled }}, delete{{ end }}]
+  {{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, create, update, delete]
+  {{- end }}
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
@@ -173,6 +187,17 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
+  {{- if and .Values.tls.enabled (not .Values.tls.certManager.enabled) }}
+  # The internal CA and the gateway's certificate. create cannot be limited
+  # by name.
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ include "pelican-k8s.caSecretName" . }}, {{ include "pelican-k8s.gatewayTLSSecretName" . }}]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

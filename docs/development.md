@@ -26,6 +26,7 @@ cancels the CI, Contract and CodeQL runs still going for the previous one.
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
 | Spike | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart. CI runs it on every PR and push to master |
 | Contract (kind) | `hack/e2e-kind.sh` | Docker, kind, helm, kubectl (or `KUBECTL=oc`), internet. Throwaway kind cluster with the **real Pelican Panel** (our chart, SQLite) and pelican-k8s built from the working tree: node registration, egg import and server creation through the Panel's own services, install Job, auto-start, the e2e suite below, then Panel-side status, backup, suspension and deletion. CI runs it on every PR (`Contract` workflow) and nightly against `ghcr.io/pelican/panel:latest`, opening an `upstream` issue on failure. `PANEL_IMAGE=... hack/e2e-kind.sh` tests another Panel version, `KEEP=1` keeps the cluster |
+| Placement (kind) | `hack/e2e-placement.sh` | Docker, kind, helm, kubectl, internet. Throwaway kind cluster with three workers whose volumes carry no node affinity (local-path provisioner in shared mode), pelican-k8s built from the working tree, the fake Panel (`test/fakepanel/cmd/fakepanel`) and a shell egg (`test/placement/egg`). `test/placement` creates servers through the gateway and checks where the agent pod and the game pod run: start and stop, the agent's node cordoned with and without in-flight work, `preferAgentNode: false`, a drain, either pod deleted while running, a console kept open while the agent pod is deleted, a crash without restart, the agent of a stopped server drained, the allocation-IP node pin. Nodes are made unfit by cordoning them. The chart is installed with `tls.enabled`, so every hop between the components runs over TLS (`TLS=false` turns it off). CI runs it on PRs touching the Go code, the images, the chart or the suite, on pushes to `master`, and nightly (`Placement` workflow). A failing scenario logs the GameServer status, both pods and the end of their containers' logs. A new push to a pull request cancels its running Placement run. `RUN=TestDrain` runs one scenario, `KEEP=1` keeps the cluster |
 | e2e | `go test -tags e2e ./test/e2e -v` | a deployed gateway and one server. Set `PELICAN_E2E_GATEWAY`, `PELICAN_E2E_TOKEN`, `PELICAN_E2E_PANEL_URL`, `PELICAN_E2E_SERVER` (and `PELICAN_E2E_SFTP`, `_SFTP_USER`, `_SFTP_PASSWORD`, `_INSECURE=true`) |
 
 ## Dev loop on a cluster
@@ -42,8 +43,10 @@ the Helm release:
 REGISTRY=harbor.example.com/pelican VALUES=my-values.yaml hack/dev-push.sh
 ```
 
-The operator recreates game pods with the new shim/agent images at the next
-safe point; an idle server is recreated immediately.
+The operator recreates agent pods with the new agent image at the next safe
+point: the process is offline and the agent has no in-flight work (transfers,
+backups, installs, active SFTP). Game pods get the new shim when they are next
+created.
 
 ## Wings as a dependency
 
@@ -65,21 +68,26 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 ## Code map
 
-| Package | Role |
+| Path | Role |
 |---|---|
-| `internal/shim/supervisor` | PTY process supervisor (PID 1); connects to the agent's socket and serves it |
+| `internal/shim/supervisor` | PTY process supervisor (PID 1 of the game pod); connects to the agent pod and serves it |
 | `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
 | `internal/shim/cgroup` | cgroup v2 and `/proc/net/dev` sampling |
 | `internal/shim/prepare` | PVC layout, entrypoint probe, install-run |
 | `internal/agent/app` | Wings boot sequence without Docker |
 | `internal/agent/shimenv` | `environment.ProcessEnvironment` over the shim |
 | `internal/agent/installer` | Job-backed `server.Installer` |
-| `internal/operator/render` | pure object builders and resource mapping |
-| `internal/operator/controller` | reconciler, install state machine, finalizer, snapshots |
+| `internal/operator/render` | pure object builders (agent and game StatefulSets, Services, NetworkPolicies, Jobs) and resource mapping |
+| `internal/operator/controller` | reconciler, game pod lifecycle and placement, install state machine, finalizer, snapshots |
+| `internal/operator/certs` | the internal CA and the certificate Secrets the operator issues from it, or the agent Certificates with cert-manager |
+| `internal/pki` | certificate issuing, reloading key pairs and CA bundles, the dialer that reaches an agent pod by its certificate name |
 | `internal/gateway/panelapi` | Wings API towards the Panel and browsers |
 | `internal/gateway/remoteapi` | Panel remote API towards agents |
 | `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync |
+| `internal/gateway/crashwatch` | sets `desired: Stopped` for a server whose process crashed and stayed offline (ARCHITECTURE.md 8.3) |
 | `internal/gateway/wsproxy`, `sftprelay`, `jwtx` | websocket relay, SFTP relay, JWT re-signing |
+| `test/placement`, `hack/e2e-placement.sh`, `hack/kind-placement.yaml` | the placement suite on kind (Tests above; `Placement` workflow) |
+| `hack/e2e-kind.sh`, `hack/kind-config.yaml` | the contract suite on kind (Tests above; `Contract` workflow) |
 
 ## Dependencies, security and quality
 

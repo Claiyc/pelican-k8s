@@ -131,10 +131,11 @@ func TestSpike(t *testing.T) {
 	ps := httptest.NewServer(panel.Handler())
 	defer ps.Close()
 
-	// --- game container with the shim as PID 1 ---
-	run(t, "docker", "run", "-d", "--name", ctrName, "-u", fmt.Sprintf("%d:%d", uid, gid), "-m", "1400m",
-		"-v", volume+":/home/container", "-v", shared+":/pelican", "-e", "HOME=/home/container", "-e", "PELICAN_SHIM_TOKEN=spike-shim-token", "--tmpfs", "/tmp:rw,exec,size=100m",
-		gameImg, "/pelican/bin/shim", "run", "--socket", "/pelican/run/shim.sock", "--", "/bin/bash", "/entrypoint.sh")
+	// --- game container with the shim as PID 1, dialing the agent over TCP ---
+	shimPort := freePort(t)
+	run(t, "docker", "run", "-d", "--name", ctrName, "--network", "host", "-u", fmt.Sprintf("%d:%d", uid, gid), "-m", "1400m",
+		"-v", volume+":/home/container", "-v", shared+":/pelican", "-e", "HOME=/home/container", "-e", "PELICAN_SHIM_TOKEN=spike-shim-token", "-e", "PELICAN_POD_UID=spike-game-pod", "--tmpfs", "/tmp:rw,exec,size=100m",
+		gameImg, "/pelican/bin/shim", "run", "--agent", fmt.Sprintf("127.0.0.1:%d", shimPort), "--ready-file", "/pelican/run/ready", "--grace-period", "120s", "--", "/bin/bash", "/entrypoint.sh")
 	defer func() {
 		if t.Failed() {
 			t.Logf("container logs:\n%s", lastLines(run(t, "docker", "logs", ctrName), 40))
@@ -185,7 +186,7 @@ docker:
 	ready := make(chan struct{})
 	agentErr := make(chan error, 1)
 	go func() {
-		agentErr <- app.Run(ctx, app.Options{ConfigPath: cfgPath, ShimSocket: filepath.Join(shared, "run", "shim.sock"), ShimToken: "spike-shim-token", Logger: slog.Default(), Ready: ready})
+		agentErr <- app.Run(ctx, app.Options{ConfigPath: cfgPath, ShimListen: fmt.Sprintf("127.0.0.1:%d", shimPort), ShimToken: "spike-shim-token", Logger: slog.Default(), Ready: ready})
 	}()
 	select {
 	case <-ready:
@@ -221,6 +222,13 @@ docker:
 		t.Fatalf("api response: %s", body)
 	}
 	t.Logf("running: memory=%d uptime=%dms", resp.Utilization.Memory, resp.Utilization.Uptime)
+	readyFile := filepath.Join(shared, "run", "ready")
+	if _, err := os.Stat(readyFile); err != nil {
+		t.Fatalf("the shim's readiness file is missing while running: %v", err)
+	}
+	if code, body := call(t, api, "GET", "/internal/v1/shim", nil); code != 200 || !strings.Contains(body, `"podUID":"spike-game-pod"`) {
+		t.Fatalf("shim route: %d %s", code, body)
+	}
 
 	// --- websocket with a JWT signed by the agent token ---
 	wsCheck(t, apiPort, ps.URL)
@@ -238,6 +246,9 @@ docker:
 	time.Sleep(3 * time.Second) // a crash restart would flip it back to starting
 	if s := panel.Get(uuid); s.State != "offline" {
 		t.Fatalf("server restarted after a clean stop: %v", panel.StateChanges)
+	}
+	if _, err := os.Stat(readyFile); err == nil {
+		t.Fatal("the readiness file is left after the stop")
 	}
 	var seq []string
 	for _, sc := range panel.StateChanges {
@@ -272,8 +283,25 @@ docker:
 		t.Fatalf("crash restart did not happen: %v", panel.StateChanges)
 	}
 	t.Logf("crash restart observed: %v", panel.StateChanges[len(panel.StateChanges)-3:])
-	call(t, api, "POST", "/api/servers/"+uuid+"/power", `{"action":"kill"}`)
-	panel.WaitForState(uuid, "offline", time.Minute)
+
+	// --- the game pod is deleted: the shim stops the process with the stop
+	// command by itself, and the agent sees a stop, not a crash ---
+	before := len(panel.StateChanges)
+	run(t, "docker", "stop", "-t", "120", ctrName)
+	if !panel.WaitForState(uuid, "offline", 2*time.Minute) {
+		t.Fatalf("server did not stop on container termination: %v", panel.StateChanges)
+	}
+	seq = nil
+	for _, sc := range panel.StateChanges[before:] {
+		seq = append(seq, sc["previous_state"]+">"+sc["new_state"])
+	}
+	if strings.Join(seq, " ") != "running>stopping stopping>offline" {
+		t.Fatalf("container termination: state sequence %v", seq)
+	}
+	logs := run(t, "docker", "logs", ctrName)
+	if !strings.Contains(logs, "stopping process with the stop command") {
+		t.Fatalf("the shim did not run the stop command:\n%s", lastLines(logs, 20))
+	}
 	cancel()
 	<-agentErr
 }
@@ -295,7 +323,8 @@ func call(t *testing.T, base, method, path string, body any) (int, string) {
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(res.Body)
-	if ua := res.Header.Get("User-Agent"); !strings.HasPrefix(ua, "Pelican Wings/v") {
+	// Wings' router sets the header; /internal/v1/* is the agent's own mux.
+	if ua := res.Header.Get("User-Agent"); strings.HasPrefix(path, "/api/") && !strings.HasPrefix(ua, "Pelican Wings/v") {
 		t.Fatalf("missing Wings User-Agent header on %s %s: %q", method, path, ua)
 	}
 	return res.StatusCode, string(b)

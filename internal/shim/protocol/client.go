@@ -16,6 +16,8 @@ type Client struct {
 	conn net.Conn
 	enc  *Encoder
 	dec  *Decoder
+	// podUID is the pod UID the shim sent in the handshake.
+	podUID string
 
 	nextID  atomic.Uint64
 	mu      sync.Mutex
@@ -81,13 +83,16 @@ func (c *Client) readLoop() {
 		case c.Events <- &mm:
 		default:
 			// The consumer is not keeping up; drop output rather than block the shim.
-			// Exited events must never be dropped.
-			if mm.Type == TypeExited || mm.Type == TypeStarted {
+			// Lifecycle events must never be dropped.
+			if mm.Type == TypeExited || mm.Type == TypeStarted || mm.Type == TypeTerminating {
 				c.Events <- &mm
 			}
 		}
 	}
 }
+
+// PodUID returns the UID of the shim's pod, as sent in the handshake.
+func (c *Client) PodUID() string { return c.podUID }
 
 // Done is closed when the connection has ended.
 func (c *Client) Done() <-chan struct{} { return c.closed }
@@ -144,13 +149,26 @@ func (c *Client) Request(ctx context.Context, m *Message) (*Message, error) {
 	}
 }
 
-// Start asks the shim to spawn the process.
-func (c *Client) Start(ctx context.Context, env []string) (*Status, error) {
-	r, err := c.Request(ctx, &Message{Type: TypeStart, Env: env})
+// Start asks the shim to spawn the process. stop is the stop configuration
+// the shim applies when its container is terminated; nil keeps the previous one.
+func (c *Client) Start(ctx context.Context, env []string, stop *StopConfig) (*Status, error) {
+	r, err := c.Request(ctx, &Message{Type: TypeStart, Env: env, Stop: stop})
 	if err != nil {
 		return nil, err
 	}
 	return r.Status, nil
+}
+
+// Configure replaces the shim's stop configuration.
+func (c *Client) Configure(ctx context.Context, stop StopConfig) error {
+	_, err := c.Request(ctx, &Message{Type: TypeConfigure, Stop: &stop})
+	return err
+}
+
+// State tells the shim the agent's process state.
+func (c *Client) State(ctx context.Context, state string) error {
+	_, err := c.Request(ctx, &Message{Type: TypeState, Value: state})
+	return err
 }
 
 // Stdin writes data to the process, chunked so that no line exceeds MaxLineSize.

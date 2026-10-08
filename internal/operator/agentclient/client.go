@@ -20,9 +20,10 @@ type Client struct {
 	http  *http.Client
 }
 
-// New returns a client for the agent at base (http://<pod ip>:8080).
-func New(base, token string) *Client {
-	return &Client{base: strings.TrimSuffix(base, "/"), token: token, http: &http.Client{Timeout: 20 * time.Second}}
+// New returns a client for the agent at base (http://<pod ip>:8080, or an
+// https URL built with pki.AgentHost). transport may be nil for the default.
+func New(base, token string, transport http.RoundTripper) *Client {
+	return &Client{base: strings.TrimSuffix(base, "/"), token: token, http: &http.Client{Timeout: 20 * time.Second, Transport: transport}}
 }
 
 // ErrConflict is returned for HTTP 409 (e.g. reinstall during a power action).
@@ -93,6 +94,38 @@ func (c *Client) Delete(ctx context.Context, uuid string) error {
 // ExitState injects a process exit observed from the container status.
 func (c *Client) ExitState(ctx context.Context, code int32, oomKilled bool) error {
 	return c.do(ctx, http.MethodPost, "/internal/v1/exit-state", map[string]any{"code": code, "oomKilled": oomKilled}, nil)
+}
+
+// Shim describes the shim connection the agent holds.
+type Shim struct {
+	Attached    bool   `json:"attached"`
+	PodUID      string `json:"podUID,omitempty"`
+	Running     bool   `json:"running"`
+	Terminating bool   `json:"terminating"`
+}
+
+// Shim returns the agent's view of its shim connection.
+func (c *Client) Shim(ctx context.Context) (*Shim, error) {
+	var out Shim
+	if err := c.do(ctx, http.MethodGet, "/internal/v1/shim", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Activity is the agent's in-flight work.
+type Activity struct {
+	Busy    bool     `json:"busy"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// Activity returns the work a move of the agent pod would break.
+func (c *Client) Activity(ctx context.Context) (*Activity, error) {
+	var out Activity
+	if err := c.do(ctx, http.MethodGet, "/internal/v1/activity", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

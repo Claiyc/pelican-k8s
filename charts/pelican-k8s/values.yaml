@@ -62,9 +62,13 @@ gateway:
     poolNames: []
     # Cap on the addresses offered; a large pool would flood the dropdown.
     maxAddresses: 256
-  # How agents reach the gateway's remote API (in-cluster).
-  remoteURL: ""      # default http://<release>-gateway.<namespace>.svc:8081
+  # How agents reach the gateway's remote API (in-cluster). With tls.enabled
+  # it must be an https URL; its host is added to the gateway's certificate.
+  remoteURL: ""      # default http(s)://<release>-gateway.<namespace>.svc:8081
   resyncInterval: 15m
+  # How long an open console is held while the server's agent pod is replaced
+  # (moved to the game pod's node, recreated with a new template, evicted).
+  agentWait: 120s
   # Extra CA certificate for the Panel's TLS (private CAs, OpenShift router CA):
   # a ConfigMap in the release namespace whose key holds a PEM bundle.
   extraCA:
@@ -118,6 +122,39 @@ operator:
     limits: {memory: 512Mi}
   logLevel: info
 
+# TLS between the gateway, the operator, the agents and the shims, from an
+# internal CA the operator keeps in the release namespace (docs/security.md).
+# Turning it on or off recreates every agent pod, and running game pods with
+# them through the usual RecreatePending path.
+tls:
+  enabled: false
+  # The internal CA, when cert-manager is not used.
+  ca:
+    # Lifetime of the CA the operator creates.
+    lifetime: 87600h
+    # Replace the CA automatically once it enters the last third of its
+    # lifetime: the new CA is trusted everywhere first, then signs, then the
+    # old one is dropped, with no pod restarted (docs/security.md).
+    rotation:
+      enabled: false
+      # How long each step waits for the new trust bundle to reach every pod.
+      overlap: 1h
+  # Issue every certificate through cert-manager instead of the internal CA.
+  # Needs cert-manager installed.
+  certManager:
+    enabled: false
+    # The issuer, e.g. {name: corp-ca, kind: ClusterIssuer}. It must issue
+    # certificates in both the release and the servers namespace, so use a
+    # ClusterIssuer. Empty: the chart creates a self-signed CA in caNamespace
+    # and a ClusterIssuer for it.
+    issuerRef: {}
+    # cert-manager's cluster resource namespace, where a chart-created CA
+    # lives.
+    caNamespace: cert-manager
+    # Lifetime of a chart-created CA. cert-manager renews it on its own;
+    # see docs/security.md before shortening it.
+    caDuration: 87600h
+
 # The agent's Wings config.yml, rendered into ConfigMap pelican-agent-config
 # in the servers namespace. Keys under `extra` are merged verbatim.
 agent:
@@ -130,6 +167,14 @@ agent:
   uploadLimitMiB: 100
   timezone: UTC
   extra: {}
+
+# PriorityClass of agent pods (the class's agentPriorityClassName). It ranks
+# above game pods, so an agent that follows its game pod to a full node can
+# preempt lower-priority pods there (ARCHITECTURE.md 7.7).
+agentPriorityClass:
+  create: true
+  name: pelican-agent
+  value: 1000
 
 # The default GameServerClass (cluster policy). See docs/classes.md.
 defaultClass:
@@ -163,11 +208,12 @@ defaultClass:
       inClusterEgress:
         gameServers: true
         additional: []
-      # IPv4 ranges excluded from the internet egress of game pods and install
-      # Jobs: the private and shared ranges, which cover the usual pod,
-      # service, node and LAN ranges. Add any other range game pods must not
-      # reach. Link-local is always blocked. DNS, the gateway remote API and
-      # inClusterEgress are separate allow rules and keep working.
+      # IPv4 ranges excluded from the internet egress of game pods, agent
+      # pods and install Jobs: the private and shared ranges, which cover the
+      # usual pod, service, node and LAN ranges. Add any other range these
+      # pods must not reach. Link-local is blocked as well. DNS, the gateway
+      # remote API and inClusterEgress are separate allow rules and keep
+      # working.
       blockedEgressCIDRs:
         - 10.0.0.0/8
         - 172.16.0.0/12
@@ -211,6 +257,10 @@ defaultClass:
         "ghcr.io/pelican-eggs/games:*": ["/bin/bash", "/entrypoint.sh"]
     terminationGracePeriodSeconds: 660
     suspendScalesToZero: false
+    scheduling:
+      # Prefer the node of the server's agent pod for its game pod, so the
+      # agent moves only when that node does not fit.
+      preferAgentNode: true
     nodeSelector: {}
     tolerations: []
     priorityClassName: ""

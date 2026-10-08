@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -184,7 +186,7 @@ func startedPod(name, ip string) *corev1.Pod {
 	started := true
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Status:     corev1.PodStatus{PodIP: ip, InitContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}},
+		Status:     corev1.PodStatus{PodIP: ip, ContainerStatuses: []corev1.ContainerStatus{{Name: "agent", Started: &started}}},
 	}
 }
 
@@ -333,7 +335,8 @@ func TestDiagnostics(t *testing.T) {
 	gsReady.Spec.Power.Desired = v1alpha1.PowerRunning
 	gsDown := gameServer(uuid)
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(ready), Namespace: ns}, Data: map[string][]byte{"token_id": []byte("a"), "token": []byte("b")}}
-	g := newGateway(t, testConfig(ps.URL), gsReady, gsDown, startedPod(names.Pod(ready), "10.0.0.5"), secret)
+	game := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.Pod(ready), Namespace: ns}, Spec: corev1.PodSpec{NodeName: "node-a"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	g := newGateway(t, testConfig(ps.URL), gsReady, gsDown, startedPod(names.AgentPod(ready), "10.0.0.5"), game, secret)
 
 	out := g.diagnostics(context.Background())
 	for _, want := range []string{
@@ -343,9 +346,9 @@ func TestDiagnostics(t *testing.T) {
 		"servers namespace: " + ns,
 		"panel reachable: yes",
 		"gameservers: 2",
-		ready + " phase=Running process=running desired=Running agent=yes",
+		ready + " phase=Running process=running desired=Running agent=yes game=Running@node-a",
 		uuid + " phase=",
-		"agent=no",
+		"agent=no game=none",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("diagnostics missing %q:\n%s", want, out)
@@ -384,8 +387,14 @@ func TestResetServersState(t *testing.T) {
 			gs.Spec.Install.Generation = 2
 			gs.Status.Install.ObservedGeneration = 1
 		},
-		"install running":   func(gs *v1alpha1.GameServer) { gs.Status.Install.Result = v1alpha1.InstallRunning },
-		"restore in flight": func(gs *v1alpha1.GameServer) { gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{}} },
+		"install running": func(gs *v1alpha1.GameServer) { gs.Status.Install.Result = v1alpha1.InstallRunning },
+		"restore in flight": func(gs *v1alpha1.GameServer) {
+			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/"}}
+		},
+	}
+	// The agent pod whose instance runs the restore.
+	agentPod := func() *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: names.AgentPod(uuid), Namespace: ns, UID: "agent-pod-1"}}
 	}
 	for name, mutate := range busy {
 		t.Run("waits while "+name, func(t *testing.T) {
@@ -394,7 +403,7 @@ func TestResetServersState(t *testing.T) {
 			defer ps.Close()
 			gs := gameServer(uuid)
 			mutate(gs)
-			g := newGateway(t, testConfig(ps.URL), gs)
+			g := newGateway(t, testConfig(ps.URL), gs, agentPod())
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			go func() { g.resetServersState(ctx); close(done) }()
@@ -410,6 +419,48 @@ func TestResetServersState(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("waits while the agent pod cannot be read", func(t *testing.T) {
+		fp := fakepanel.New(nodeID, nodeToken)
+		ps := httptest.NewServer(fp.Handler())
+		defer ps.Close()
+		gs := gameServer(uuid)
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/"}}
+		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
+		g.Store.Client = interceptor.NewClient(g.Store.Client.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { g.resetServersState(ctx); close(done) }()
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		<-done
+		if n := len(fp.CallsMatching("/servers/reset")); n != 0 {
+			t.Fatalf("reset sent while the restore could still run (%d calls)", n)
+		}
+	})
+
+	// A restore of an earlier agent instance ended with it.
+	t.Run("resets after a restore of a replaced agent", func(t *testing.T) {
+		fp := fakepanel.New(nodeID, nodeToken)
+		ps := httptest.NewServer(fp.Handler())
+		defer ps.Close()
+		gs := gameServer(uuid)
+		gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-0/"}}
+		g := newGateway(t, testConfig(ps.URL), gs, agentPod())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		g.resetServersState(ctx)
+		if n := len(fp.CallsMatching("/servers/reset")); n != 1 {
+			t.Fatalf("reset calls = %d, want 1", n)
+		}
+	})
 
 	t.Run("panel failure keeps retrying until canceled", func(t *testing.T) {
 		g := newGateway(t, testConfig("http://127.0.0.1:1"))
