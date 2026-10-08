@@ -101,6 +101,27 @@ updates the Services, and the game pods pick up new placement when they are
 recreated. The exception is a server sharing its address under `Local`: it is
 moved to the others' node right away.
 
+#### Planning addresses under `Local`
+
+With `LoadBalancer` and `Local`, the allocation decides placement: the servers
+on one IP run on one node, the node MetalLB announces that IP from. Kubernetes
+cannot spread them, and the operator never changes allocations to make room;
+they stay the Panel admin's choice, because players, DNS records and firewall
+rules depend on them. So plan addresses like nodes:
+
+- Give a server its own IP when it should be free to run anywhere. A MetalLB
+  pool with an address per server removes the constraint entirely.
+- Put servers on one IP only when they fit on one node together: their memory
+  and CPU requests add up on that node.
+- When a server on a shared IP does not fit, it stays `Pending`
+  (`GamePodReady=False`, `Unschedulable`). Free room on that node, or move the
+  server to another IP in the Panel.
+- A volume bound to a node (local-path and other node-local storage) keeps a
+  server on that node. A server whose volume lives elsewhere cannot join the
+  others on its IP and stays `Pending`; give it its own IP instead.
+- Servers whose players' addresses do not matter can use a class with
+  `Cluster`, which has none of these constraints.
+
 ## network
 
 | Field | Default | Meaning |

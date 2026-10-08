@@ -162,7 +162,9 @@ default `externalTrafficPolicy: Local`, which keeps the players' addresses,
 MetalLB only shares an IP between Services with identical selectors and
 announces it from one node, so the operator gives the servers on one IP a
 common selector and runs their game pods on the same node. A server that does
-not fit there stays `Pending`. To spread the servers of one IP over several
+not fit there stays `Pending`, so under `Local` picking an allocation's IP is
+picking a node; see [Planning addresses under `Local`](classes.md#planning-addresses-under-local).
+To spread the servers of one IP over several
 nodes instead, set `externalTrafficPolicy: Cluster`; the game servers then see
 a node address instead of the player's.
 
