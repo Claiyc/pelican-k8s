@@ -9,6 +9,9 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
@@ -771,5 +774,131 @@ func TestAgentInstance(t *testing.T) {
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "other", ContainerID: "cri://x"}, {Name: AgentContainer, ContainerID: "cri://b"}}
 	if got := AgentInstance(pod); got != "pod-1/cri://b" {
 		t.Fatalf("restarted agent: %q", got)
+	}
+}
+
+// sharedInput is a MetalLB server on 203.0.113.10 with its own UUID and ports.
+func sharedInput(t *testing.T, id string, port int32, mutate func(*Input)) *Input {
+	t.Helper()
+	return testInput(t, func(i *Input) {
+		i.Settings.UUID = id
+		i.Settings.Allocations = settings.Allocations{
+			Default:  settings.Allocation{IP: "203.0.113.10", Port: port},
+			Mappings: map[string][]int32{"203.0.113.10": {port}},
+		}
+		i.Class.Spec.Exposure = v1alpha1.ExposureSpec{
+			Mode:                  v1alpha1.ExposureLoadBalancer,
+			ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyLocal,
+			LoadBalancer:          v1alpha1.LoadBalancerSpec{Provider: v1alpha1.LoadBalancerMetalLB},
+		}
+		if mutate != nil {
+			mutate(i)
+		}
+	})
+}
+
+// MetalLB lets two Local Services share an address only when their sharing
+// keys and their selectors (its "backend key") are equal and their ports
+// differ. Each port must still reach only the server that owns it.
+func TestSharedIPServicesSatisfyMetalLB(t *testing.T) {
+	a := sharedInput(t, uuid, 25565, nil)
+	b := sharedInput(t, "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c", 25566, nil)
+	sa, sb := ExposureService(a), ExposureService(b)
+	if sa.Annotations[v1alpha1.MetalLBSharingAnnotation] != sb.Annotations[v1alpha1.MetalLBSharingAnnotation] {
+		t.Fatalf("sharing keys differ: %v / %v", sa.Annotations, sb.Annotations)
+	}
+	if labels.Set(sa.Spec.Selector).String() != labels.Set(sb.Spec.Selector).String() {
+		t.Fatalf("selectors differ: %v / %v", sa.Spec.Selector, sb.Spec.Selector)
+	}
+	pa, pb := GamePodTemplate(a), GamePodTemplate(b)
+	for _, c := range []struct {
+		svc       *corev1.Service
+		own, peer corev1.PodTemplateSpec
+	}{{sa, pa, pb}, {sb, pb, pa}} {
+		sel := labels.SelectorFromSet(c.svc.Spec.Selector)
+		if !sel.Matches(labels.Set(c.own.Labels)) || !sel.Matches(labels.Set(c.peer.Labels)) {
+			t.Fatalf("selector %v must match every game pod on the address", c.svc.Spec.Selector)
+		}
+		for _, sp := range c.svc.Spec.Ports {
+			if sp.TargetPort.Type != intstr.String {
+				t.Fatalf("port %s must target a named container port", sp.Name)
+			}
+			if !declaresPort(c.own, sp.TargetPort.StrVal) || declaresPort(c.peer, sp.TargetPort.StrVal) {
+				t.Fatalf("port %s must reach only its own server", sp.Name)
+			}
+		}
+	}
+	if _, ok := AgentPodTemplate(a).Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("only game pods carry the shared-IP label")
+	}
+	// The address is announced from one node, so the pods run together.
+	for _, p := range []corev1.PodTemplateSpec{pa, pb} {
+		terms := p.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		if len(terms) != 1 || terms[0].TopologyKey != "kubernetes.io/hostname" {
+			t.Fatalf("pod affinity %+v", p.Spec.Affinity)
+		}
+		sel, err := metav1.LabelSelectorAsSelector(terms[0].LabelSelector)
+		if err != nil || !sel.Matches(labels.Set(pa.Labels)) || !sel.Matches(labels.Set(pb.Labels)) {
+			t.Fatalf("affinity must match every game pod on the address, itself included: %v", terms[0].LabelSelector)
+		}
+	}
+}
+
+func declaresPort(p corev1.PodTemplateSpec, name string) bool {
+	for _, c := range p.Spec.Containers {
+		for _, cp := range c.Ports {
+			if cp.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Cluster lets MetalLB share regardless of selectors and forwards from any
+// node, so nothing is grouped; nor is it without a sharing annotation.
+func TestSharedIPOnlyForLocalSharing(t *testing.T) {
+	for name, mutate := range map[string]func(*Input){
+		"cluster": func(i *Input) {
+			i.Class.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+		},
+		"no sharing annotation": func(i *Input) { i.Class.Spec.Exposure.LoadBalancer = v1alpha1.LoadBalancerSpec{} },
+		"nodeport":              func(i *Input) { i.Class.Spec.Exposure.Mode = v1alpha1.ExposureNodePort },
+	} {
+		in := sharedInput(t, uuid, 25565, mutate)
+		svc := ExposureService(in)
+		if svc.Spec.Selector[v1alpha1.LabelServerUUID] != uuid || svc.Spec.Ports[0].TargetPort.IntVal != 25565 {
+			t.Fatalf("%s: service %+v", name, svc.Spec)
+		}
+		p := GamePodTemplate(in)
+		if _, ok := p.Labels[v1alpha1.LabelSharedIP]; ok || (p.Spec.Affinity != nil && p.Spec.Affinity.PodAffinity != nil) {
+			t.Fatalf("%s: pod grouped %+v %+v", name, p.Labels, p.Spec.Affinity)
+		}
+	}
+}
+
+func TestIPLabelValue(t *testing.T) {
+	for raw, want := range map[string]string{
+		"203.0.113.10":        "203.0.113.10",
+		"::ffff:203.0.113.10": "203.0.113.10",
+		"2001:db8::1":         "20010db8000000000000000000000001",
+	} {
+		if got := ipLabelValue(raw); got != want {
+			t.Fatalf("%s: %s", raw, got)
+		}
+	}
+	for _, raw := range []string{"2001:db8::1", "::", "not-an-ip:"} {
+		if errs := validation.IsValidLabelValue(ipLabelValue(raw)); len(errs) > 0 {
+			t.Fatalf("%s: %v", raw, errs)
+		}
+	}
+}
+
+// The shared-IP term adds to the agent term rather than replacing it.
+func TestSharedIPKeepsAgentAffinity(t *testing.T) {
+	in := sharedInput(t, uuid, 25565, func(i *Input) { i.GameAffinity = GameAffinityRequired })
+	terms := GamePodTemplate(in).Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(terms) != 2 || terms[0].LabelSelector.MatchLabels[v1alpha1.LabelComponent] != ComponentAgent || terms[1].LabelSelector.MatchLabels[v1alpha1.LabelSharedIP] != "203.0.113.10" {
+		t.Fatalf("terms %+v", terms)
 	}
 }

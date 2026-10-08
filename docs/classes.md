@@ -55,10 +55,10 @@ start to the next; with node-local storage it stays where the volume is. See
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the game pod (and with it the agent pod) on the node whose InternalIP or ExternalIP is the allocation IP |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the game pod is not tied to a node |
+| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the game pod is not tied to a node. With `Local` and a sharing annotation, the servers sharing a LoadBalancer IP run on one node; with `Cluster` they spread across nodes and see the node's address instead of the client's |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
-| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |
+| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`), so servers on one IP can use different ports |
 | `loadBalancer.annotations` | | Added verbatim to exposure Services |
 | `externalIPs` | | Addresses reported to the Panel for allocations |
 

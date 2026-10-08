@@ -1,7 +1,10 @@
 package render
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"net"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -26,6 +29,14 @@ func ExposureService(in *Input) *corev1.Service {
 			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: ComponentGame},
 			PublishNotReadyAddresses: true,
 		},
+	}
+	shared := SharedIP(in)
+	if shared != "" {
+		// MetalLB lets Local Services share an address only when their
+		// selectors are identical, so every Service on the address selects
+		// all its game pods. Named target ports keep each port on the one
+		// pod that declares it.
+		svc.Spec.Selector = map[string]string{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: ComponentGame}
 	}
 	svc.Annotations = map[string]string{}
 	for k, v := range ex.LoadBalancer.Annotations {
@@ -54,6 +65,9 @@ func ExposureService(in *Input) *corev1.Service {
 	for _, p := range in.Settings.Ports() {
 		for _, proto := range []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP} {
 			sp := corev1.ServicePort{Name: portName(p, proto), Port: p, TargetPort: intstr.FromInt32(p), Protocol: proto}
+			if shared != "" {
+				sp.TargetPort = intstr.FromString(portName(p, proto))
+			}
 			if ex.Mode == v1alpha1.ExposureNodePort {
 				sp.NodePort = p
 			}
@@ -61,6 +75,36 @@ func ExposureService(in *Input) *corev1.Service {
 		}
 	}
 	return svc
+}
+
+// SharedIP returns the LabelSharedIP value of a server whose LoadBalancer
+// Service shares its allocation IP (a sharing annotation is set) under
+// externalTrafficPolicy Local, or "" otherwise. Such an address is announced
+// from one node and Local delivers only to pods on that node, so all game
+// pods on the address run together on one node.
+func SharedIP(in *Input) string {
+	ex := in.Class.Spec.Exposure
+	if !in.Settings.HasAllocation() || ex.Mode == v1alpha1.ExposureNodePort || ex.Mode == v1alpha1.ExposureHostPort {
+		return ""
+	}
+	if ex.LoadBalancer.SharingKey() == "" || ex.ExternalTrafficPolicy == corev1.ServiceExternalTrafficPolicyCluster {
+		return ""
+	}
+	return ipLabelValue(in.Settings.Allocations.Default.IP)
+}
+
+// ipLabelValue turns an address into a label value: IPv4 as is, IPv6 (whose
+// colons a label value cannot hold) as hex, anything else hashed.
+func ipLabelValue(raw string) string {
+	ip := net.ParseIP(raw)
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	if ip != nil {
+		return hex.EncodeToString(ip)
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:16])
 }
 
 func portName(p int32, proto corev1.Protocol) string {

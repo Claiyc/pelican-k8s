@@ -848,7 +848,7 @@ With `openshift.enabled` the chart sets `security.useNamespaceUIDRange` and `ins
 | Secret | `gs-<uuid>-tls` | Only with `tls.enabled`: the agent's certificate (`tls.crt`, `tls.key`) and the CA bundle (`ca.crt`), issued and renewed by the operator, owned by the CR (§12.6). Mounted whole into the agent pod at `/etc/pelican-tls`; the game pod gets `ca.crt` only |
 | StatefulSet (agent) | `gs-<uuid>-agent` | Pod `gs-<uuid>-agent-0`. `replicas: 1` (0 while suspended with `suspendScalesToZero`), `updateStrategy: OnDelete`, `podManagementPolicy: Parallel`, `serviceName: gs-<uuid>-agent`, explicit PVC volume (no `volumeClaimTemplates`), PVC retention `Retain` |
 | StatefulSet (game) | `gs-<uuid>` | Pod `gs-<uuid>-0`. `replicas: 1` while the server is on and 0 otherwise (§7.6); the same strategy and volume settings. At most one pod of each kind, and both on one node (§7.7), so the RWO volume is attached to one node |
-| Service (exposure) | `gs-<uuid>` | Selects the game pod. One port entry per allocation port for each of TCP and UDP; type from the class (a type change recreates it); `publishNotReadyAddresses: true`. Not created in HostPort mode or for a server without an allocation. With `sharingAnnotation`, the value is `pelican-<allocation IP>` |
+| Service (exposure) | `gs-<uuid>` | Selects the game pod. One port entry per allocation port for each of TCP and UDP; type from the class (a type change recreates it); `publishNotReadyAddresses: true`. Not created in HostPort mode or for a server without an allocation. With `sharingAnnotation`, the value is `pelican-<allocation IP>`; under `externalTrafficPolicy: Local` the Service then selects every game pod on that address and targets named ports (§9.3) |
 | Service (agent) | `gs-<uuid>-agent` | Headless, selects the agent pod: HTTP (8080), SFTP (2022) and shim (8082) ports, `publishNotReadyAddresses: true`; the agent StatefulSet's `serviceName` and the name the shim dials |
 | NetworkPolicy | `gs-<uuid>`, `gs-<uuid>-agent` | Ingress and egress rules of the game pod and of the agent pod (§12.4); with `network.enabled: false`, rules that admit all traffic |
 | ConfigMap | `gs-<uuid>-install-<gen>` | Install script; created by the gateway, owned by the CR |
@@ -1053,7 +1053,7 @@ The agent pod and the game pod mount the same RWO volume, so they run on one nod
 places the game pod; the agent pod follows it.**
 
 **Game pod.** Apart from the class `nodeSelector` and `tolerations` and the allocation-IP node affinity
-of §9.3, the game pod is constrained toward the agent only softly:
+and shared-address pod affinity of §9.3, the game pod is constrained toward the agent only softly:
 
 | Situation | Pod affinity toward the agent pod (`kubernetes.io/hostname`) |
 |---|---|
@@ -1405,6 +1405,25 @@ gets no affinity. With more than one node and no match, the game pod is not pinn
 (`AllocationIPNotOnNode`) names the address; the server keeps running. With
 `externalTrafficPolicy: Cluster` every node forwards the NodePort and the game pod is not pinned.
 
+**Shared addresses (LoadBalancer with `Local` and `sharingAnnotation`).** Several servers can use one
+allocation IP on different ports, each with its own Service. MetalLB gives two Services one address only
+when their sharing keys match and, under `externalTrafficPolicy: Local`, their selectors are identical
+(with `Cluster` it ignores the selectors). The address is also announced from one node, where `Local`
+delivers only to pods on that node. So for such a server the operator:
+- labels the game pod `pelican-k8s.io/shared-ip=<allocation IP>` (IPv6 as 32 hex digits). A running
+  game pod is relabelled in place when the class or the allocation changes, so it keeps its traffic
+  until its recreate
+- gives the exposure Service the selector `{pelican-k8s.io/shared-ip, pelican-k8s.io/component: game}`,
+  the same for every server on the address, and named target ports (`tcp-<port>`, `udp-<port>`), which
+  the game container declares; each port therefore reaches only the pod that owns it
+- adds a required pod affinity (`kubernetes.io/hostname`) toward the game pods with the same label. The
+  first one runs wherever the scheduler puts it and the others follow; a game pod that does not fit on
+  that node stays `Pending` (`GamePodReady=False`, `Unschedulable`). The agent pods follow their game
+  pods as usual (§7.7)
+
+With `externalTrafficPolicy: Cluster` the Services keep their own selectors, the game pods are not
+grouped, and kube-proxy forwards from the announcing node to any node at the cost of the client IP.
+
 `GET /api/system/ips` offers the addresses the Panel's allocation form shows (§5.2).
 
 ### 9.4 `SERVER_IP` inside the game pod
@@ -1547,7 +1566,7 @@ enforce the workload shapes:
 | Component | Permissions |
 |---|---|
 | Gateway | Servers namespace: `gameservers` get/list/watch/create/update/patch/delete; `gameservers/status` get/update/patch; `gameservers/finalizers` update; `configmaps`, `secrets` get/list/watch/create/update/patch; `pods` get/list/watch. Release namespace: `secrets` get on the SFTP host key Secret only (`gateway.sftp.hostKeySecret`), and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes` get/list/watch; MetalLB `ipaddresspools` get/list with `gateway.metallb.discoverPools` |
-| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/delete and `pods/resize` update/patch; `secrets` get/list/watch/create/update; `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also `secrets` delete (cert-manager leaves a deleted server's certificate Secret behind) and cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
+| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/patch/delete (patch keeps the shared-IP label of §9.3 current) and `pods/resize` update/patch; `secrets` get/list/watch/create/update; `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also `secrets` delete (cert-manager leaves a deleted server's certificate Secret behind) and cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
 | Agent, game, installer ServiceAccounts | none; no ServiceAccount token is mounted in agent pods, game pods or install Jobs |
 
 ### 12.4 NetworkPolicies
