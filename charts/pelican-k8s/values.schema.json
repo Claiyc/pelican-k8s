@@ -981,7 +981,7 @@
               "default": "LoadBalancer"
             },
             "externalTrafficPolicy": {
-              "description": "externalTrafficPolicy of exposure Services. Local keeps the player's source IP.",
+              "description": "externalTrafficPolicy of exposure Services. Local keeps the player's source IP but delivers only on nodes running the game pod (servers sharing a LoadBalancer IP run on one node); Cluster forwards from any node but game servers see a node IP. See docs/classes.md.",
               "type": "string",
               "enum": ["Local", "Cluster"],
               "default": "Local"

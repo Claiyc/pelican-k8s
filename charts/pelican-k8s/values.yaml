@@ -195,6 +195,12 @@ defaultClass:
       snapshotRetain: 7
     exposure:
       mode: LoadBalancer
+      # Local: player traffic is delivered only on nodes running the game pod,
+      # and game servers see each player's real IP (bans, whitelists, per-IP
+      # limits work). Servers sharing a LoadBalancer IP run on one node.
+      # Cluster: any node forwards, so pods run anywhere, but kube-proxy
+      # rewrites the source address and game servers see a node IP instead.
+      # Details: docs/classes.md, "Local or Cluster".
       externalTrafficPolicy: Local
       loadBalancer:
         # "metallb" fills in the MetalLB annotation keys below; "" adds none.

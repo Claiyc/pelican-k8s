@@ -83,9 +83,13 @@ spec:
                   externalTrafficPolicy:
                     default: Local
                     description: |-
-                      ServiceExternalTrafficPolicy describes how nodes distribute service traffic they
-                      receive on one of the Service's "externally-facing" addresses (NodePorts, ExternalIPs,
-                      and LoadBalancer IPs.
+                      ExternalTrafficPolicy of the exposure Services. Local delivers player
+                      traffic only on nodes running the game pod and keeps each player's IP
+                      address; servers sharing a LoadBalancer IP then run on one node, and
+                      NodePort pins the pod to the allocation IP's node. Cluster forwards from
+                      any node so pods run anywhere, but kube-proxy rewrites the source
+                      address and game servers see a node IP instead of the player's (IP bans,
+                      whitelists and per-IP limits stop working). See docs/classes.md.
                     type: string
                   loadBalancer:
                     description: LoadBalancerSpec carries implementation specific
@@ -111,8 +115,12 @@ spec:
                         - metallb
                         type: string
                       sharingAnnotation:
-                        description: SharingAnnotation lets several Services share
-                          one IP (e.g. metallb.io/allow-shared-ip).
+                        description: |-
+                          SharingAnnotation lets several Services share one IP (e.g. metallb.io/allow-shared-ip).
+                          Under externalTrafficPolicy Local the game pods sharing an IP get one
+                          selector and run on one node, as a load balancer announcing the IP from
+                          one node (MetalLB) requires; a sharing annotation set through
+                          Annotations instead shares the IP without grouping the pods.
                         type: string
                     type: object
                   mode:

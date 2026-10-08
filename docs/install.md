@@ -156,8 +156,17 @@ offers only addresses MetalLB announces. Without the MetalLB CRD or the read
 permission (the chart grants it only with `discoverPools`), the gateway logs
 it once and uses the other sources.
 
-Several servers can share one address: `sharingAnnotation` (set by the
-provider) lets MetalLB put Services with different ports on one IP.
+Several servers can share one address on different ports: `sharingAnnotation`
+(set by the provider) lets MetalLB put their Services on one IP. With the
+default `externalTrafficPolicy: Local`, which keeps the players' addresses,
+MetalLB only shares an IP between Services with identical selectors and
+announces it from one node, so the operator gives the servers on one IP a
+common selector and runs their game pods on the same node. A server that does
+not fit there stays `Pending`, so under `Local` picking an allocation's IP is
+picking a node; see [Planning addresses under `Local`](classes.md#planning-addresses-under-local).
+To spread the servers of one IP over several
+nodes instead, set `externalTrafficPolicy: Cluster`; the game servers then see
+a node address instead of the player's.
 
 ## 4. Verify
 

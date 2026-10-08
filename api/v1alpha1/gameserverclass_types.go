@@ -91,6 +91,10 @@ type LoadBalancerSpec struct {
 	// IPAnnotation pins the Service to the allocation IP (e.g. metallb.io/loadBalancerIPs).
 	IPAnnotation string `json:"ipAnnotation,omitempty"`
 	// SharingAnnotation lets several Services share one IP (e.g. metallb.io/allow-shared-ip).
+	// Under externalTrafficPolicy Local the game pods sharing an IP get one
+	// selector and run on one node, as a load balancer announcing the IP from
+	// one node (MetalLB) requires; a sharing annotation set through
+	// Annotations instead shares the IP without grouping the pods.
 	SharingAnnotation string `json:"sharingAnnotation,omitempty"`
 	// Annotations are added verbatim to every exposure Service.
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -133,6 +137,13 @@ type ExposureSpec struct {
 	// cluster with more than one node has no such node).
 	// +kubebuilder:default=LoadBalancer
 	Mode ExposureMode `json:"mode,omitempty"`
+	// ExternalTrafficPolicy of the exposure Services. Local delivers player
+	// traffic only on nodes running the game pod and keeps each player's IP
+	// address; servers sharing a LoadBalancer IP then run on one node, and
+	// NodePort pins the pod to the allocation IP's node. Cluster forwards from
+	// any node so pods run anywhere, but kube-proxy rewrites the source
+	// address and game servers see a node IP instead of the player's (IP bans,
+	// whitelists and per-IP limits stop working). See docs/classes.md.
 	// +kubebuilder:default=Local
 	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
 	LoadBalancer          LoadBalancerSpec                    `json:"loadBalancer,omitempty"`

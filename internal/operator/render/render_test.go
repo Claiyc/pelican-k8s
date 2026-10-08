@@ -9,6 +9,9 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
@@ -771,5 +774,187 @@ func TestAgentInstance(t *testing.T) {
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "other", ContainerID: "cri://x"}, {Name: AgentContainer, ContainerID: "cri://b"}}
 	if got := AgentInstance(pod); got != "pod-1/cri://b" {
 		t.Fatalf("restarted agent: %q", got)
+	}
+}
+
+// sharedInput is a MetalLB server on 203.0.113.10 with its own UUID and ports.
+func sharedInput(t *testing.T, id string, port int32, mutate func(*Input)) *Input {
+	t.Helper()
+	return testInput(t, func(i *Input) {
+		i.Settings.UUID = id
+		i.Settings.Allocations = settings.Allocations{
+			Default:  settings.Allocation{IP: "203.0.113.10", Port: port},
+			Mappings: map[string][]int32{"203.0.113.10": {port}},
+		}
+		i.Class.Spec.Exposure = v1alpha1.ExposureSpec{
+			Mode:                  v1alpha1.ExposureLoadBalancer,
+			ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyLocal,
+			LoadBalancer:          v1alpha1.LoadBalancerSpec{Provider: v1alpha1.LoadBalancerMetalLB},
+		}
+		if mutate != nil {
+			mutate(i)
+		}
+	})
+}
+
+// MetalLB lets two Local Services share an address only when their sharing
+// keys and their selectors (its "backend key") are equal and their ports
+// differ. Each port must still reach only the server that owns it.
+func TestSharedIPServicesSatisfyMetalLB(t *testing.T) {
+	a := sharedInput(t, uuid, 25565, nil)
+	b := sharedInput(t, "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c", 25566, nil)
+	sa, sb := ExposureService(a), ExposureService(b)
+	if sa.Annotations[v1alpha1.MetalLBSharingAnnotation] != sb.Annotations[v1alpha1.MetalLBSharingAnnotation] {
+		t.Fatalf("sharing keys differ: %v / %v", sa.Annotations, sb.Annotations)
+	}
+	if labels.Set(sa.Spec.Selector).String() != labels.Set(sb.Spec.Selector).String() {
+		t.Fatalf("selectors differ: %v / %v", sa.Spec.Selector, sb.Spec.Selector)
+	}
+	pa, pb := GamePodTemplate(a), GamePodTemplate(b)
+	checkSharedService(t, sa, pa, pb)
+	checkSharedService(t, sb, pb, pa)
+	if _, ok := AgentPodTemplate(a).Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("only game pods carry the shared-IP label")
+	}
+	// The address is announced from one node, so the pods run together.
+	for _, p := range []corev1.PodTemplateSpec{pa, pb} {
+		terms := p.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		if len(terms) != 1 || terms[0].TopologyKey != "kubernetes.io/hostname" {
+			t.Fatalf("pod affinity %+v", p.Spec.Affinity)
+		}
+		sel, err := metav1.LabelSelectorAsSelector(terms[0].LabelSelector)
+		if err != nil || !sel.Matches(labels.Set(pa.Labels)) || !sel.Matches(labels.Set(pb.Labels)) {
+			t.Fatalf("affinity must match every game pod on the address, itself included: %v", terms[0].LabelSelector)
+		}
+	}
+}
+
+// checkSharedService checks that svc selects both game pods on its address
+// and that each of its ports reaches only its own pod.
+func checkSharedService(t *testing.T, svc *corev1.Service, own, peer corev1.PodTemplateSpec) {
+	t.Helper()
+	sel := labels.SelectorFromSet(svc.Spec.Selector)
+	if !sel.Matches(labels.Set(own.Labels)) || !sel.Matches(labels.Set(peer.Labels)) {
+		t.Fatalf("selector %v must match every game pod on the address", svc.Spec.Selector)
+	}
+	for _, sp := range svc.Spec.Ports {
+		if sp.TargetPort.Type != intstr.String {
+			t.Fatalf("port %s must target a named container port", sp.Name)
+		}
+		if !declaresPort(own, sp.TargetPort.StrVal) || declaresPort(peer, sp.TargetPort.StrVal) {
+			t.Fatalf("port %s must reach only its own server", sp.Name)
+		}
+	}
+}
+
+func declaresPort(p corev1.PodTemplateSpec, name string) bool {
+	for _, c := range p.Spec.Containers {
+		for _, cp := range c.Ports {
+			if cp.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Cluster lets MetalLB share regardless of selectors and forwards from any
+// node, so nothing is grouped; nor is it without a sharing annotation.
+func TestSharedIPOnlyForLocalSharing(t *testing.T) {
+	for name, mutate := range map[string]func(*Input){
+		"cluster": func(i *Input) {
+			i.Class.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+		},
+		"no sharing annotation": func(i *Input) { i.Class.Spec.Exposure.LoadBalancer = v1alpha1.LoadBalancerSpec{} },
+		"nodeport":              func(i *Input) { i.Class.Spec.Exposure.Mode = v1alpha1.ExposureNodePort },
+	} {
+		in := sharedInput(t, uuid, 25565, mutate)
+		svc := ExposureService(in)
+		if svc.Spec.Selector[v1alpha1.LabelServerUUID] != uuid || svc.Spec.Ports[0].TargetPort.IntVal != 25565 {
+			t.Fatalf("%s: service %+v", name, svc.Spec)
+		}
+		p := GamePodTemplate(in)
+		if _, ok := p.Labels[v1alpha1.LabelSharedIP]; ok || (p.Spec.Affinity != nil && p.Spec.Affinity.PodAffinity != nil) {
+			t.Fatalf("%s: pod grouped %+v %+v", name, p.Labels, p.Spec.Affinity)
+		}
+	}
+}
+
+func TestIPLabelValue(t *testing.T) {
+	for raw, want := range map[string]string{
+		"203.0.113.10":        "203.0.113.10",
+		"::ffff:203.0.113.10": "203.0.113.10",
+		"2001:db8::1":         "20010db8000000000000000000000001",
+	} {
+		if got := ipLabelValue(raw); got != want {
+			t.Fatalf("%s: %s", raw, got)
+		}
+	}
+	for _, raw := range []string{"2001:db8::1", "::", "not-an-ip:"} {
+		if errs := validation.IsValidLabelValue(ipLabelValue(raw)); len(errs) > 0 {
+			t.Fatalf("%s: %v", raw, errs)
+		}
+	}
+}
+
+// The shared-IP term adds to the agent term rather than replacing it.
+func TestSharedIPKeepsAgentAffinity(t *testing.T) {
+	in := sharedInput(t, uuid, 25565, func(i *Input) { i.GameAffinity = GameAffinityRequired })
+	terms := GamePodTemplate(in).Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(terms) != 2 || terms[0].LabelSelector.MatchLabels[v1alpha1.LabelComponent] != ComponentAgent || terms[1].LabelSelector.MatchLabels[v1alpha1.LabelSharedIP] != "203.0.113.10" {
+		t.Fatalf("terms %+v", terms)
+	}
+}
+
+// A port moved from server A to server B while A's pod still runs: A's pod
+// keeps declaring it until it is recreated, yet B's Service must not reach it.
+func TestSharedIPPortMovedBetweenServers(t *testing.T) {
+	a := sharedInput(t, uuid, 25565, func(i *Input) {
+		i.Settings.Allocations.Mappings["203.0.113.10"] = []int32{25565, 25566}
+	})
+	b := sharedInput(t, "9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c", 25566, nil)
+	stale := GamePodTemplate(a)
+	for _, sp := range ExposureService(b).Spec.Ports {
+		if declaresPort(stale, sp.TargetPort.StrVal) {
+			t.Fatalf("port %s of B resolves on A's pod", sp.Name)
+		}
+	}
+	for _, c := range GamePodTemplate(a).Spec.Containers {
+		for _, cp := range c.Ports {
+			if errs := validation.IsValidPortName(cp.Name); len(errs) > 0 {
+				t.Fatalf("%s: %v", cp.Name, errs)
+			}
+		}
+	}
+}
+
+// A new game pod is pinned to the node of the other servers on its address.
+// Neither the pin nor the shared-IP label changes the template hash: the pin
+// moves with the others and the label is set in place, so neither recreates a
+// running pod.
+func TestSharedIPNodePin(t *testing.T) {
+	in := sharedInput(t, uuid, 25565, nil)
+	plain := GamePodTemplate(in)
+	if plain.Spec.Affinity.NodeAffinity != nil {
+		t.Fatal("no pin without others on the address")
+	}
+	in.SharedIPNode = "node-b"
+	pinned := GamePodTemplate(in)
+	terms := pinned.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || terms[0].MatchFields[0].Values[0] != "node-b" {
+		t.Fatalf("node affinity %+v", terms)
+	}
+	if pinned.Annotations[AnnotationTemplateHash] != plain.Annotations[AnnotationTemplateHash] {
+		t.Fatal("the pin changed the template hash")
+	}
+	cluster := sharedInput(t, uuid, 25565, func(i *Input) {
+		i.Class.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+		i.SharedIPNode = "node-b"
+	})
+	if a := GamePodTemplate(cluster).Spec.Affinity; a != nil && a.NodeAffinity != nil {
+		t.Fatal("no pin under Cluster")
+	}
+	if GamePodTemplate(cluster).Annotations[AnnotationTemplateHash] != plain.Annotations[AnnotationTemplateHash] {
+		t.Fatal("sharing under Local changed the template hash")
 	}
 }

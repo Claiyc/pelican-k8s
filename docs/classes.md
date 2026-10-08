@@ -55,15 +55,79 @@ start to the next; with node-local storage it stays where the volume is. See
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the game pod (and with it the agent pod) on the node whose InternalIP or ExternalIP is the allocation IP |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the game pod is not tied to a node |
+| `externalTrafficPolicy` | `Local` | `Local` keeps the players' IP addresses and ties the game pod to where traffic arrives; `Cluster` lets any node forward but hides the players' addresses. See [Local or Cluster](#local-or-cluster) |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
-| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`) |
+| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
 | `loadBalancer.annotations` | | Added verbatim to exposure Services |
 | `externalIPs` | | Addresses reported to the Panel for allocations |
 
 Invariant: container port = Service port = external port = Panel allocation
 port, so `SERVER_PORT` always matches what players connect to.
+
+### Local or Cluster
+
+`externalTrafficPolicy` decides what a node does with player traffic for a game
+pod that runs elsewhere.
+
+- **`Local`** (default): a node only delivers to game pods on itself. The packet
+  reaches the game server unchanged, so it sees each player's real IP address.
+  The price is placement: the address must arrive where the pod runs.
+- **`Cluster`**: any node accepts the traffic and kube-proxy forwards it to the
+  pod, wherever it runs. To get the replies back through the same node it
+  rewrites the source address, so the game server sees a node's address for
+  every player.
+
+What the player's address is used for: IP bans and whitelists, per-IP
+connection limits and rate limits, anti-cheat and geo checks, and the
+addresses in server logs and the console. Under `Cluster` all of these see the
+same few node addresses, so a ban on one player can lock out everyone coming
+through that node. Some CNIs keep the source address under `Cluster` (Cilium
+with DSR, for example); there `Cluster` loses nothing.
+
+What each mode means per exposure mode:
+
+| `mode` | `Local` | `Cluster` |
+|---|---|---|
+| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With `sharingAnnotation`, all servers on one IP run on one node, because a load balancer that announces a shared address from one node (MetalLB, kube-vip in ARP mode) only reaches the pods there; MetalLB also requires identical selectors to share a `Local` address; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
+| `NodePort` | The game pod runs on the node that owns the allocation IP (`AllocationIPNotOnNode` when none does) | Every node forwards the port, the game pod runs anywhere |
+| `HostPort` | No Service; the setting has no effect | No Service; the setting has no effect |
+
+Choose `Local` when players' addresses matter, which is most public game
+servers. Choose `Cluster` when they do not matter (a private group of friends, a
+LAN) or your CNI keeps them anyway, and spreading servers over nodes is worth
+more. The setting can change at any time; the operator
+updates the Services, and the game pods pick up new placement when they are
+recreated. The exception is a server sharing its address under `Local`: it is
+moved to the others' node right away.
+
+#### Planning addresses under `Local`
+
+With `LoadBalancer`, `Local` and `sharingAnnotation`, the allocation decides
+placement: the servers on one IP run on one node, the node the load balancer
+announces that IP from. Kubernetes cannot spread them, and the operator never changes allocations to make room;
+they stay the Panel admin's choice, because players, DNS records and firewall
+rules depend on them. So plan addresses like nodes:
+
+- Give a server its own IP when it should be free to run anywhere. A load
+  balancer pool with an address per server removes the constraint entirely.
+- Put servers on one IP only when they fit on one node together: their memory
+  and CPU requests add up on that node.
+- When a server on a shared IP does not fit, it stays `Pending`
+  (`GamePodReady=False`, `Unschedulable`). Free room on that node, or move the
+  server to another IP in the Panel.
+- A volume bound to a node (local-path and other node-local storage) keeps a
+  server on that node. A server whose volume lives elsewhere cannot join the
+  others on its IP and stays `Pending`; give it its own IP instead.
+- Servers whose players' addresses do not matter can use a class with
+  `Cluster`, which has none of these constraints.
+- The grouping is needed when the address is announced per IP (L2 or BGP, as
+  MetalLB, kube-vip and Cilium do): traffic for every port lands on the
+  announcing node. A load balancer that forwards each Service port to that
+  Service's own nodes (cloud load balancers such as Azure's) does not need it.
+  Leave `sharingAnnotation` empty there and put any annotation it needs into
+  `loadBalancer.annotations`: the Services share the IP while each server keeps
+  its own selector and runs anywhere.
 
 ## network
 

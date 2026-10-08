@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/agentclient"
@@ -379,5 +380,296 @@ func TestAgentWork(t *testing.T) {
 				t.Fatalf("work %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A game pod sharing its LoadBalancer address requires the node of the other
+// game pods on it, not its agent's: a pending one is not taken for a stale
+// agent requirement and replaced on every reconcile.
+func TestPlacementSharedIPPendingGamePodStays(t *testing.T) {
+	cls := newClass()
+	cls.Spec.Exposure = v1alpha1.ExposureSpec{
+		Mode:         v1alpha1.ExposureLoadBalancer,
+		LoadBalancer: v1alpha1.LoadBalancerSpec{Provider: v1alpha1.LoadBalancerMetalLB},
+	}
+	h := newHarness(t, runningGS(), cls)
+	h.reconcile(2)
+	h.bind(h.createAgentPod(true), "node-a")
+	h.reconcile(1)
+	game := h.createGamePod()
+	if requiresAgentNode(game) {
+		t.Fatal("the shared-IP term is not an agent requirement")
+	}
+	h.unschedulable(game)
+	recordedEvents(h)
+	h.reconcile(2)
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the pending game pod stays")
+	}
+	if hasEvent(recordedEvents(h), "Replace") {
+		t.Fatal("unexpected Replace event")
+	}
+}
+
+// A running game pod from before the server shared its address is relabelled
+// in place, so the shared selector reaches it without a restart; the label
+// goes again when the class stops sharing.
+func TestSharedIPLabelFollowsTheClass(t *testing.T) {
+	cls := newClass()
+	cls.Spec.Exposure = v1alpha1.ExposureSpec{Mode: v1alpha1.ExposureLoadBalancer}
+	h := startOn(t, cls, "node-a", "node-a")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	game := h.pod()
+	if _, ok := game.Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("no shared-IP label without a sharing annotation")
+	}
+	cls = &v1alpha1.GameServerClass{}
+	if err := h.c.Get(context.Background(), client.ObjectKey{Name: "default"}, cls); err != nil {
+		t.Fatal(err)
+	}
+	cls.Spec.Exposure.LoadBalancer.Provider = v1alpha1.LoadBalancerMetalLB
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	p := h.pod()
+	if p == nil || p.UID != game.UID || p.Labels[v1alpha1.LabelSharedIP] != "192.0.2.10" {
+		t.Fatalf("running pod labels %v", p.Labels)
+	}
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("the relabelled pod is up to date: RecreatePending %s", got)
+	}
+	cls.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the running pod stays")
+	} else if _, ok := p.Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("the label goes when the address is no longer shared under Local")
+	}
+}
+
+// peerGamePod adds a running game pod of another server on the shared address.
+func (h *harness) peerGamePod(name, node string) {
+	h.t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{
+			v1alpha1.LabelServerUUID: "peer-" + name,
+			v1alpha1.LabelComponent:  render.ComponentGame,
+			v1alpha1.LabelSharedIP:   "192.0.2.10",
+		}},
+		Spec: corev1.PodSpec{NodeName: node, Containers: []corev1.Container{{Name: render.GameContainer, Image: "game"}}},
+	}
+	if err := h.c.Create(context.Background(), pod); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// node adds a node with the given readiness.
+func (h *harness) node(name string, ready bool) {
+	h.t.Helper()
+	status := corev1.ConditionTrue
+	if !ready {
+		status = corev1.ConditionFalse
+	}
+	n := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}},
+	}
+	if err := h.c.Create(context.Background(), n); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) readyNodes(names ...string) {
+	h.t.Helper()
+	for _, n := range names {
+		h.node(n, true)
+	}
+}
+
+func metalLBClass() *v1alpha1.GameServerClass {
+	cls := newClass()
+	cls.Spec.Exposure = v1alpha1.ExposureSpec{
+		Mode:         v1alpha1.ExposureLoadBalancer,
+		LoadBalancer: v1alpha1.LoadBalancerSpec{Provider: v1alpha1.LoadBalancerMetalLB},
+	}
+	return cls
+}
+
+// A running game pod apart from the others on its address receives no
+// traffic: the server is stopped and its game pod recreated on their node.
+func TestSharedIPMovesToTheOthersNode(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a", "node-b")
+	h.peerGamePod("peer-1", "node-b")
+	h.peerGamePod("peer-2", "node-b")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	game := h.pod()
+	h.reconcile(1)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != reasonSharedIPNodeMismatch {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if !slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the game pod stays until the process is offline")
+	}
+	if got := pinnedNode(&corev1.Pod{Spec: h.template(names.StatefulSet(uuid)).Spec}); got != "node-b" {
+		t.Fatalf("game template pinned to %q", got)
+	}
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessOffline
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	if h.pod() != nil {
+		t.Fatal("the offline game pod is recreated")
+	}
+	h.bind(h.createGamePod(), "node-b")
+	h.reconcile(1)
+	if h.condReason(v1alpha1.ConditionRecreatePending) == reasonSharedIPNodeMismatch {
+		t.Fatal("the pod on the others' node stays")
+	}
+	if h.agentPod() != nil {
+		t.Fatal("the agent pod follows the game pod")
+	}
+	h.reconcile(1)
+	h.bind(h.createAgentPod(true), "node-b")
+	h.reconcile(1)
+	if got := h.agent.Calls(); got[len(got)-1] != "power:start" {
+		t.Fatalf("the new pod starts the server again: %v", got)
+	}
+}
+
+// A running game pod created before the named target ports declares none of
+// them, so the shared Service does not reach it: the server is stopped and its
+// game pod recreated with the ports.
+func TestSharedIPRecreatesAPodWithoutTheNamedPorts(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a")
+	game := h.pod()
+	for i, c := range game.Spec.Containers {
+		for j, p := range c.Ports {
+			game.Spec.Containers[i].Ports[j].Name = strings.ToLower(string(p.Protocol)) + "-" + p.Name[1:strings.IndexByte(p.Name, '-')]
+		}
+	}
+	if err := h.c.Update(context.Background(), game); err != nil {
+		t.Fatal(err)
+	}
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != reasonSharedIPPortsOutdated {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if !slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessOffline
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	if h.pod() != nil {
+		t.Fatal("the offline game pod is recreated")
+	}
+	h.bind(h.createGamePod(), "node-a")
+	h.reconcile(1)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("the recreated pod declares the ports: RecreatePending %s", got)
+	}
+	if got := h.agent.Calls(); got[len(got)-1] != "power:start" {
+		t.Fatalf("the new pod starts the server again: %v", got)
+	}
+}
+
+// The game pod on the node most servers on the address run on stays; the
+// others come to it.
+func TestSharedIPMajorityStays(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a", "node-b")
+	h.peerGamePod("peer-1", "node-a")
+	h.peerGamePod("peer-2", "node-b")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	game := h.pod()
+	h.reconcile(2)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the game pod stays")
+	}
+}
+
+// A pending game pod pinned to a node the others left is replaced, so the new
+// one follows them.
+func TestSharedIPPendingPodFollowsTheOthers(t *testing.T) {
+	h := newHarness(t, runningGS(), metalLBClass())
+	h.readyNodes("node-a", "node-b", "node-c")
+	h.peerGamePod("peer-1", "node-b")
+	h.reconcile(2)
+	h.bind(h.createAgentPod(true), "node-a")
+	h.reconcile(1)
+	game := h.createGamePod()
+	if got := pinnedNode(game); got != "node-b" {
+		t.Fatalf("new game pod pinned to %q", got)
+	}
+	h.unschedulable(game)
+	h.reconcile(1)
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the pending pod pinned to the others' node stays")
+	}
+	peer := &corev1.Pod{}
+	if !h.get(peer, "peer-1") {
+		t.Fatal("peer missing")
+	}
+	if err := h.c.Delete(context.Background(), peer); err != nil {
+		t.Fatal(err)
+	}
+	h.peerGamePod("peer-2", "node-c")
+	recordedEvents(h)
+	h.reconcile(1)
+	if h.pod() != nil || !hasEvent(recordedEvents(h), "Replace") {
+		t.Fatal("the pending pod pinned to the old node is replaced")
+	}
+	h.reconcile(1)
+	if got := pinnedNode(h.createGamePod()); got != "node-c" {
+		t.Fatalf("replacement pinned to %q", got)
+	}
+}
+
+// Game pods on a NotReady node do not count: the address moves to a node with
+// ready endpoints, so the running pod there stays instead of following them.
+func TestSharedIPIgnoresNotReadyNodes(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a")
+	h.node("node-b", false)
+	h.peerGamePod("peer-1", "node-b")
+	h.peerGamePod("peer-2", "node-b")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(2)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	if got := pinnedNode(&corev1.Pod{Spec: h.template(names.StatefulSet(uuid)).Spec}); got != "" {
+		t.Fatalf("game template pinned to %q", got)
 	}
 }

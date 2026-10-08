@@ -27,6 +27,9 @@ const (
 	LabelEggUUID = "pelican-k8s.io/egg-uuid"
 	// LabelComponent identifies the role of an owned object (game, install, agent).
 	LabelComponent = "pelican-k8s.io/component"
+	// LabelSharedIP groups the game pods whose LoadBalancer Services share one
+	// address under externalTrafficPolicy Local (see ExposureSpec).
+	LabelSharedIP = "pelican-k8s.io/shared-ip"
 	// LabelOrphanedAt is set on a PVC that was retained after its GameServer was deleted.
 	LabelOrphanedAt = "pelican-k8s.io/orphaned-at"
 	// AnnotationPanelName carries the human readable Panel server name.

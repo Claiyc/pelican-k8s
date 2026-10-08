@@ -66,14 +66,16 @@ func statefulSet(in *Input, name, serviceName, component string, tmpl corev1.Pod
 // TemplateHash hashes the pod template parts that require a pod recreate. It
 // leaves out the game container's resources, which are resized in place, and
 // the placement toward the other pod (the game pod's pod affinity, the agent
-// pod's node affinity), which is set per start (section 7.7). The game pod's
-// node affinity to the allocation nodes stays in. For the agent pod it also
+// pod's node affinity), which is set per start (section 7.7), and the
+// shared-IP label, which is set in place (section 9.3). The game pod's node
+// affinity to the allocation nodes stays in. For the agent pod it also
 // leaves out what follows Panel edits of the server (its name, its egg and the
 // scratch size derived from disk_space): those reach the agent pod when it is
 // next replaced, and do not replace it by themselves.
 func TemplateHash(tmpl corev1.PodTemplateSpec) string {
 	c := tmpl.DeepCopy()
 	agent := c.Labels[v1alpha1.LabelComponent] == ComponentAgent
+	delete(c.Labels, v1alpha1.LabelSharedIP)
 	for i := range c.Spec.Containers {
 		if c.Spec.Containers[i].Name == GameContainer {
 			c.Spec.Containers[i].Resources = corev1.ResourceRequirements{}
@@ -132,8 +134,12 @@ func podTemplate(in *Input, component string, spec corev1.PodSpec) corev1.PodTem
 	if in.Settings.Meta.Name != "" {
 		annotations[v1alpha1.AnnotationPanelName] = in.Settings.Meta.Name
 	}
+	labels := in.Labels(component)
+	if shared := SharedIP(in); shared != "" && component == ComponentGame {
+		labels[v1alpha1.LabelSharedIP] = shared
+	}
 	tmpl := corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Labels: in.Labels(component), Annotations: annotations},
+		ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annotations},
 		Spec:       spec,
 	}
 	tmpl.Annotations[AnnotationTemplateHash] = TemplateHash(tmpl)
@@ -424,10 +430,44 @@ func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 	case GameAffinityPreferred:
 		affinity.PodAffinity = &corev1.PodAffinity{PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 100, PodAffinityTerm: agentTerm}}}
 	}
+	addSharedIPAffinity(in, affinity)
 	if affinity.NodeAffinity != nil || affinity.PodAffinity != nil {
 		spec.Affinity = affinity
 	}
-	return podTemplate(in, ComponentGame, spec)
+	tmpl := podTemplate(in, ComponentGame, spec)
+	pinSharedIPNode(in, &tmpl)
+	return tmpl
+}
+
+// pinSharedIPNode pins a new game pod to In.SharedIPNode, the node of the
+// other game pods on its address, so a pod that does not fit there stays
+// Pending instead of joining a stray peer elsewhere. It is added after the
+// template hash: the pin only matters when a pod is scheduled, and a change
+// must not mark a running pod for recreation.
+func pinSharedIPNode(in *Input, tmpl *corev1.PodTemplateSpec) {
+	if in.SharedIPNode == "" || SharedIP(in) == "" {
+		return
+	}
+	if tmpl.Spec.Affinity == nil {
+		tmpl.Spec.Affinity = &corev1.Affinity{}
+	}
+	tmpl.Spec.Affinity.NodeAffinity = nodeNameAffinity([]string{in.SharedIPNode})
+}
+
+// addSharedIPAffinity runs the game pods sharing an address on one node
+// (section 9.3). The first one matches its own term and may run anywhere.
+func addSharedIPAffinity(in *Input, affinity *corev1.Affinity) {
+	shared := SharedIP(in)
+	if shared == "" {
+		return
+	}
+	if affinity.PodAffinity == nil {
+		affinity.PodAffinity = &corev1.PodAffinity{}
+	}
+	affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution = append(affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution, corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: ComponentGame}},
+		TopologyKey:   corev1.LabelHostname,
+	})
 }
 
 func nodeNameAffinity(nodes []string) *corev1.NodeAffinity {
@@ -449,7 +489,7 @@ func gamePorts(in *Input) []corev1.ContainerPort {
 	hostPort := in.Class.Spec.Exposure.Mode == v1alpha1.ExposureHostPort
 	for _, p := range in.Settings.Ports() {
 		for _, proto := range []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP} {
-			cp := corev1.ContainerPort{Name: portName(p, proto), ContainerPort: p, Protocol: proto}
+			cp := corev1.ContainerPort{Name: containerPortName(in, p, proto), ContainerPort: p, Protocol: proto}
 			if hostPort {
 				cp.HostPort = p
 			}

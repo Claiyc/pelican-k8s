@@ -146,6 +146,9 @@ func (r *GameServerReconciler) relocate(s *scope) error {
 		}
 		s.pod = nil
 	}
+	if err := r.replaceStaleSharedIPPin(s); err != nil {
+		return err
+	}
 
 	// The game pod's node, unless the game pod went in this reconcile.
 	node := ""
@@ -203,10 +206,19 @@ func (r *GameServerReconciler) deletePod(s *scope, pod *corev1.Pod) error {
 	return nil
 }
 
-// requiresAgentNode reports a pod with a required pod affinity.
+// requiresAgentNode reports a pod with a required pod affinity toward its
+// agent pod. A shared-IP term (toward other game pods) does not count.
 func requiresAgentNode(pod *corev1.Pod) bool {
 	a := pod.Spec.Affinity
-	return a != nil && a.PodAffinity != nil && len(a.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution) > 0
+	if a == nil || a.PodAffinity == nil {
+		return false
+	}
+	for _, t := range a.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution {
+		if t.LabelSelector != nil && t.LabelSelector.MatchLabels[v1alpha1.LabelComponent] == render.ComponentAgent {
+			return true
+		}
+	}
+	return false
 }
 
 // pinnedNode returns the node a pod's required node affinity names, if it
@@ -338,6 +350,9 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		return err
 	}
 	r.placeGame(s)
+	if err := r.placeSharedIP(s); err != nil {
+		return err
+	}
 	if err := r.ensureGameStatefulSet(s); err != nil {
 		return err
 	}
@@ -356,6 +371,18 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "RestartRequested", "restart requested; the pods are recreated once the process is offline and the agent has no in-flight work")
 	case resizeRecreate:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate", "resources cannot be applied in place; the game pod is recreated once the process is offline")
+	case s.sharedIPElsewhere != "":
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonSharedIPNodeMismatch,
+			fmt.Sprintf("the other servers on this LoadBalancer address run on %s, where it is announced; the server is stopped and its game pod recreated there", s.sharedIPElsewhere))
+		if err := r.stopToRecreate(s, "SharedIPMove", fmt.Sprintf("its game pod moves to %s, where the other servers on its address run", s.sharedIPElsewhere)); err != nil {
+			return err
+		}
+	case s.sharedIPPortsStale:
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonSharedIPPortsOutdated,
+			"the game pod predates the named ports its shared LoadBalancer Service targets and receives no traffic; the server is stopped and its game pod recreated")
+		if err := r.stopToRecreate(s, "SharedIPPorts", "its game pod predates the named ports its shared address targets"); err != nil {
+			return err
+		}
 	case gameOutdated:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "TemplateChanged", "game pod template changed; the game pod is recreated once the process is offline")
 	case agentOutdated:
@@ -364,7 +391,7 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionFalse, "UpToDate", "")
 		return r.relocate(s)
 	}
-	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate); err != nil {
+	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate || s.sharedIPElsewhere != "" || s.sharedIPPortsStale); err != nil {
 		return err
 	}
 	return r.relocate(s)
@@ -421,6 +448,9 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 		r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "Terminating", "game pod is terminating")
 		return r.fence(s, pod, lost)
 	}
+	if err := r.labelSharedIP(s, pod); err != nil {
+		return err
+	}
 	// Always run the resize phase: it owns the ResizePending condition and the
 	// in-place resize, whether or not a recreate is already pending.
 	*resizeRecreate = r.reconcileResize(s, pod)
@@ -454,6 +484,27 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 		return nil
 	}
 	return r.relayTermination(s, pod)
+}
+
+// labelSharedIP keeps the game pod's shared-IP label in step with the
+// exposure Service's selector (ARCHITECTURE.md 9.3). The label changes in
+// place, so a pod from before a class or allocation change keeps its traffic
+// until it is recreated.
+func (r *GameServerReconciler) labelSharedIP(s *scope, pod *corev1.Pod) error {
+	want := render.SharedIP(s.in)
+	if pod.Labels[v1alpha1.LabelSharedIP] == want {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if want == "" {
+		delete(pod.Labels, v1alpha1.LabelSharedIP)
+	} else {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		pod.Labels[v1alpha1.LabelSharedIP] = want
+	}
+	return client.IgnoreNotFound(r.Patch(s.ctx, pod, patch))
 }
 
 // fence force-deletes a pod that is terminating on a node that has been
