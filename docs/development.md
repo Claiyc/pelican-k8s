@@ -158,9 +158,10 @@ Mark the release PR ready and merge it. Nothing else is manual.
   no tag. It checks that the chart's `version`, `appVersion` and the
   `CHANGELOG.md` section agree, builds and pushes the images
   (`ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`, tagged `X.Y.Z`
-  and `X.Y`), pushes both charts to `oci://ghcr.io/claiyc/pelican-k8s/charts`,
-  then tags the commit `vX.Y.Z` and publishes the GitHub release with the
-  changelog section as its notes and the chart tarballs attached.
+  and, unless it is a pre-release, `X.Y`), pushes both charts to
+  `oci://ghcr.io/claiyc/pelican-k8s/charts`, then tags the commit `vX.Y.Z`
+  and publishes the GitHub release with the changelog section as its notes
+  and the chart tarballs attached.
 - **The Panel chart** is not bumped by a release: bump `charts/pelican-panel`
   in the PR that changes it. Every release pushes it at its current version.
 - **CI on the release PR.** PRs opened with the default `GITHUB_TOKEN` start no

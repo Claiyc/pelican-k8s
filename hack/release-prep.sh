@@ -115,7 +115,7 @@ if [[ -n "$reason" ]]; then
   echo "bump: $reason" >&2
 fi
 # A release, or a pre-release of one (X.Y.Z-betaN).
-[[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a release version: $next" >&2; exit 1; }
+[[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || { echo "not a release version: $next" >&2; exit 1; }
 [[ "$next" != "$current" ]] || { echo "$next is already the chart version" >&2; exit 1; }
 
 notes=$(mktemp)
