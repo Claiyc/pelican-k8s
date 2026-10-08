@@ -125,7 +125,7 @@ func (w *Watcher) offlineLongEnough(gs *v1alpha1.GameServer) bool {
 // sameDrivenPods reports whether the operator last drove the same pods and
 // agent container for both versions of a GameServer.
 func sameDrivenPods(a, b *v1alpha1.GameServer) bool {
-	return a.Status.Agent.PodUID == b.Status.Agent.PodUID && a.Status.Agent.Restarts == b.Status.Agent.Restarts &&
+	return a.Status.Agent.PodUID == b.Status.Agent.PodUID && a.Status.Agent.ContainerID == b.Status.Agent.ContainerID &&
 		a.Status.Game.PodUID == b.Status.Game.PodUID
 }
 
