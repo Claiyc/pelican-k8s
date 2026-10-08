@@ -1431,7 +1431,8 @@ delivers only to pods on that node. So for such a server the operator:
   in place, or one that started before the others): it receives no traffic there, so the operator sets
   `RecreatePending` (reason `SharedIPNodeMismatch`), stops the process, and the game pod is recreated on
   that node once the process is `offline` (§8.5); the fresh-pod rule starts it again. Every server on the
-  address picks the same node, so only the pods elsewhere move. A replacement that does not fit there,
+  address picks the same node, so only the pods elsewhere move. Pods on a NotReady node do not count: the
+  address moves to a node with ready endpoints, and the pods there stay. A replacement that does not fit there,
   or whose volume is bound to another node, stays `Pending`
 
 With `externalTrafficPolicy: Cluster` the Services keep their own selectors, the game pods are not

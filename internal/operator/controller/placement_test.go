@@ -470,6 +470,29 @@ func (h *harness) peerGamePod(name, node string) {
 	}
 }
 
+// node adds a node with the given readiness.
+func (h *harness) node(name string, ready bool) {
+	h.t.Helper()
+	status := corev1.ConditionTrue
+	if !ready {
+		status = corev1.ConditionFalse
+	}
+	n := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}},
+	}
+	if err := h.c.Create(context.Background(), n); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) readyNodes(names ...string) {
+	h.t.Helper()
+	for _, n := range names {
+		h.node(n, true)
+	}
+}
+
 func metalLBClass() *v1alpha1.GameServerClass {
 	cls := newClass()
 	cls.Spec.Exposure = v1alpha1.ExposureSpec{
@@ -483,6 +506,7 @@ func metalLBClass() *v1alpha1.GameServerClass {
 // traffic: the server is stopped and its game pod recreated on their node.
 func TestSharedIPMovesToTheOthersNode(t *testing.T) {
 	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a", "node-b")
 	h.peerGamePod("peer-1", "node-b")
 	h.peerGamePod("peer-2", "node-b")
 	h.agent.mu.Lock()
@@ -529,6 +553,7 @@ func TestSharedIPMovesToTheOthersNode(t *testing.T) {
 // others come to it.
 func TestSharedIPMajorityStays(t *testing.T) {
 	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a", "node-b")
 	h.peerGamePod("peer-1", "node-a")
 	h.peerGamePod("peer-2", "node-b")
 	h.agent.mu.Lock()
@@ -551,6 +576,7 @@ func TestSharedIPMajorityStays(t *testing.T) {
 // one follows them.
 func TestSharedIPPendingPodFollowsTheOthers(t *testing.T) {
 	h := newHarness(t, runningGS(), metalLBClass())
+	h.readyNodes("node-a", "node-b", "node-c")
 	h.peerGamePod("peer-1", "node-b")
 	h.reconcile(2)
 	h.bind(h.createAgentPod(true), "node-a")
@@ -580,5 +606,28 @@ func TestSharedIPPendingPodFollowsTheOthers(t *testing.T) {
 	h.reconcile(1)
 	if got := pinnedNode(h.createGamePod()); got != "node-c" {
 		t.Fatalf("replacement pinned to %q", got)
+	}
+}
+
+// Game pods on a NotReady node do not count: the address moves to a node with
+// ready endpoints, so the running pod there stays instead of following them.
+func TestSharedIPIgnoresNotReadyNodes(t *testing.T) {
+	h := startOn(t, metalLBClass(), "node-a", "node-a")
+	h.readyNodes("node-a")
+	h.node("node-b", false)
+	h.peerGamePod("peer-1", "node-b")
+	h.peerGamePod("peer-2", "node-b")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(2)
+	if got := h.condReason(v1alpha1.ConditionRecreatePending); got != "UpToDate" {
+		t.Fatalf("RecreatePending %s", got)
+	}
+	if slices.Contains(h.agent.Calls(), "power:stop") {
+		t.Fatalf("calls %v", h.agent.Calls())
+	}
+	if got := pinnedNode(&corev1.Pod{Spec: h.template(names.StatefulSet(uuid)).Spec}); got != "" {
+		t.Fatalf("game template pinned to %q", got)
 	}
 }

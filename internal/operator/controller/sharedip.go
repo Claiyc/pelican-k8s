@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
@@ -32,15 +34,34 @@ func (r *GameServerReconciler) placeSharedIP(s *scope) error {
 		client.MatchingLabels{v1alpha1.LabelSharedIP: shared, v1alpha1.LabelComponent: render.ComponentGame}); err != nil {
 		return err
 	}
-	var others []corev1.Pod
+	// Pods on a NotReady node do not count: the address moves to a node with
+	// ready endpoints, and the pods there must not follow the lost ones.
+	ready := map[string]bool{}
+	var all, others []corev1.Pod
 	for _, p := range pods.Items {
+		n := p.Spec.NodeName
+		if n == "" {
+			continue
+		}
+		if _, ok := ready[n]; !ok {
+			node := &corev1.Node{}
+			err := r.Get(s.ctx, types.NamespacedName{Name: n}, node)
+			if err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+			ready[n] = err == nil && nodeReady(node)
+		}
+		if !ready[n] {
+			continue
+		}
+		all = append(all, p)
 		if p.Labels[v1alpha1.LabelServerUUID] != s.in.UUID() {
 			others = append(others, p)
 		}
 	}
 	s.in.SharedIPNode = gatherNode(others)
-	if pod := s.pod; pod != nil && pod.Spec.NodeName != "" && pod.DeletionTimestamp.IsZero() {
-		if n := gatherNode(pods.Items); n != "" && n != pod.Spec.NodeName {
+	if pod := s.pod; pod != nil && ready[pod.Spec.NodeName] && pod.DeletionTimestamp.IsZero() {
+		if n := gatherNode(all); n != "" && n != pod.Spec.NodeName {
 			s.sharedIPElsewhere = n
 		}
 	}
