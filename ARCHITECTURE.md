@@ -675,6 +675,7 @@ status:
     lastAction: {action: start, at: "…", podUID: "…"}   # podUID: the game pod
   agent:
     podUID: "…"             # agent pod the operator last drove; a new UID means "fresh pod"
+    restarts: 0             # its agent container's restart count; a new count is a fresh agent too
     node: worker-2
     templateHash: "…"       # pod template hash of the agent StatefulSet
     sftpHostKey: "SHA256:…" # pinned by the gateway on the first SFTP connection (§5.6)
@@ -1000,7 +1001,7 @@ older than the one it wrote.
 | `spec.power.generation` ≠ `status.power.observedGeneration`, `desired: Running` | Refused with an event while suspended. Without a game pod: scale the game StatefulSet to 1, place the pods (§7.7), and once `GET /internal/v1/shim` names the new pod, `POST /power {start}`. With a game pod: `POST /power {restart}` if the process is not `offline`, else `{start}`; while `RecreatePending`, `stop` the process first, replace the game pod and start in the new one. The generation is observed when the power call is made |
 | `spec.power.generation` ≠ `status.power.observedGeneration`, `desired: Stopped` | `POST /power {stop}`, or `{kill}` if `kill: true`, when the process is not `offline`; record `observedGeneration` |
 | Process `offline` and `desired: Stopped` | Scale the game StatefulSet to 0. This covers Panel stops, the stop command typed into the console, suspension and a start that failed |
-| Fresh pod (`status.agent.podUID` or `status.game.podUID` ≠ the current pod; agent ready, shim attached) | Record the pods. If `desired: Running` and the server is neither suspended nor `RecreatePending`, `POST /power {start}` (Wings' "was running before reboot"); the agent attaches when the shim already runs the process. An install in flight in the old agent pod is requested again |
+| Fresh pod (`status.agent.podUID` or `status.game.podUID` ≠ the current pod, or `status.agent.restarts` ≠ the agent container's restart count; agent ready, shim attached) | Record the pods. If `desired: Running` and the server is neither suspended nor `RecreatePending`, `POST /power {start}` (Wings' "was running before reboot"); the agent attaches when the shim already runs the process. An install in flight in the previous agent is requested again |
 | `spec.panel.panelRevision` or the env Secret's resourceVersion changed | `POST /sync`: the agent re-fetches its configuration from the gateway (§5.7) and runs Wings' `Server.Sync` (`SyncWithConfiguration` and `SyncWithEnvironment`), which also stops a suspended server |
 | `spec.install.generation` > `status.install.observedGeneration` | `POST /install` (or `/reinstall`); once `status.install.preparedGeneration` matches, create the Job (§8.2). Without "prepared" within `install.prepareTimeoutSeconds`, the install fails |
 
@@ -1205,7 +1206,7 @@ sequenceDiagram
   60 s ago; the Panel then shows the server as offline. Every 15 s the gateway looks for servers
   with `desired: Running` whose process has been `offline` for 60 s (`status.process.since`), whose
   last power action is observed, and whose current agent and game pods are the ones the operator
-  last drove and are not terminating. It sets `desired: Stopped` for them, and the operator removes
+  last drove (for the agent, also its container's restart count) and are not terminating. It sets `desired: Stopped` for them, and the operator removes
   the game pod. The pod conditions keep a start in progress, a drain or a lost pod from being taken
   for a settled crash.
 
@@ -1294,10 +1295,12 @@ in-flight work.
   back on the same node, fetches its configuration from the gateway and re-attaches (§7.7). Tokens
   issued before are rejected by Wings' boot cutoff in the new agent; open consoles are carried across
   by the gateway (§5.9).
-- **Agent container restart only:** as above without a new pod; the pod UIDs are unchanged, so the
-  operator does not issue a start.
-- **Node reboot:** the agent boots and does not start anything on its own. The fresh-pod rule issues
-  `start` if `desired: Running` and re-requests an install that was in flight.
+- **Agent container restart only:** as above without a new pod. The new restart count makes it a fresh
+  agent for the fresh-pod rule, which finds the process running and issues no start.
+- **Node reboot:** the pods keep their UIDs and their containers restart. The agent boots and does not
+  start anything on its own; its new restart count triggers the fresh-pod rule, which issues `start` if
+  `desired: Running` and re-requests an install that was in flight. The crash check (§8.3) skips an
+  agent container restart the operator has not recorded yet.
 - **Gateway restart or rollout:** live websocket and SSH connections on that replica drop and clients
   reconnect. `POST /api/remote/servers/reset` clears `installing` and `restoring_backup` for every
   server on the node, so after each start the gateway sends it once no CR has an install in progress

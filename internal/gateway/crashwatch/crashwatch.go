@@ -12,6 +12,7 @@ import (
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
+	"github.com/Claiyc/pelican-k8s/internal/operator/render"
 )
 
 // Defaults of a Watcher.
@@ -70,7 +71,8 @@ func (w *Watcher) Check(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if !driven(agent, gs.Status.Agent.PodUID) || !driven(game, gs.Status.Game.PodUID) {
+		if !driven(agent, gs.Status.Agent.PodUID) || !driven(game, gs.Status.Game.PodUID) ||
+			render.ContainerRestarts(agent, render.AgentContainer) != gs.Status.Agent.Restarts {
 			continue
 		}
 		if err := w.Store.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": string(v1alpha1.PowerStopped), "kill": false}}); err != nil {
@@ -107,7 +109,8 @@ func (w *Watcher) offlineLongEnough(gs *v1alpha1.GameServer) bool {
 }
 
 // driven reports a pod that exists, is the one the operator last drove, and
-// is not terminating: a drain or a lost pod is not a crash.
+// is not terminating: a drain or a lost pod is not a crash. A restarted agent
+// container the operator has not driven yet is not one either (a node reboot).
 func driven(pod *corev1.Pod, uid string) bool {
 	return pod != nil && uid != "" && string(pod.UID) == uid && pod.DeletionTimestamp.IsZero()
 }
