@@ -7,12 +7,19 @@
 #
 #   hack/release-prep.sh          # the next version, see below
 #   hack/release-prep.sh 1.2.0    # an explicit version
+#   hack/release-prep.sh 1.2.0-rc.1
 #
 # The next version is a patch release unless a PR merged since the last
 # release carries the label "minor" or "major", or the hand-written notes
 # under [Unreleased] ask for more: "### Added", "### Changed" or
 # "### Deprecated" make a minor release, "### Removed" or the word BREAKING a
 # major one. The largest of these wins; the reason is printed as "bump: ...".
+#
+# The label "prerelease" on the open release PR makes it a pre-release of
+# that version, X.Y.Z-rc.N, which the Release workflow publishes as a GitHub
+# pre-release. After X.Y.Z-rc.N the next version is X.Y.Z-rc.N+1 while the
+# label stays, and X.Y.Z once it is removed; a minor or major label that asks
+# for more than X.Y.Z already is moves it on as usual.
 #
 # The section is GitHub's generated release notes for the PRs merged since the
 # last release (the same list a GitHub release generates; .github/release.yml
@@ -69,23 +76,45 @@ if [[ -z "$next" ]]; then
   done
   # So does the open release PR itself (the release-pr workflow's branch), the
   # quickest way to ask for a bigger release without finding the PR to label.
-  raise_by_label "the release PR" < <(gh pr list --head "${RELEASE_BRANCH:-release/next}" --state open \
+  # Only its labels can ask for a pre-release.
+  release_pr_labels=$(gh pr list --head "${RELEASE_BRANCH:-release/next}" --state open \
     --json labels,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .labels[].name')
+  raise_by_label "the release PR" <<<"$release_pr_labels"
   # Hand-written notes under [Unreleased] can raise it too.
   if grep -qE '^### Removed|BREAKING' <<<"$unreleased"; then
     raise 2 "CHANGELOG.md [Unreleased] has a ### Removed heading or says BREAKING"
   elif grep -qE '^### (Added|Changed|Deprecated)' <<<"$unreleased"; then
     raise 1 "CHANGELOG.md [Unreleased] has an ### Added, ### Changed or ### Deprecated heading"
   fi
-  IFS=. read -r major minor patch <<<"$current"
-  case $bump in
-    2) next="$((major + 1)).0.0" level=major ;;
-    1) next="$major.$((minor + 1)).0" level=minor ;;
-    *) next="$major.$minor.$((patch + 1))" level=patch ;;
-  esac
-  echo "bump: $level release, because $why" >&2
+  # X.Y.Z of X.Y.Z-rc.N; the same as $current for a release.
+  core=${current%%-*}
+  IFS=. read -r major minor patch <<<"$core"
+  levels=(patch minor major)
+  # A pre-release of X.Y.Z is already a patch, minor or major step over the
+  # last release (X.Y.Z, X.Y.0 or X.0.0); a release has made none yet.
+  have=-1
+  if [[ $current != "$core" ]]; then
+    if [[ $patch != 0 ]]; then have=0; elif [[ $minor != 0 ]]; then have=1; else have=2; fi
+  fi
+  if [[ $bump -gt $have ]]; then
+    case $bump in
+      2) next="$((major + 1)).0.0" ;;
+      1) next="$major.$((minor + 1)).0" ;;
+      *) next="$major.$minor.$((patch + 1))" ;;
+    esac
+    reason="${levels[$bump]} release, because $why"
+  else
+    next=$core reason="${levels[$have]} release that v$current is a pre-release of"
+  fi
+  if grep -qx prerelease <<<"$release_pr_labels"; then
+    n=1
+    if [[ $next == "$core" && $current =~ -rc\.([0-9]+)$ ]]; then n=$((BASH_REMATCH[1] + 1)); fi
+    next="$next-rc.$n" reason="pre-release of the $reason; the release PR is labelled prerelease"
+  fi
+  echo "bump: $reason" >&2
 fi
-[[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: $next" >&2; exit 1; }
+# A release, or a pre-release of one (X.Y.Z-rc.N).
+[[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a release version: $next" >&2; exit 1; }
 [[ "$next" != "$current" ]] || { echo "$next is already the chart version" >&2; exit 1; }
 
 notes=$(mktemp)
@@ -110,7 +139,8 @@ grep -q '[^[:space:]]' "$notes.section" || { echo "no release notes generated" >
 export CUR="$current" NEXT="$next" DATE
 DATE=$(date -u +%F)
 perl -pi -e 's/^version:.*/version: $ENV{NEXT}/; s/^appVersion:.*/appVersion: "$ENV{NEXT}"/' "$chart"
-perl -pi -e 's{(charts/pelican-k8s --version )\Q$ENV{CUR}\E\b}{$1$ENV{NEXT}}g; s{(targetRevision: v)\Q$ENV{CUR}\E\b}{$1$ENV{NEXT}}g' \
+# (?![\w.-]) rather than \b, so 1.2.0 never matches the start of 1.2.0-rc.1.
+perl -pi -e 's{(charts/pelican-k8s --version )\Q$ENV{CUR}\E(?![\w.-])}{$1$ENV{NEXT}}g; s{(targetRevision: v)\Q$ENV{CUR}\E(?![\w.-])}{$1$ENV{NEXT}}g' \
   README.md docs/install.md
 # [Unreleased] is emptied into the new section.
 awk -v head="## [$next] - $DATE" -v body="$notes.section" '
@@ -124,7 +154,8 @@ perl -pi -e 's{^\[Unreleased\]: (\S*/compare/)v\Q$ENV{CUR}\E\.\.\.HEAD$}{[Unrele
 # Every edit above is a pattern; fail loudly if one stopped matching.
 grep -qx "version: $next" "$chart" && grep -qx "appVersion: \"$next\"" "$chart" || { echo "$chart: version not bumped" >&2; exit 1; }
 grep -qF "## [$next] - $DATE" CHANGELOG.md && grep -qF "[$next]: " CHANGELOG.md || { echo "CHANGELOG.md: section or link not added" >&2; exit 1; }
-if grep -rnF -e "pelican-k8s --version $current" -e "targetRevision: v$current" README.md docs/install.md; then
+cur_re=${current//./\\.}
+if grep -rnE -e "pelican-k8s --version $cur_re([^[:alnum:]_.-]|\$)" -e "targetRevision: v$cur_re([^[:alnum:]_.-]|\$)" README.md docs/install.md; then
   echo "install commands above still pin $current" >&2
   exit 1
 fi
