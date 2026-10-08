@@ -55,7 +55,7 @@ start to the next; with node-local storage it stays where the volume is. See
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `LoadBalancer` | `LoadBalancer`, `NodePort` or `HostPort` (see install.md). `HostPort`, and `NodePort` with `externalTrafficPolicy: Local`, run the game pod (and with it the agent pod) on the node whose InternalIP or ExternalIP is the allocation IP |
-| `externalTrafficPolicy` | `Local` | Preserves client IPs. With `Cluster`, every node forwards a `NodePort` and the game pod is not tied to a node. With `Local` and a sharing annotation, the servers sharing a LoadBalancer IP run on one node; with `Cluster` they spread across nodes and see the node's address instead of the client's |
+| `externalTrafficPolicy` | `Local` | `Local` keeps the players' IP addresses and ties the game pod to where traffic arrives; `Cluster` lets any node forward but hides the players' addresses. See [Local or Cluster](#local-or-cluster) |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`), so servers on one IP can use different ports |
@@ -64,6 +64,41 @@ start to the next; with node-local storage it stays where the volume is. See
 
 Invariant: container port = Service port = external port = Panel allocation
 port, so `SERVER_PORT` always matches what players connect to.
+
+### Local or Cluster
+
+`externalTrafficPolicy` decides what a node does with player traffic for a game
+pod that runs elsewhere.
+
+- **`Local`** (default): a node only delivers to game pods on itself. The packet
+  reaches the game server unchanged, so it sees each player's real IP address.
+  The price is placement: the address must arrive where the pod runs.
+- **`Cluster`**: any node accepts the traffic and kube-proxy forwards it to the
+  pod, wherever it runs. To get the replies back through the same node it
+  rewrites the source address, so the game server sees a node's address for
+  every player.
+
+What the player's address is used for: IP bans and whitelists, per-IP
+connection limits and rate limits, anti-cheat and geo checks, and the
+addresses in server logs and the console. Under `Cluster` all of these see the
+same few node addresses, so a ban on one player can lock out everyone coming
+through that node. Some CNIs keep the source address under `Cluster` (Cilium
+with DSR, for example); there `Cluster` loses nothing.
+
+What each mode means per exposure mode:
+
+| `mode` | `Local` | `Cluster` |
+|---|---|---|
+| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With a sharing annotation, all servers on one IP run on one node, because MetalLB shares a `Local` address only between Services with identical selectors and announces it from one node; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
+| `NodePort` | The game pod runs on the node that owns the allocation IP (`AllocationIPNotOnNode` when none does) | Every node forwards the port, the game pod runs anywhere |
+| `HostPort` | No Service; the setting has no effect | No Service; the setting has no effect |
+
+Choose `Local` when players' addresses matter, which is most public game
+servers. Choose `Cluster` when they do not matter (a private group of friends, a
+LAN) or your CNI keeps them anyway, and spreading servers over nodes is worth
+more. The setting can change at any time; the operator
+updates the Services, and the game pods pick up new placement when they are
+recreated.
 
 ## network
 
