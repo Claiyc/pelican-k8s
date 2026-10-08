@@ -1406,7 +1406,9 @@ gets no affinity. With more than one node and no match, the game pod is not pinn
 `externalTrafficPolicy: Cluster` every node forwards the NodePort and the game pod is not pinned.
 
 **Shared addresses (LoadBalancer with `Local` and `sharingAnnotation`).** Several servers can use one
-allocation IP on different ports, each with its own Service. MetalLB gives two Services one address only
+allocation IP on different ports, each with its own Service. The grouping below follows MetalLB, the
+load balancer `provider` supports; a sharing annotation set through `loadBalancer.annotations` instead
+shares an address without it. MetalLB gives two Services one address only
 when their sharing keys match and, under `externalTrafficPolicy: Local`, their selectors are identical
 (with `Cluster` it ignores the selectors). The address is also announced from one node, where `Local`
 delivers only to pods on that node. So for such a server the operator:

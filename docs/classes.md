@@ -58,7 +58,7 @@ start to the next; with node-local storage it stays where the volume is. See
 | `externalTrafficPolicy` | `Local` | `Local` keeps the players' IP addresses and ties the game pod to where traffic arrives; `Cluster` lets any node forward but hides the players' addresses. See [Local or Cluster](#local-or-cluster) |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
-| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (`metallb.io/allow-shared-ip`), so servers on one IP can use different ports |
+| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
 | `loadBalancer.annotations` | | Added verbatim to exposure Services |
 | `externalIPs` | | Addresses reported to the Panel for allocations |
 
@@ -89,7 +89,7 @@ What each mode means per exposure mode:
 
 | `mode` | `Local` | `Cluster` |
 |---|---|---|
-| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With a sharing annotation, all servers on one IP run on one node, because MetalLB shares a `Local` address only between Services with identical selectors and announces it from one node; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
+| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With `sharingAnnotation`, all servers on one IP run on one node, because a load balancer that announces a shared address from one node (MetalLB, kube-vip in ARP mode) only reaches the pods there; MetalLB also requires identical selectors to share a `Local` address; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
 | `NodePort` | The game pod runs on the node that owns the allocation IP (`AllocationIPNotOnNode` when none does) | Every node forwards the port, the game pod runs anywhere |
 | `HostPort` | No Service; the setting has no effect | No Service; the setting has no effect |
 
@@ -103,14 +103,14 @@ moved to the others' node right away.
 
 #### Planning addresses under `Local`
 
-With `LoadBalancer` and `Local`, the allocation decides placement: the servers
-on one IP run on one node, the node MetalLB announces that IP from. Kubernetes
-cannot spread them, and the operator never changes allocations to make room;
+With `LoadBalancer`, `Local` and `sharingAnnotation`, the allocation decides
+placement: the servers on one IP run on one node, the node the load balancer
+announces that IP from. Kubernetes cannot spread them, and the operator never changes allocations to make room;
 they stay the Panel admin's choice, because players, DNS records and firewall
 rules depend on them. So plan addresses like nodes:
 
-- Give a server its own IP when it should be free to run anywhere. A MetalLB
-  pool with an address per server removes the constraint entirely.
+- Give a server its own IP when it should be free to run anywhere. A load
+  balancer pool with an address per server removes the constraint entirely.
 - Put servers on one IP only when they fit on one node together: their memory
   and CPU requests add up on that node.
 - When a server on a shared IP does not fit, it stays `Pending`
@@ -121,6 +121,10 @@ rules depend on them. So plan addresses like nodes:
   others on its IP and stays `Pending`; give it its own IP instead.
 - Servers whose players' addresses do not matter can use a class with
   `Cluster`, which has none of these constraints.
+- A load balancer that reaches every Service's own nodes on a shared address
+  does not need the grouping. Put its sharing annotation in
+  `loadBalancer.annotations` instead of `sharingAnnotation`: the Services then
+  share the IP while each server keeps its own selector and runs anywhere.
 
 ## network
 

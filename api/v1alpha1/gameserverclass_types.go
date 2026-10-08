@@ -92,7 +92,9 @@ type LoadBalancerSpec struct {
 	IPAnnotation string `json:"ipAnnotation,omitempty"`
 	// SharingAnnotation lets several Services share one IP (e.g. metallb.io/allow-shared-ip).
 	// Under externalTrafficPolicy Local the game pods sharing an IP get one
-	// selector and run on one node, as MetalLB requires.
+	// selector and run on one node, as a load balancer announcing the IP from
+	// one node (MetalLB) requires; a sharing annotation set through
+	// Annotations instead shares the IP without grouping the pods.
 	SharingAnnotation string `json:"sharingAnnotation,omitempty"`
 	// Annotations are added verbatim to every exposure Service.
 	Annotations map[string]string `json:"annotations,omitempty"`
