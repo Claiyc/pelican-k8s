@@ -3,7 +3,8 @@
 # still works. Either way it tags the commit, pushes the images and charts and
 # publishes the GitHub release. A pre-release version (X.Y.Z-betaN, from the
 # release PR's "prerelease" label) is published as a GitHub pre-release, is
-# not marked latest, and gets no X.Y image tag.
+# not marked latest, and gets no X.Y image tag; once it is out, the Release PR
+# workflow opens the release PR for X.Y.Z.
 name: Release
 
 on:
@@ -116,6 +117,7 @@ jobs:
     permissions:
       contents: write   # create the tag and publish the GitHub release
       packages: write   # push the charts as OCI artifacts
+      actions: write    # start the Release PR workflow after a pre-release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -164,3 +166,14 @@ jobs:
           body_path: notes.md
           generate_release_notes: false
           files: dist/*.tgz
+      # The push that merged the pre-release found it untagged and prepared
+      # nothing. Now that it is tagged, open the release PR for X.Y.Z, which
+      # follows a pre-release even with nothing new merged. A run started by
+      # workflow_dispatch is the one kind GITHUB_TOKEN may start.
+      - name: Open the release PR after a pre-release
+        if: contains(needs.plan.outputs.version, '-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: gh workflow run release-pr.yaml --repo "$REPO" --ref "$BASE"

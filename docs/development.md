@@ -21,7 +21,7 @@ cancels the CI, Contract and CodeQL runs still going for the previous one.
 |---|---|---|
 | Unit | `go test ./...` | nothing. Covers the shim (supervisor, protocol, cgroup parsing, prepare/probe/install-run), the shim environment against a live supervisor, the Job installer, object rendering and resource mapping, the reconciler (fake client, fake agent) and the gateway (fake Panel, fake agent, fake cluster) |
 | Fuzz | `go test -run '^$' -fuzz FuzzDecode ./internal/shim/protocol` (likewise `FuzzWrite` in `internal/shim/ringbuf`, `FuzzVerify` in `internal/gateway/jwtx`) | nothing. The seed corpora also run as ordinary tests under `go test ./...`; CI fuzzes each target for 40s. A crasher lands in the package's `testdata/fuzz/` — commit it as a regression case with the fix |
-| Docs | `go test ./test/docs/` | nothing. Fails when a documented `helm install --version` or an example's `targetRevision` names a version the tree does not release, so bumping a chart has to bump the docs in the same change |
+| Docs | `go test ./test/docs/` | nothing. Fails when a documented `helm install --version` or an example's `targetRevision` names a version the tree does not release, so bumping a chart to a release has to bump the docs in the same change. While `charts/pelican-k8s` is at a pre-release, the docs stay on the last release, the newest `CHANGELOG.md` section without a suffix |
 | Supply chain | `go test ./test/supplychain/` | nothing. Asserts every action is SHA-pinned with a version comment, every base image digest-pinned, and that no workflow grants a write token above the job that needs it |
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
 | Spike | `go test -tags spike ./test/spike -v` | Docker and internet. Runs the Paper egg through the agent and the shim in a yolk container against the fake Panel: install, start, done detection, stats, websocket auth, commands, stop, crash restart. CI runs it on every PR and push to master |
@@ -158,10 +158,14 @@ Mark the release PR ready and merge it. Nothing else is manual.
   pre-release that is not marked latest, pushes the images tagged
   `X.Y.Z-beta1` only (`X.Y` stays on the last release), and pushes the chart
   at that version, which Helm installs only when asked for with `--version`.
-  The release after a pre-release is that version with no suffix, `X.Y.Z`,
-  with no further bump from labels or notes; if the release PR is labelled
-  `prerelease` again, it is the next pre-release, `X.Y.Z-beta2`. Only the
-  release PR's own label counts.
+  A pre-release leaves the install commands in `README.md` and
+  `docs/install.md` on the last release. Once it is published, the `Release`
+  workflow starts the `Release PR` workflow, which opens the release PR for
+  `X.Y.Z` straight away, even with nothing new merged: the version with no
+  suffix and no further bump from labels or notes, with notes covering
+  everything since the last release, its pre-releases included. Label that PR
+  `prerelease` and it becomes the next pre-release, `X.Y.Z-beta2`, instead.
+  Only the release PR's own label counts.
 - **Merging it.** The `Release` workflow sees a chart version on master with
   no tag. It checks that the chart's `version`, `appVersion` and the
   `CHANGELOG.md` section agree, builds and pushes the images
