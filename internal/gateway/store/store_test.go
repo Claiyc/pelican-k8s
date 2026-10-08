@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -229,6 +230,48 @@ func TestPatchSpecAndStatus(t *testing.T) {
 	}
 	if err := s.PatchStatus(ctx, uid1, map[string]any{"bad": func() {}}); err == nil {
 		t.Fatal("unmarshalable status succeeded")
+	}
+}
+
+// A write that lost to another one is decided again on the newer version.
+func TestUpdateSpec(t *testing.T) {
+	s := newStore(t, gameServer(uid1, ""))
+	ctx := context.Background()
+	calls := 0
+	err := s.UpdateSpec(ctx, uid1, func(gs *v1alpha1.GameServer) (map[string]any, error) {
+		calls++
+		gen := gs.Spec.Power.Generation + 1
+		if calls == 1 {
+			// Another replica's power action lands after this read.
+			if err := s.PatchSpec(ctx, uid1, map[string]any{"power": map[string]any{"generation": gen}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return map[string]any{"power": map[string]any{"desired": "Running", "generation": gen}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gs, _ := s.Get(ctx, uid1); calls != 2 || gs.Spec.Power.Generation != 2 || gs.Spec.Power.Desired != "Running" {
+		t.Fatalf("after %d calls: power = %+v, want generation 2", calls, gs.Spec.Power)
+	}
+	// Nothing to write: the version stays.
+	before, _ := s.Get(ctx, uid1)
+	if err := s.UpdateSpec(ctx, uid1, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.Get(ctx, uid1); after.ResourceVersion != before.ResourceVersion {
+		t.Fatal("an empty update was written")
+	}
+	boom := errors.New("boom")
+	if err := s.UpdateSpec(ctx, uid1, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Fatalf("mutate error: %v", err)
+	}
+	if err := s.UpdateSpec(ctx, uid2, func(*v1alpha1.GameServer) (map[string]any, error) { return nil, nil }); !apierrors.IsNotFound(err) {
+		t.Fatalf("unknown server: %v", err)
+	}
+	if err := s.PatchSpecAt(ctx, uid1, "1", map[string]any{"bad": func() {}}); err == nil {
+		t.Fatal("unmarshalable spec succeeded")
 	}
 }
 

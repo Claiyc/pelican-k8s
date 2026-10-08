@@ -285,22 +285,22 @@ func (s *Syncer) RequestInstall(ctx context.Context, uuid string, reinstall bool
 	if err := s.Sync(ctx, uuid); err != nil {
 		return err
 	}
-	gs, err := s.Store.Get(ctx, uuid)
-	if err != nil {
-		return err
-	}
 	script, err := s.Panel.GetInstallationScript(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("fetch install script: %w", err)
 	}
-	gen := gs.Spec.Install.Generation + 1
-	if err := s.writeInstallScript(ctx, gs, gen, script.Script); err != nil {
-		return err
-	}
-	return s.Store.PatchSpec(ctx, uuid, map[string]any{"install": map[string]any{
-		"generation": gen, "reinstall": reinstall, "scriptConfigMap": names.InstallConfigMap(uuid, gen),
-		"image": script.ContainerImage, "entrypoint": script.Entrypoint, "startOnInstall": false,
-	}})
+	// The next generation is taken from the version the write is conditional
+	// on, so two installs on different replicas get two generations.
+	return s.Store.UpdateSpec(ctx, uuid, func(gs *v1alpha1.GameServer) (map[string]any, error) {
+		gen := gs.Spec.Install.Generation + 1
+		if err := s.writeInstallScript(ctx, gs, gen, script.Script); err != nil {
+			return nil, err
+		}
+		return map[string]any{"install": map[string]any{
+			"generation": gen, "reinstall": reinstall, "scriptConfigMap": names.InstallConfigMap(uuid, gen),
+			"image": script.ContainerImage, "entrypoint": script.Entrypoint, "startOnInstall": false,
+		}}, nil
+	})
 }
 
 // Power patches spec.power for a Panel or websocket power action (section 8.3).
@@ -314,22 +314,24 @@ func (s *Syncer) Power(ctx context.Context, uuid, action string) error {
 			return err
 		}
 	}
-	gs, err := s.Store.Get(ctx, uuid)
-	if err != nil {
-		return err
-	}
-	var power map[string]any
+	var desired v1alpha1.PowerState
+	kill := false
 	switch action {
 	case "start", "restart":
-		power = map[string]any{"desired": string(v1alpha1.PowerRunning), "generation": gs.Spec.Power.Generation + 1, "kill": false}
+		desired = v1alpha1.PowerRunning
 	case "stop":
-		power = map[string]any{"desired": string(v1alpha1.PowerStopped), "generation": gs.Spec.Power.Generation + 1, "kill": false}
+		desired = v1alpha1.PowerStopped
 	case "kill":
-		power = map[string]any{"desired": string(v1alpha1.PowerStopped), "generation": gs.Spec.Power.Generation + 1, "kill": true}
+		desired, kill = v1alpha1.PowerStopped, true
 	default:
 		return fmt.Errorf("invalid power action %q", action)
 	}
-	return s.Store.PatchSpec(ctx, uuid, map[string]any{"power": power})
+	// Each action gets its own generation: the write is conditional on the
+	// version the generation was read from, so two actions on different
+	// replicas cannot both write the same one.
+	return s.Store.UpdateSpec(ctx, uuid, func(gs *v1alpha1.GameServer) (map[string]any, error) {
+		return map[string]any{"power": map[string]any{"desired": string(desired), "generation": gs.Spec.Power.Generation + 1, "kill": kill}}, nil
+	})
 }
 
 // Delete removes the CR (section 8.8); the operator's finalizer does the rest.
