@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/operator/agentclient"
@@ -407,5 +408,45 @@ func TestPlacementSharedIPPendingGamePodStays(t *testing.T) {
 	}
 	if hasEvent(recordedEvents(h), "Replace") {
 		t.Fatal("unexpected Replace event")
+	}
+}
+
+// A running game pod from before the server shared its address is relabelled
+// in place, so the shared selector reaches it without a restart; the label
+// goes again when the class stops sharing.
+func TestSharedIPLabelFollowsTheClass(t *testing.T) {
+	cls := newClass()
+	cls.Spec.Exposure = v1alpha1.ExposureSpec{Mode: v1alpha1.ExposureLoadBalancer}
+	h := startOn(t, cls, "node-a", "node-a")
+	h.agent.mu.Lock()
+	h.agent.state = v1alpha1.ProcessRunning
+	h.agent.mu.Unlock()
+	h.reconcile(1)
+	game := h.pod()
+	if _, ok := game.Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("no shared-IP label without a sharing annotation")
+	}
+	cls = &v1alpha1.GameServerClass{}
+	if err := h.c.Get(context.Background(), client.ObjectKey{Name: "default"}, cls); err != nil {
+		t.Fatal(err)
+	}
+	cls.Spec.Exposure.LoadBalancer.Provider = v1alpha1.LoadBalancerMetalLB
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	p := h.pod()
+	if p == nil || p.UID != game.UID || p.Labels[v1alpha1.LabelSharedIP] != "192.0.2.10" {
+		t.Fatalf("running pod labels %v", p.Labels)
+	}
+	cls.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if p := h.pod(); p == nil || p.UID != game.UID {
+		t.Fatal("the running pod stays")
+	} else if _, ok := p.Labels[v1alpha1.LabelSharedIP]; ok {
+		t.Fatal("the label goes when the address is no longer shared under Local")
 	}
 }

@@ -430,6 +430,9 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 		r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "Terminating", "game pod is terminating")
 		return r.fence(s, pod, lost)
 	}
+	if err := r.labelSharedIP(s, pod); err != nil {
+		return err
+	}
 	// Always run the resize phase: it owns the ResizePending condition and the
 	// in-place resize, whether or not a recreate is already pending.
 	*resizeRecreate = r.reconcileResize(s, pod)
@@ -463,6 +466,27 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 		return nil
 	}
 	return r.relayTermination(s, pod)
+}
+
+// labelSharedIP keeps the game pod's shared-IP label in step with the
+// exposure Service's selector (ARCHITECTURE.md 9.3). The label changes in
+// place, so a pod from before a class or allocation change keeps its traffic
+// until it is recreated.
+func (r *GameServerReconciler) labelSharedIP(s *scope, pod *corev1.Pod) error {
+	want := render.SharedIP(s.in)
+	if pod.Labels[v1alpha1.LabelSharedIP] == want {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if want == "" {
+		delete(pod.Labels, v1alpha1.LabelSharedIP)
+	} else {
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		pod.Labels[v1alpha1.LabelSharedIP] = want
+	}
+	return client.IgnoreNotFound(r.Patch(s.ctx, pod, patch))
 }
 
 // fence force-deletes a pod that is terminating on a node that has been
