@@ -145,13 +145,23 @@ Mark the release PR ready and merge it. Nothing else is manual.
   `## [Unreleased]` are kept above the generated list and can raise it too:
   `### Added`, `### Changed` or `### Deprecated` make a minor release,
   `### Removed` or the word `BREAKING` a major one.
+- **A pre-release.** Label the release PR `prerelease` and it becomes a
+  pre-release of that version, `X.Y.Z-beta1`. Merging it publishes a GitHub
+  pre-release that is not marked latest, pushes the images tagged
+  `X.Y.Z-beta1` only (`X.Y` stays on the last release), and pushes the chart
+  at that version, which Helm installs only when asked for with `--version`.
+  The release after a pre-release is that version with no suffix, `X.Y.Z`,
+  with no further bump from labels or notes; if the release PR is labelled
+  `prerelease` again, it is the next pre-release, `X.Y.Z-beta2`. Only the
+  release PR's own label counts.
 - **Merging it.** The `Release` workflow sees a chart version on master with
   no tag. It checks that the chart's `version`, `appVersion` and the
   `CHANGELOG.md` section agree, builds and pushes the images
   (`ghcr.io/claiyc/pelican-k8s/{shim,agent,gateway,operator}`, tagged `X.Y.Z`
-  and `X.Y`), pushes both charts to `oci://ghcr.io/claiyc/pelican-k8s/charts`,
-  then tags the commit `vX.Y.Z` and publishes the GitHub release with the
-  changelog section as its notes and the chart tarballs attached.
+  and, unless it is a pre-release, `X.Y`), pushes both charts to
+  `oci://ghcr.io/claiyc/pelican-k8s/charts`, then tags the commit `vX.Y.Z`
+  and publishes the GitHub release with the changelog section as its notes
+  and the chart tarballs attached.
 - **The Panel chart** is not bumped by a release: bump `charts/pelican-panel`
   in the PR that changes it. Every release pushes it at its current version.
 - **CI on the release PR.** PRs opened with the default `GITHUB_TOKEN` start no
