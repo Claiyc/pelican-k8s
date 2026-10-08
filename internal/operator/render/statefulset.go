@@ -66,14 +66,16 @@ func statefulSet(in *Input, name, serviceName, component string, tmpl corev1.Pod
 // TemplateHash hashes the pod template parts that require a pod recreate. It
 // leaves out the game container's resources, which are resized in place, and
 // the placement toward the other pod (the game pod's pod affinity, the agent
-// pod's node affinity), which is set per start (section 7.7). The game pod's
-// node affinity to the allocation nodes stays in. For the agent pod it also
+// pod's node affinity), which is set per start (section 7.7), and the
+// shared-IP label, which is set in place (section 9.3). The game pod's node
+// affinity to the allocation nodes stays in. For the agent pod it also
 // leaves out what follows Panel edits of the server (its name, its egg and the
 // scratch size derived from disk_space): those reach the agent pod when it is
 // next replaced, and do not replace it by themselves.
 func TemplateHash(tmpl corev1.PodTemplateSpec) string {
 	c := tmpl.DeepCopy()
 	agent := c.Labels[v1alpha1.LabelComponent] == ComponentAgent
+	delete(c.Labels, v1alpha1.LabelSharedIP)
 	for i := range c.Spec.Containers {
 		if c.Spec.Containers[i].Name == GameContainer {
 			c.Spec.Containers[i].Resources = corev1.ResourceRequirements{}
@@ -432,7 +434,24 @@ func GamePodTemplate(in *Input) corev1.PodTemplateSpec {
 	if affinity.NodeAffinity != nil || affinity.PodAffinity != nil {
 		spec.Affinity = affinity
 	}
-	return podTemplate(in, ComponentGame, spec)
+	tmpl := podTemplate(in, ComponentGame, spec)
+	pinSharedIPNode(in, &tmpl)
+	return tmpl
+}
+
+// pinSharedIPNode pins a new game pod to In.SharedIPNode, the node of the
+// other game pods on its address, so a pod that does not fit there stays
+// Pending instead of joining a stray peer elsewhere. It is added after the
+// template hash: the pin only matters when a pod is scheduled, and a change
+// must not mark a running pod for recreation.
+func pinSharedIPNode(in *Input, tmpl *corev1.PodTemplateSpec) {
+	if in.SharedIPNode == "" || SharedIP(in) == "" {
+		return
+	}
+	if tmpl.Spec.Affinity == nil {
+		tmpl.Spec.Affinity = &corev1.Affinity{}
+	}
+	tmpl.Spec.Affinity.NodeAffinity = nodeNameAffinity([]string{in.SharedIPNode})
 }
 
 // addSharedIPAffinity runs the game pods sharing an address on one node

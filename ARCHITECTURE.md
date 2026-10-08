@@ -1412,7 +1412,7 @@ when their sharing keys match and, under `externalTrafficPolicy: Local`, their s
 delivers only to pods on that node. So for such a server the operator:
 - labels the game pod `pelican-k8s.io/shared-ip=<allocation IP>` (IPv6 as 32 hex digits). A running
   game pod is relabelled in place when the class or the allocation changes, so the new selector reaches
-  it without a restart; it joins the other pods' node only when it is recreated
+  it without a restart. The label is not part of the template hash
 - gives the exposure Service the selector `{pelican-k8s.io/shared-ip, pelican-k8s.io/component: game}`,
   the same for every server on the address, and named target ports (`t<port>-<uuid prefix>`,
   `u<port>-<uuid prefix>`, the first 8 characters of the server UUID), which the game container declares;
@@ -1422,6 +1422,15 @@ delivers only to pods on that node. So for such a server the operator:
   first one runs wherever the scheduler puts it and the others follow; a game pod that does not fit on
   that node stays `Pending` (`GamePodReady=False`, `Unschedulable`). The agent pods follow their game
   pods as usual (§7.7)
+- pins a new game pod by node affinity to the node most of the other game pods on the address run on
+  (a tie goes to the node of the oldest pod), so it cannot join a stray pod elsewhere. The pin is not
+  part of the template hash; a `Pending` game pod whose pin no longer names that node is replaced
+- moves a running game pod that is not on the node most game pods on the address run on (one relabelled
+  in place, or one that started before the others): it receives no traffic there, so the operator sets
+  `RecreatePending` (reason `SharedIPNodeMismatch`), stops the process, and the game pod is recreated on
+  that node once the process is `offline` (§8.5); the fresh-pod rule starts it again. Every server on the
+  address picks the same node, so only the pods elsewhere move. A replacement that does not fit there,
+  or whose volume is bound to another node, stays `Pending`
 
 With `externalTrafficPolicy: Cluster` the Services keep their own selectors, the game pods are not
 grouped, and kube-proxy forwards from the announcing node to any node at the cost of the client IP.

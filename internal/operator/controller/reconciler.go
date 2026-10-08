@@ -134,6 +134,9 @@ type scope struct {
 	work    []string
 	now     metav1.Time
 	requeue time.Duration
+	// sharedIPElsewhere is the node the game pods sharing the server's
+	// address gather on when its own game pod runs on another one.
+	sharedIPElsewhere string
 }
 
 // Reconcile implements reconcile.Reconciler.

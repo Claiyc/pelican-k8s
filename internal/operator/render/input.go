@@ -81,6 +81,10 @@ type Input struct {
 	// nodes that own the allocation IP under NodePort (externalTrafficPolicy
 	// Local) and HostPort exposure.
 	NodeNames []string
+	// SharedIPNode, when set, is the only node a new game pod sharing its
+	// LoadBalancer address may run on: the node of the other game pods on
+	// that address (ARCHITECTURE.md 9.3).
+	SharedIPNode string
 	// GameAffinity is the game pod's pod affinity toward the agent pod.
 	GameAffinity GameAffinity
 	// AgentNode, when set, is the only node the agent pod may run on: the

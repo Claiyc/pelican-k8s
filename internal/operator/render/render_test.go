@@ -927,3 +927,34 @@ func TestSharedIPPortMovedBetweenServers(t *testing.T) {
 		}
 	}
 }
+
+// A new game pod is pinned to the node of the other servers on its address.
+// Neither the pin nor the shared-IP label changes the template hash: the pin
+// moves with the others and the label is set in place, so neither recreates a
+// running pod.
+func TestSharedIPNodePin(t *testing.T) {
+	in := sharedInput(t, uuid, 25565, nil)
+	plain := GamePodTemplate(in)
+	if plain.Spec.Affinity.NodeAffinity != nil {
+		t.Fatal("no pin without others on the address")
+	}
+	in.SharedIPNode = "node-b"
+	pinned := GamePodTemplate(in)
+	terms := pinned.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || terms[0].MatchFields[0].Values[0] != "node-b" {
+		t.Fatalf("node affinity %+v", terms)
+	}
+	if pinned.Annotations[AnnotationTemplateHash] != plain.Annotations[AnnotationTemplateHash] {
+		t.Fatal("the pin changed the template hash")
+	}
+	cluster := sharedInput(t, uuid, 25565, func(i *Input) {
+		i.Class.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+		i.SharedIPNode = "node-b"
+	})
+	if a := GamePodTemplate(cluster).Spec.Affinity; a != nil && a.NodeAffinity != nil {
+		t.Fatal("no pin under Cluster")
+	}
+	if GamePodTemplate(cluster).Annotations[AnnotationTemplateHash] != plain.Annotations[AnnotationTemplateHash] {
+		t.Fatal("sharing under Local changed the template hash")
+	}
+}

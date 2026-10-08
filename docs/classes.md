@@ -89,7 +89,7 @@ What each mode means per exposure mode:
 
 | `mode` | `Local` | `Cluster` |
 |---|---|---|
-| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With a sharing annotation, all servers on one IP run on one node, because MetalLB shares a `Local` address only between Services with identical selectors and announces it from one node; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
+| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With a sharing annotation, all servers on one IP run on one node, because MetalLB shares a `Local` address only between Services with identical selectors and announces it from one node; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
 | `NodePort` | The game pod runs on the node that owns the allocation IP (`AllocationIPNotOnNode` when none does) | Every node forwards the port, the game pod runs anywhere |
 | `HostPort` | No Service; the setting has no effect | No Service; the setting has no effect |
 
@@ -98,7 +98,8 @@ servers. Choose `Cluster` when they do not matter (a private group of friends, a
 LAN) or your CNI keeps them anyway, and spreading servers over nodes is worth
 more. The setting can change at any time; the operator
 updates the Services, and the game pods pick up new placement when they are
-recreated.
+recreated. The exception is a server sharing its address under `Local`: it is
+moved to the others' node right away.
 
 ## network
 

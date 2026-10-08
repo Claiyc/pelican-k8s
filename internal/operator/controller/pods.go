@@ -146,6 +146,14 @@ func (r *GameServerReconciler) relocate(s *scope) error {
 		}
 		s.pod = nil
 	}
+	if game := s.pod; game != nil && game.DeletionTimestamp.IsZero() && game.Spec.NodeName == "" &&
+		render.SharedIP(s.in) != "" && pinnedNode(game) != s.in.SharedIPNode {
+		r.event(s, corev1.EventTypeNormal, "Replace", "replacing pending game pod %s: the other servers on its address moved", game.Name)
+		if err := r.deletePod(s, game); err != nil {
+			return err
+		}
+		s.pod = nil
+	}
 
 	// The game pod's node, unless the game pod went in this reconcile.
 	node := ""
@@ -347,6 +355,9 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		return err
 	}
 	r.placeGame(s)
+	if err := r.placeSharedIP(s); err != nil {
+		return err
+	}
 	if err := r.ensureGameStatefulSet(s); err != nil {
 		return err
 	}
@@ -365,6 +376,12 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "RestartRequested", "restart requested; the pods are recreated once the process is offline and the agent has no in-flight work")
 	case resizeRecreate:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "ResizeNeedsRecreate", "resources cannot be applied in place; the game pod is recreated once the process is offline")
+	case s.sharedIPElsewhere != "":
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonSharedIPNodeMismatch,
+			fmt.Sprintf("the other servers on this LoadBalancer address run on %s, where it is announced; the server is stopped and its game pod recreated there", s.sharedIPElsewhere))
+		if err := r.stopToMove(s, s.sharedIPElsewhere); err != nil {
+			return err
+		}
 	case gameOutdated:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "TemplateChanged", "game pod template changed; the game pod is recreated once the process is offline")
 	case agentOutdated:
@@ -373,7 +390,7 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionFalse, "UpToDate", "")
 		return r.relocate(s)
 	}
-	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate); err != nil {
+	if err := r.recreate(s, restart, agentOutdated, gameOutdated || resizeRecreate || s.sharedIPElsewhere != ""); err != nil {
 		return err
 	}
 	return r.relocate(s)
