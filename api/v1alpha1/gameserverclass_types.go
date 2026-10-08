@@ -60,7 +60,8 @@ type StorageSpec struct {
 	Scratch         ScratchSpec `json:"scratch,omitempty"`
 	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
-	// VolumeSnapshotClassName is required for SnapshotThenDelete and snapshotSchedule.
+	// VolumeSnapshotClassName is the VolumeSnapshotClass for SnapshotThenDelete
+	// and snapshotSchedule. Empty uses the cluster's default VolumeSnapshotClass.
 	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 	// SnapshotSchedule is an optional cron expression for crash-consistent VolumeSnapshots.
 	SnapshotSchedule string `json:"snapshotSchedule,omitempty"`
@@ -140,15 +141,16 @@ type ExposureSpec struct {
 	ExternalIPs []string `json:"externalIPs,omitempty"`
 }
 
-// EgressRule allows game pods to reach an in-cluster destination.
+// EgressRule allows game pods and agent pods to reach an in-cluster destination.
 type EgressRule struct {
 	CIDR  string  `json:"cidr"`
 	Ports []int32 `json:"ports,omitempty"`
 }
 
-// InClusterEgressSpec lists in-cluster destinations game pods may reach.
+// InClusterEgressSpec lists in-cluster destinations game pods (GameServers,
+// Additional) and agent pods (Additional) may reach.
 type InClusterEgressSpec struct {
-	// GameServers allows traffic to other GameServer pods on their allocation ports.
+	// GameServers allows game pods to reach other game pods on any port.
 	// +kubebuilder:default=true
 	GameServers *bool        `json:"gameServers,omitempty"`
 	Additional  []EgressRule `json:"additional,omitempty"`
@@ -158,17 +160,19 @@ type InClusterEgressSpec struct {
 // matches the field's CRD default.
 var DefaultBlockedEgressCIDRs = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
 
-// LinkLocalCIDR is excluded from game pod and install Job egress in every class.
+// LinkLocalCIDR is excluded from the egress of game pods and agent pods while
+// NetworkSpec.Enabled is true, and from install Job egress while the chart's
+// networkPolicies.enabled is true.
 const LinkLocalCIDR = "169.254.0.0/16"
 
 // NetworkSpec configures NetworkPolicies.
 type NetworkSpec struct {
 	InClusterEgress InClusterEgressSpec `json:"inClusterEgress,omitempty"`
 	// BlockedEgressCIDRs are IPv4 ranges excluded from the 0.0.0.0/0 egress rule
-	// of game pods. Unset means the private and shared ranges (10.0.0.0/8,
-	// 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the usual pod,
-	// service, node and LAN ranges; an explicit empty list blocks only
-	// link-local, which is always blocked. The DNS, remote API and
+	// of game pods and agent pods. Unset means the private and shared ranges
+	// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10), which cover the
+	// usual pod, service, node and LAN ranges; an explicit empty list blocks only
+	// link-local. The DNS, remote API and
 	// inClusterEgress rules are separate allow rules and still reach
 	// destinations in these ranges; allow further private destinations with
 	// inClusterEgress.additional.

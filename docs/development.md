@@ -68,7 +68,7 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 
 ## Code map
 
-| Package | Role |
+| Path | Role |
 |---|---|
 | `internal/shim/supervisor` | PTY process supervisor (PID 1 of the game pod); connects to the agent pod and serves it |
 | `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
@@ -79,10 +79,15 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | `internal/agent/installer` | Job-backed `server.Installer` |
 | `internal/operator/render` | pure object builders (agent and game StatefulSets, Services, NetworkPolicies, Jobs) and resource mapping |
 | `internal/operator/controller` | reconciler, game pod lifecycle and placement, install state machine, finalizer, snapshots |
+| `internal/operator/certs` | the internal CA and the certificate Secrets the operator issues from it, or the agent Certificates with cert-manager |
+| `internal/pki` | certificate issuing, reloading key pairs and CA bundles, the dialer that reaches an agent pod by its certificate name |
 | `internal/gateway/panelapi` | Wings API towards the Panel and browsers |
 | `internal/gateway/remoteapi` | Panel remote API towards agents |
 | `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync |
+| `internal/gateway/crashwatch` | sets `desired: Stopped` for a server whose process crashed and stayed offline (ARCHITECTURE.md 8.3) |
 | `internal/gateway/wsproxy`, `sftprelay`, `jwtx` | websocket relay, SFTP relay, JWT re-signing |
+| `test/placement`, `hack/e2e-placement.sh`, `hack/kind-placement.yaml` | the placement suite on kind (Tests above; `Placement` workflow) |
+| `hack/e2e-kind.sh`, `hack/kind-config.yaml` | the contract suite on kind (Tests above; `Contract` workflow) |
 
 ## Dependencies, security and quality
 

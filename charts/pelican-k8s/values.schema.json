@@ -188,7 +188,7 @@
           }
         },
         "remoteURL": {
-          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081` (`https://` when `tls.enabled` is true). With `tls.enabled` a set value must be an https URL whose host is the gateway Service, because the gateway's certificate is issued for that name.",
+          "description": "URL the agents use to reach the gateway's remote API. Empty uses the in-cluster Service, `http://<release>-gateway.<namespace>.svc:8081` (`https://` when `tls.enabled` is true). With `tls.enabled` a set value must be an https URL; its host is added to the gateway's certificate next to the Service names.",
           "type": "string",
           "pattern": "^$|^https?://[^\\s/]+(/[^\\s]*)?$",
           "default": ""
@@ -943,18 +943,18 @@
               }
             },
             "deletionPolicy": {
-              "description": "What happens to the server PVC when the GameServer is deleted. SnapshotThenDelete needs volumeSnapshotClassName.",
+              "description": "What happens to the server PVC when the GameServer is deleted. SnapshotThenDelete first takes a VolumeSnapshot of class volumeSnapshotClassName.",
               "type": "string",
               "enum": ["Delete", "Retain", "SnapshotThenDelete"],
               "default": "Delete"
             },
             "volumeSnapshotClassName": {
-              "description": "VolumeSnapshotClass for SnapshotThenDelete and snapshotSchedule.",
+              "description": "VolumeSnapshotClass for SnapshotThenDelete and snapshotSchedule. Empty uses the cluster's default VolumeSnapshotClass.",
               "allOf": [{"$ref": "#/definitions/dnsSubdomainOrEmpty"}],
               "default": ""
             },
             "snapshotSchedule": {
-              "description": "Cron schedule of crash-consistent VolumeSnapshots of every server (five fields, or a macro such as @daily). Empty takes no scheduled snapshots. Needs volumeSnapshotClassName.",
+              "description": "Cron schedule of crash-consistent VolumeSnapshots of every server (five fields, or a macro such as @daily). Empty takes no scheduled snapshots. Uses volumeSnapshotClassName.",
               "type": "string",
               "pattern": "^$|^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$|^@every [0-9a-zµ.]+$|^\\S+( +\\S+){4}$",
               "default": "",
@@ -1036,12 +1036,12 @@
               "default": true
             },
             "inClusterEgress": {
-              "description": "In-cluster destinations game and agent pods may reach despite blockedEgressCIDRs.",
+              "description": "In-cluster destinations that game pods (gameServers, additional) and agent pods (additional) may reach despite blockedEgressCIDRs.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
                 "gameServers": {
-                  "description": "Allow traffic to other GameServer pods on their allocation ports.",
+                  "description": "Allow game pods to reach other game pods on any port.",
                   "type": "boolean",
                   "default": true
                 },
@@ -1069,7 +1069,7 @@
               }
             },
             "blockedEgressCIDRs": {
-              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. An empty list blocks only link-local, which is always blocked. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
+              "description": "IPv4 ranges excluded from the internet egress of game pods, agent pods and install Jobs. The default covers the private and shared ranges, and with them the usual pod, service, node and LAN ranges. Link-local is blocked as well; an empty list blocks only link-local. DNS, the gateway remote API and inClusterEgress are separate allow rules.",
               "type": "array",
               "items": {"$ref": "#/definitions/ipv4CIDR"},
               "default": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]

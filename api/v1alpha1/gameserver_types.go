@@ -71,8 +71,8 @@ type PanelSpec struct {
 	UUIDShort string `json:"uuidShort"`
 	// Settings is the raw `settings` object from GET /api/remote/servers/{uuid}
 	// minus `environment`. The agent consumes it unchanged as its Wings server
-	// configuration; the operator reads only suspended, container.image, build.*
-	// and allocations.*.
+	// configuration; the operator reads only uuid, meta.name, egg.id, suspended,
+	// container.image, build.* and allocations.*.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Settings apiextensionsv1.JSON `json:"settings"`
 	// EnvironmentSecretRef names the Secret holding the egg variables (`settings.environment`).
@@ -186,7 +186,8 @@ type AgentStatus struct {
 
 // GameStatus tracks the game pod.
 type GameStatus struct {
-	// PodUID is the game pod the operator last issued start in; a new UID means "fresh pod".
+	// PodUID is the current game pod, recorded once its shim is attached (empty
+	// without a game pod); a new UID means "fresh pod".
 	PodUID string `json:"podUID,omitempty"`
 	// Node is the node the game pod was scheduled to.
 	Node string `json:"node,omitempty"`
@@ -268,7 +269,9 @@ type GameServerStatus struct {
 	Install            InstallStatus `json:"install,omitempty"`
 	Backups            BackupsStatus `json:"backups,omitempty"`
 	Endpoints          []Endpoint    `json:"endpoints,omitempty"`
-	// PodImage is the digest-pinned image of the current or last game pod.
+	// PodImage is the image in the game StatefulSet's template, digest-pinned
+	// when the lookup succeeds: the current game pod's, or without one the image
+	// the next game pod gets.
 	PodImage string `json:"podImage,omitempty"`
 	// TemplateHash is the pod template hash of the game StatefulSet.
 	TemplateHash string          `json:"templateHash,omitempty"`

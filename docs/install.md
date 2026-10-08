@@ -248,9 +248,14 @@ application controller restarts.
 
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
-`ValidatingAdmissionPolicy` objects, ClusterRoles and, because the chart's
-Roles and ClusterRoles grant them, `pods/resize`, `volumesnapshots`, `leases`,
-`nodes`, `namespaces` and, with `gateway.metallb.discoverPools`, MetalLB
-`ipaddresspools`.
+`ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` objects,
+the PriorityClass `pelican-agent` (`agentPriorityClass`), ClusterRoles and,
+because the chart's Roles and ClusterRoles grant them, `pods/resize`,
+`volumesnapshots`, `leases`, `nodes`, `namespaces` and, with
+`gateway.metallb.discoverPools`, MetalLB `ipaddresspools`. With
+`tls.certManager.enabled` it also needs cert-manager `certificates` in the
+system namespace and, because the operator's Role grants them, in the servers
+namespace; without `tls.certManager.issuerRef`, also `clusterissuers` and
+`certificates` in `tls.certManager.caNamespace`.
 Never enable `prune` on the servers namespace: `GameServer` objects are owned
 by the Panel through the gateway, not by Git.
