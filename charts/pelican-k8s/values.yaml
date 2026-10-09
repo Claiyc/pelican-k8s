@@ -175,6 +175,12 @@ agentPriorityClass:
   create: true
   name: pelican-agent
   value: 1000
+  # PreemptLowerPriority lets an agent evict any lower-priority pod on its
+  # game pod's node, including other workloads' pods; on a shared cluster set
+  # Never, and the agent waits for room instead (docs/security.md). Kubernetes
+  # does not let this change on an existing PriorityClass: delete it right
+  # before the upgrade that changes the value.
+  preemptionPolicy: PreemptLowerPriority
 
 # The default GameServerClass (cluster policy). See docs/classes.md.
 defaultClass:

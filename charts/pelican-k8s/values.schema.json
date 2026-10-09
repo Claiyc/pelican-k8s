@@ -548,7 +548,7 @@
       "additionalProperties": false,
       "properties": {
         "create": {
-          "description": "Create the PriorityClass (preemptionPolicy PreemptLowerPriority, not the global default). With false, a PriorityClass named `name` must exist.",
+          "description": "Create the PriorityClass (not the global default). With false, a PriorityClass named `name` must exist.",
           "type": "boolean",
           "default": true
         },
@@ -567,6 +567,12 @@
           "minimum": -2147483648,
           "maximum": 1000000000,
           "default": 1000
+        },
+        "preemptionPolicy": {
+          "description": "PreemptLowerPriority lets an agent pod that follows its game pod to a full node evict lower-priority pods there, other workloads' included. Never keeps its place in the scheduling queue without evicting anything; the agent then stays Pending, and its server Starting, until the node has room.",
+          "type": "string",
+          "enum": ["PreemptLowerPriority", "Never"],
+          "default": "PreemptLowerPriority"
         }
       }
     },

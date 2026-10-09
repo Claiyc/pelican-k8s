@@ -1086,8 +1086,10 @@ into the agent StatefulSet's template.
   StatefulSet recreates it from the current template.
 
 Agent pods run with `agentPriorityClassName` (the chart's PriorityClass `pelican-agent`), above game
-pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there. It
-stays `Pending`, and the server in `Starting`, only when the node has nothing the scheduler may evict.
+pods, so an agent that follows its game pod to a full node can preempt lower-priority pods there,
+including other workloads' pods, when evicting some of them makes room for it. It stays `Pending`,
+and the server in `Starting`, when no such set of pods exists. With
+`agentPriorityClass.preemptionPolicy: Never` it evicts nothing and waits for room.
 
 **Lost pods.**
 - The agent pod goes while the game runs (eviction, deletion): it comes back on the same node because

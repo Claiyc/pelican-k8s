@@ -79,6 +79,38 @@ pods with the namespace UID range, `anyuid` for the installer).
   cluster network is not trusted. A CNI that encrypts between nodes does not
   protect against an observer on the node itself.
 
+## Shared clusters
+
+On a cluster that also runs other workloads:
+
+- Agent pods run with PriorityClass `pelican-agent` (value 1000,
+  `preemptionPolicy: PreemptLowerPriority`). An agent that follows its game
+  pod to a full node evicts lower-priority pods there when that makes room for
+  it, which includes other workloads' pods at the default priority 0. Set
+  `agentPriorityClass.preemptionPolicy: Never` to stop that; the agent then
+  waits until the node has room, and its server stays `Starting` meanwhile.
+  Kubernetes does not let a PriorityClass's `preemptionPolicy` change, so on
+  an installed release delete the PriorityClass `pelican-agent` right before
+  the `helm upgrade` that changes it. A pod takes the policy when it is
+  created, so running agent pods keep the old one until they are replaced.
+- With `tls.certManager.enabled`, cert-manager lets a Certificate in any
+  namespace use a ClusterIssuer, the chart-created one included. Anyone who
+  may create Certificates in some namespace can therefore get a client
+  certificate for `pelican-gateway` that agents accept (they still require the
+  agent token). Limit what the issuer signs with cert-manager's
+  approver-policy, or keep Certificate creation to cluster administrators. A
+  namespace selector alone is not enough, because the operator creates
+  Certificates in the servers namespace: approve `pelican-gateway` and
+  `pelican-operator` (client auth) only from the release namespace, and from
+  the servers namespace only the agents' `gs-<uuid>-agent` server certificates
+  (`digital signature`, `server auth`, no `client auth`). approver-policy only
+  restricts anything once cert-manager's own approver is off
+  (`disableAutoApproval: true` in cert-manager's chart from v1.15, the
+  version's own setting before that); otherwise it approves every request for
+  a cert-manager issuer (`Issuer` or `ClusterIssuer`). A
+  compromised operator could request certificates from any ClusterIssuer;
+  policies on those issuers cover that.
+
 ## Blast radius
 
 A compromised game process can read and write its own files and use the game
