@@ -125,6 +125,26 @@ func TestLegacyStatefulSetWithoutLivePod(t *testing.T) {
 	}
 }
 
+// Deleting the server takes down a 1.x pod that has no StatefulSet left.
+func TestFinalizeDeletesAnOrphanedLegacyPod(t *testing.T) {
+	h := legacyServer(t, v1alpha1.PowerRunning, v1alpha1.ProcessRunning)
+	gs := h.gs()
+	gs.Finalizers = []string{v1alpha1.Finalizer}
+	if err := h.c.Update(context.Background(), gs); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.c.Delete(context.Background(), &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: names.StatefulSet(uuid), Namespace: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.c.Delete(context.Background(), h.gs()); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if pod := h.pod(); pod == nil || pod.DeletionTimestamp.IsZero() {
+		t.Fatalf("the orphaned 1.x pod must be terminating, got %+v", pod)
+	}
+}
+
 // 1.x set desired Stopped on every Panel restart and left desired Running
 // after a crash; the upgrade keeps each server doing what its process did.
 func TestLegacyPowerFollowsTheProcess(t *testing.T) {

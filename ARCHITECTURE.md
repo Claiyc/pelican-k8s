@@ -1320,7 +1320,8 @@ in-flight work.
    - `SnapshotThenDelete`: `POST /power {kill}`, a VolumeSnapshot `gs-<uuid>-final`, wait for
      `readyToUse`, then delete the PVC.
    - Under every policy both StatefulSets, the Services, NetworkPolicies and install Jobs are deleted,
-     and the finalizer waits for both pods to go before handling the PVC.
+     as is a pod of the 1.x layout (§ "From 1.x to 2.0" in docs/operations.md), which has no StatefulSet
+     left to take it down. The finalizer waits for both pods to go before handling the PVC.
 3. Websocket and SFTP sessions end when the agent container stops.
 
 ### 8.9 Pod, node and component restarts
