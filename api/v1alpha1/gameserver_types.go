@@ -227,7 +227,7 @@ type PendingBackup struct {
 	UUID      string      `json:"uuid"`
 	StartedAt metav1.Time `json:"startedAt"`
 	// Agent is the agent instance that runs the backup or restore: the agent
-	// pod's UID and its agent container's restart count. A backup does not
+	// pod's UID and its agent container's ID. A backup does not
 	// survive its agent, so an entry of another instance is no longer in flight.
 	// +optional
 	Agent string `json:"agent,omitempty"`

@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
 - The scheduler places the game pod and the agent follows it. The game pod prefers the agent's node (class `scheduling.preferAgentNode`, default `true`) and requires it while the agent has in-flight work. An agent pod on another node is moved to the game pod's node once it is idle (`AgentRelocating`). Archives of the local backup adapter live on the agent pod's scratch volume and are lost when it moves.
 - Agent pods run under their own ServiceAccount `pelican-agent` (class `agentServiceAccountName`) and PriorityClass `pelican-agent` (class `agentPriorityClassName`, chart `agentPriorityClass`), which ranks above game pods.
 - A process that exits without Wings restarting it leaves the server stopped: after a minute offline the gateway sets `desired: Stopped` and the game pod goes, as the Panel shows it.
+- The chart runs the gateway and the operator with two replicas each by default (`gateway.replicas`, `operator.replicas`), preferably on different nodes (`podAntiAffinity: soft`) and covered by a PodDisruptionBudget with `maxUnavailable: 1` (`gateway.podDisruptionBudget`, `operator.podDisruptionBudget`). Gateway replicas are active/active; operator replicas elect a leader. On a single-node cluster set `podDisruptionBudget.enabled: false` for both, or a node drain waits for the budget.
+- BREAKING: both charts ship a `values.schema.json`, and Helm rejects values that do not match it, including misspelt or unknown keys in the objects the chart models.
 - New conditions `GamePodReady` and `AgentRelocating`; `status.game` records the game pod and its node, `status.agent.node` the agent's.
 
 ### Fixed
