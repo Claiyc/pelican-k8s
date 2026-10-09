@@ -23,9 +23,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
-// loadPods reads the agent pod and the game pod. A pod of the 1.x layout, a
-// game pod with the agent as a sidecar, is deleted on sight: its replacement
-// is the two-pod layout.
+// loadPods reads the agent pod and the game pod.
 func (r *GameServerReconciler) loadPods(s *scope) error {
 	uuid := s.in.UUID()
 	agent, err := r.getPod(s, names.AgentPod(uuid))
@@ -36,17 +34,64 @@ func (r *GameServerReconciler) loadPods(s *scope) error {
 	if err != nil {
 		return err
 	}
-	if game != nil && legacyPod(game) {
-		if game.DeletionTimestamp.IsZero() {
-			r.event(s, corev1.EventTypeNormal, "LegacyPodDeleted", "deleting pod %s of the single-pod layout", game.Name)
-			if err := r.Delete(s.ctx, game); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-		}
-		s.requeue = requeueFast
-		game = nil
-	}
 	s.agentPod, s.pod = agent, game
+	return nil
+}
+
+// migrateLegacy moves a server off the 1.x layout, a game pod with the agent
+// as a sidecar, and reports whether the server has no such pod any more. The
+// rest of the reconcile waits until the pod is gone, so that its NetworkPolicy
+// still admits the kubelet's preStop call and no agent pod opens the volume
+// next to the 1.x agent. Before deleting the pod it sets the desired power
+// state to what the process does (1.x left Stopped behind on Panel restarts
+// and Running behind on crashes), and it deletes the 1.x StatefulSet while
+// keeping its pod, so the pod is not recreated and the 2.0 StatefulSet gets
+// its own serviceName.
+func (r *GameServerReconciler) migrateLegacy(s *scope) (bool, error) {
+	uuid := s.in.UUID()
+	pod, err := r.getPod(s, names.Pod(uuid))
+	if err != nil || pod == nil || !legacyPod(pod) {
+		return err == nil, err
+	}
+	s.requeue = requeueFast
+	if !pod.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if err := r.adoptLegacyPower(s); err != nil {
+		return false, err
+	}
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: s.gs.Namespace, Name: names.StatefulSet(uuid)}}
+	if err := r.Delete(s.ctx, sts, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	r.event(s, corev1.EventTypeNormal, "LegacyPodDeleted", "deleting pod %s of the single-pod layout", pod.Name)
+	if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	return false, nil
+}
+
+// adoptLegacyPower sets spec.power.desired from the 1.x process state, so a
+// server keeps doing what the Panel shows across the upgrade.
+func (r *GameServerReconciler) adoptLegacyPower(s *scope) error {
+	var want v1alpha1.PowerState
+	switch s.gs.Status.Process.State {
+	case v1alpha1.ProcessRunning, v1alpha1.ProcessStarting:
+		want = v1alpha1.PowerRunning
+	case v1alpha1.ProcessOffline, v1alpha1.ProcessStopping:
+		want = v1alpha1.PowerStopped
+	default:
+		return nil
+	}
+	if s.gs.Spec.Power.Desired == want {
+		return nil
+	}
+	patch := client.MergeFromWithOptions(s.gs.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	s.gs.Spec.Power.Desired = want
+	if err := r.Patch(s.ctx, s.gs, patch); err != nil {
+		return err
+	}
+	r.event(s, corev1.EventTypeNormal, "LegacyPowerAdopted", "desired power state set to %s, as the 1.x process was %s", want, s.gs.Status.Process.State)
 	return nil
 }
 

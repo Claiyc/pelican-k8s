@@ -194,6 +194,9 @@ func (r *GameServerReconciler) reconcile(s *scope) error {
 	if err := r.loadClassAndSettings(s); err != nil {
 		return err
 	}
+	if gone, err := r.migrateLegacy(s); err != nil || !gone {
+		return err
+	}
 	if err := r.ensureAgentSecret(s); err != nil {
 		return err
 	}

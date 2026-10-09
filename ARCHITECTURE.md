@@ -1765,7 +1765,7 @@ node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
   (install: `InstallRequested`, `InstallStarted`, `InstallFinished`, `InstallFailed`, `InstallRestarted`,
   `InstallTimeout`, `InstallScriptMissing`; process: `Power`, `Synced`, `Suspended`,
   `GameContainerTerminated`; pod: `Recreate`, `Replace`, `Resized`, `AgentRelocating`, `ForceDelete`,
-  `LegacyPodDeleted`, `ClassNotFound`, `DigestLookupFailed`, `EntrypointLookupFailed`; storage:
+  `LegacyPodDeleted`, `LegacyPowerAdopted`, `ClassNotFound`, `DigestLookupFailed`, `EntrypointLookupFailed`; storage:
   `VolumeExpanded`, `ResizeFailed`, `SnapshotCreated`, `SnapshotFailed`, `InvalidSnapshotSchedule`,
   `VolumeRetained`; TLS: `CertificateRenewed`; deletion: `AgentDeleteFailed`, `AgentKillFailed`);
   conditions (§7.2).

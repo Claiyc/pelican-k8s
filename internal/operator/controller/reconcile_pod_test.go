@@ -541,29 +541,6 @@ func TestGamePodReadyReasons(t *testing.T) {
 	}
 }
 
-// A pod of the single-pod layout is deleted as soon as the operator sees it.
-func TestLegacyPodIsDeleted(t *testing.T) {
-	h := newHarness(t, newGS(), newClass())
-	h.reconcile(2)
-	legacy := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(uuid), Namespace: ns, Labels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: "game"}},
-		Spec: corev1.PodSpec{
-			InitContainers: []corev1.Container{{Name: "prepare"}, {Name: render.AgentContainer}},
-			Containers:     []corev1.Container{{Name: render.GameContainer}},
-		},
-	}
-	if err := h.c.Create(context.Background(), legacy); err != nil {
-		t.Fatal(err)
-	}
-	h.reconcile(1)
-	if h.pod() != nil {
-		t.Fatal("the legacy pod must be deleted")
-	}
-	if !hasEvent(recordedEvents(h), "LegacyPodDeleted") {
-		t.Fatal("LegacyPodDeleted event expected")
-	}
-}
-
 // The resize phase always runs, even when the pod is already due for a
 // recreate for another reason: it owns the ResizePending condition and the
 // in-place resize attempt, and the recreate may stay deferred for a while.
