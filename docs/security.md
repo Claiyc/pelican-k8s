@@ -106,7 +106,8 @@ On a cluster that also runs other workloads:
   (`digital signature`, `server auth`, no `client auth`). approver-policy only
   restricts anything once cert-manager's own approver is off
   (`disableAutoApproval: true` in cert-manager's chart from v1.15, the
-  version's own setting before that); otherwise it approves every request. A
+  version's own setting before that); otherwise it approves every request for
+  a cert-manager issuer (`Issuer` or `ClusterIssuer`). A
   compromised operator could request certificates from any ClusterIssuer;
   policies on those issuers cover that.
 
