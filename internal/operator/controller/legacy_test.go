@@ -172,3 +172,24 @@ func TestLegacyPowerFollowsTheProcess(t *testing.T) {
 		})
 	}
 }
+
+// A power action the operator has not acted on yet wins over the process state.
+func TestLegacyPowerKeepsAPendingAction(t *testing.T) {
+	h := legacyServer(t, v1alpha1.PowerStopped, v1alpha1.ProcessRunning)
+	gs := h.gs()
+	gs.Spec.Power.Generation = 4
+	if err := h.c.Update(context.Background(), gs); err != nil {
+		t.Fatal(err)
+	}
+	gs.Status.Power.ObservedGeneration = 3
+	if err := h.c.Status().Update(context.Background(), gs); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(3)
+	if got := h.gs().Spec.Power.Desired; got != v1alpha1.PowerStopped {
+		t.Fatalf("desired %s, want the pending Stopped", got)
+	}
+	if hasEvent(recordedEvents(h), "LegacyPowerAdopted") {
+		t.Fatal("no LegacyPowerAdopted event expected")
+	}
+}

@@ -84,9 +84,11 @@ layout (serviceName `gs-<uuid>-agent`) and each pod of that layout (a
 `gs-<uuid>-0` with an `agent` container, event `LegacyPodDeleted`) as soon as it
 reconciles the server. Before deleting the pod it sets `spec.power.desired` from
 `status.process.state` (event `LegacyPowerAdopted`): `running` and `starting`
-become `Running`, `offline` and `stopping` become `Stopped`. A running server is stopped through the 1.x pod's shutdown path and started
-again in the new layout once that pod is gone; a stopped server only gets its
-agent pod. There is no way back to 1.x short of restoring a backup taken
+become `Running`, `offline` and `stopping` become `Stopped`. A power action the
+operator has not acted on yet (`spec.power.generation` above
+`status.power.observedGeneration`) is kept instead. A running server is stopped
+through the 1.x pod's shutdown path and started again in the new layout once
+that pod is gone; a stopped server only gets its agent pod. There is no way back to 1.x short of restoring a backup taken
 before the upgrade. Plan the upgrade for a quiet time, and take the steps below
 first:
 

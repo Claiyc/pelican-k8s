@@ -104,8 +104,12 @@ func (r *GameServerReconciler) deleteLegacyStatefulSet(s *scope) (bool, error) {
 }
 
 // adoptLegacyPower sets spec.power.desired from the 1.x process state, so a
-// server keeps doing what the Panel shows across the upgrade.
+// server keeps doing what the Panel shows across the upgrade. A power action
+// not yet acted on (its generation unobserved) is newer and is left alone.
 func (r *GameServerReconciler) adoptLegacyPower(s *scope) error {
+	if s.gs.Spec.Power.Generation != s.gs.Status.Power.ObservedGeneration {
+		return nil
+	}
 	var want v1alpha1.PowerState
 	switch s.gs.Status.Process.State {
 	case v1alpha1.ProcessRunning, v1alpha1.ProcessStarting:
