@@ -29,7 +29,7 @@ Status fields worth knowing:
 | Field | Written by | Meaning |
 |---|---|---|
 | `status.process.state` | gateway | `offline`, `starting`, `running`, `stopping` as reported by Wings |
-| `spec.power.desired` | gateway | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`; a crash leaves `Running` while Wings restarts the process and becomes `Stopped` after a minute when it does not |
+| `spec.power.desired` | gateway (operator: once per server on the upgrade from 1.x) | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`; a crash leaves `Running` while Wings restarts the process and becomes `Stopped` after a minute when it does not |
 | `status.power.observedGeneration` | operator | Last `spec.power.generation` acted on |
 | `status.install.*` | both | Requested/prepared generation, Job name, result |
 | `status.conditions` | operator (`Orphaned`: gateway) | `VolumeReady`, `ExposureReady`, `AgentReady`, `GamePodReady`, `AgentRelocating`, `InstallPrepared`, `Installed`, `ResizePending`, `RecreatePending`, `NodeLost`, `Orphaned`, `DiskShrinkRefused` |
@@ -79,11 +79,17 @@ server's pods are recreated (or use `deletionPolicy: Retain` and swap the PVC).
 ### From 1.x to 2.0
 
 2.0 runs every server in an agent pod and a game pod. There is no compatibility
-mode: after the upgrade above, the operator deletes each pod of the 1.x layout
-(a `gs-<uuid>-0` with an `agent` container, event `LegacyPodDeleted`) as soon as
-it reconciles the server. A running server is stopped through the 1.x pod's
-shutdown path and started again in the new layout; a stopped server only gets
-its agent pod. Plan the upgrade for a quiet time, and take the steps below
+mode: after the upgrade above, the operator deletes each StatefulSet of the 1.x
+layout (serviceName `gs-<uuid>-agent`) and each pod of that layout (a
+`gs-<uuid>-0` with an `agent` container, event `LegacyPodDeleted`) as soon as it
+reconciles the server. Before deleting the pod it sets `spec.power.desired` from
+`status.process.state` (event `LegacyPowerAdopted`): `running` and `starting`
+become `Running`, `offline` and `stopping` become `Stopped`. A power action the
+operator has not acted on yet (`spec.power.generation` above
+`status.power.observedGeneration`) is kept instead. A running server is stopped
+through the 1.x pod's shutdown path and started again in the new layout once
+that pod is gone; a stopped server only gets its agent pod. There is no way back to 1.x short of restoring a backup taken
+before the upgrade. Plan the upgrade for a quiet time, and take the steps below
 first:
 
 - Scripts and runbooks that use `kubectl logs gs-<uuid>-0 -c agent` or

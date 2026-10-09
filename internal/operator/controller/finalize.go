@@ -87,6 +87,13 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 			return ctrl.Result{}, err
 		}
 	}
+	// A 1.x pod whose StatefulSet the upgrade already deleted has no owner
+	// left to take it down.
+	if gamePod != nil && legacyPod(gamePod) && gamePod.DeletionTimestamp.IsZero() {
+		if err := r.Delete(s.ctx, gamePod); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
 	if err := r.deleteCertificate(s); err != nil {
 		return ctrl.Result{}, err
 	}
