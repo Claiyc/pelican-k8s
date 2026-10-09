@@ -1,10 +1,12 @@
 package protocol
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +88,17 @@ func TestClientRequestAndEvents(t *testing.T) {
 	case <-c.Done():
 	case <-ctx.Done():
 		t.Fatal("client did not observe close")
+	}
+}
+
+func TestDecoderLimit(t *testing.T) {
+	long := `{"type":"output","data":"` + strings.Repeat("A", 8000) + `"}` + "\n"
+	d := NewDecoder(strings.NewReader(long))
+	d.limit = 4096
+	if err := d.Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("over the limit: %v, want ErrTooLong", err)
+	}
+	if err := NewDecoder(strings.NewReader(long)).Decode(&Message{}); err != nil {
+		t.Fatalf("within MaxLineSize: %v", err)
 	}
 }
