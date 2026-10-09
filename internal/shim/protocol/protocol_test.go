@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -91,6 +92,11 @@ func TestClientRequestAndEvents(t *testing.T) {
 	}
 }
 
+// stalledReader never has data and never ends.
+type stalledReader struct{}
+
+func (stalledReader) Read([]byte) (int, error) { return 0, nil }
+
 func TestDecoderLimit(t *testing.T) {
 	long := `{"type":"output","data":"` + strings.Repeat("A", 8000) + `"}` + "\n"
 	d := NewDecoder(strings.NewReader(long))
@@ -107,6 +113,13 @@ func TestDecoderLimit(t *testing.T) {
 		if err := NewDecoder(strings.NewReader(full)).Decode(&Message{}); err != nil {
 			t.Fatalf("line of MaxLineSize ending in %q: %v", eol, err)
 		}
+	}
+	// An unfinished line one byte past the limit is cut unless that byte is
+	// the "\r" of its ending.
+	d = NewDecoder(io.MultiReader(strings.NewReader(strings.Repeat("A", 4097)), stalledReader{}))
+	d.limit = 4096
+	if err := d.Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("unfinished line of limit+1: %v, want ErrTooLong", err)
 	}
 	over := head + strings.Repeat(" ", MaxLineSize+1-len(head)-len(tail)) + tail + "\n"
 	if err := NewDecoder(strings.NewReader(over)).Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {

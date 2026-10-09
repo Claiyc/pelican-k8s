@@ -172,10 +172,15 @@ func NewDecoder(r io.Reader) *Decoder {
 // unfinished line may hold one byte more, a "\r" waiting for its "\n".
 func (d *Decoder) split(data []byte, atEOF bool) (int, []byte, error) {
 	advance, token, err := bufio.ScanLines(data, atEOF)
-	if err == nil && (len(token) > d.limit || token == nil && len(data) > d.limit+1) {
+	if err == nil && (len(token) > d.limit || token == nil && pastLimit(data, d.limit)) {
 		return 0, nil, bufio.ErrTooLong
 	}
 	return advance, token, err
+}
+
+// pastLimit reports an unfinished line that can no longer end within limit.
+func pastLimit(data []byte, limit int) bool {
+	return len(data) > limit+1 || len(data) == limit+1 && data[limit] != '\r'
 }
 
 // ErrClosed is returned by Decode when the stream ended.
