@@ -75,7 +75,7 @@ file against it when the file starts with
 | `agent.*` | see values | Rendered into the agent's Wings `config.yml` (crash detection, SFTP read-only, log count, upload limit, timezone); `agent.extra` is merged verbatim |
 | `defaultClass.create` / `.name` / `.spec` | `true` / `default` | The default `GameServerClass`; every `spec` field is documented in `docs/classes.md` |
 | `agentPriorityClass.create` / `.name` / `.value` | `true` / `pelican-agent` / `1000` | PriorityClass of agent pods (class `agentPriorityClassName`); must rank above game pods |
-| `agentPriorityClass.preemptionPolicy` | `PreemptLowerPriority` | `Never` stops agent pods from evicting other pods on a full node; the agent waits for room instead |
+| `agentPriorityClass.preemptionPolicy` | `PreemptLowerPriority` | `Never` stops agent pods from evicting other pods on a full node; the agent waits for room instead. Immutable on an existing PriorityClass: delete it right before the upgrade that changes the value (docs/security.md) |
 | `admissionPolicies.enabled` | `true` | `ValidatingAdmissionPolicy` for game pods, agent pods and install Jobs |
 | `networkPolicies.enabled` | `true` | Default deny and an install-Job egress policy in the servers namespace, plus the gateway's ingress policy |
 | `openshift.enabled` | `false` | SCC bindings, namespace UID ranges and seccomp handling for OpenShift |
