@@ -162,15 +162,17 @@ type Decoder struct {
 // NewDecoder wraps r.
 func NewDecoder(r io.Reader) *Decoder {
 	d := &Decoder{s: bufio.NewScanner(r), limit: MaxLineSize}
-	d.s.Buffer(make([]byte, 0, 64*1024), MaxLineSize)
+	// The buffer also holds the line's "\r\n", which the token leaves out.
+	d.s.Buffer(make([]byte, 0, 64*1024), MaxLineSize+2)
 	d.s.Split(d.split)
 	return d
 }
 
-// split is bufio.ScanLines that fails once a line grows past the limit.
+// split is bufio.ScanLines that fails once a line grows past the limit. An
+// unfinished line may hold one byte more, a "\r" waiting for its "\n".
 func (d *Decoder) split(data []byte, atEOF bool) (int, []byte, error) {
 	advance, token, err := bufio.ScanLines(data, atEOF)
-	if err == nil && (len(token) > d.limit || token == nil && len(data) > d.limit) {
+	if err == nil && (len(token) > d.limit || token == nil && len(data) > d.limit+1) {
 		return 0, nil, bufio.ErrTooLong
 	}
 	return advance, token, err

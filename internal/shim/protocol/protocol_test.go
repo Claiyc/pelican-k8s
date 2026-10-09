@@ -101,4 +101,15 @@ func TestDecoderLimit(t *testing.T) {
 	if err := NewDecoder(strings.NewReader(long)).Decode(&Message{}); err != nil {
 		t.Fatalf("within MaxLineSize: %v", err)
 	}
+	head, tail := `{"type":"output"`, `}`
+	for _, eol := range []string{"\n", "\r\n"} {
+		full := head + strings.Repeat(" ", MaxLineSize-len(head)-len(tail)) + tail + eol
+		if err := NewDecoder(strings.NewReader(full)).Decode(&Message{}); err != nil {
+			t.Fatalf("line of MaxLineSize ending in %q: %v", eol, err)
+		}
+	}
+	over := head + strings.Repeat(" ", MaxLineSize+1-len(head)-len(tail)) + tail + "\n"
+	if err := NewDecoder(strings.NewReader(over)).Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("line of MaxLineSize+1: %v, want ErrTooLong", err)
+	}
 }
