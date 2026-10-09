@@ -543,7 +543,9 @@ runs inside the encrypted connection (§12.6).
 
 **Protocol** (JSON lines; byte fields are base64). The handshake comes first: the agent sends
 `challenge{data}` (its nonce), the shim answers `auth{data, challenge, podUID}` (its proof, its own
-nonce and its pod UID), and the agent answers `auth{data}` (its proof). After that the agent sends
+nonce and its pod UID), and the agent answers `auth{data}` (its proof). The handshake has 5 s, and
+until it passes a line may be at most 4 KiB (4 MiB afterwards); the agent authenticates at most 16
+connections at once and leaves further ones in the accept queue. After that the agent sends
 requests, each with an `id` that the shim's `reply{ok, error, status}` repeats, and the shim pushes
 events:
 
