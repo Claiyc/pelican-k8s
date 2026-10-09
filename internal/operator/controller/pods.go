@@ -39,36 +39,68 @@ func (r *GameServerReconciler) loadPods(s *scope) error {
 }
 
 // migrateLegacy moves a server off the 1.x layout, a game pod with the agent
-// as a sidecar, and reports whether the server has no such pod any more. The
-// rest of the reconcile waits until the pod is gone, so that its NetworkPolicy
+// as a sidecar, and reports whether the server has neither such a pod nor its
+// StatefulSet any more. The rest of the reconcile waits until both are gone, so that its NetworkPolicy
 // still admits the kubelet's preStop call and no agent pod opens the volume
 // next to the 1.x agent. Before deleting the pod it sets the desired power
-// state to what the process does (1.x left Stopped behind on Panel restarts
-// and Running behind on crashes), and it deletes the 1.x StatefulSet while
+// state to what the process does, and it deletes the 1.x StatefulSet while
 // keeping its pod, so the pod is not recreated and the 2.0 StatefulSet gets
-// its own serviceName.
+// its own serviceName. The StatefulSet goes in every case, also when its pod
+// is already gone or terminating.
 func (r *GameServerReconciler) migrateLegacy(s *scope) (bool, error) {
 	uuid := s.in.UUID()
 	pod, err := r.getPod(s, names.Pod(uuid))
-	if err != nil || pod == nil || !legacyPod(pod) {
-		return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	legacy := pod != nil && legacyPod(pod)
+	live := legacy && pod.DeletionTimestamp.IsZero()
+	if live {
+		if err := r.adoptLegacyPower(s); err != nil {
+			return false, err
+		}
+	}
+	stsLeft, err := r.deleteLegacyStatefulSet(s)
+	if err != nil {
+		return false, err
+	}
+	if !legacy && !stsLeft {
+		return true, nil
 	}
 	s.requeue = requeueFast
-	if !pod.DeletionTimestamp.IsZero() {
-		return false, nil
-	}
-	if err := r.adoptLegacyPower(s); err != nil {
-		return false, err
-	}
-	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: s.gs.Namespace, Name: names.StatefulSet(uuid)}}
-	if err := r.Delete(s.ctx, sts, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && !apierrors.IsNotFound(err) {
-		return false, err
-	}
-	r.event(s, corev1.EventTypeNormal, "LegacyPodDeleted", "deleting pod %s of the single-pod layout", pod.Name)
-	if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-		return false, err
+	if live {
+		r.event(s, corev1.EventTypeNormal, "LegacyPodDeleted", "deleting pod %s of the single-pod layout", pod.Name)
+		if err := r.Delete(s.ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, err
+		}
 	}
 	return false, nil
+}
+
+// deleteLegacyStatefulSet deletes the server's StatefulSet if it is the 1.x
+// one, told apart by its serviceName, leaves its pod to the caller, and
+// reports whether the StatefulSet is still there.
+func (r *GameServerReconciler) deleteLegacyStatefulSet(s *scope) (bool, error) {
+	uuid := s.in.UUID()
+	sts := &appsv1.StatefulSet{}
+	err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.StatefulSet(uuid)}, sts)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if sts.Spec.ServiceName != names.AgentService(uuid) {
+		return false, nil
+	}
+	if !sts.DeletionTimestamp.IsZero() {
+		return true, nil
+	}
+	err = r.Delete(s.ctx, sts, client.PropagationPolicy(metav1.DeletePropagationOrphan))
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // adoptLegacyPower sets spec.power.desired from the 1.x process state, so a

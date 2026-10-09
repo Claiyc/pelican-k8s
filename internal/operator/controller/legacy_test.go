@@ -83,6 +83,48 @@ func TestLegacyPodIsReplaced(t *testing.T) {
 	}
 }
 
+// A 1.x StatefulSet goes also when its pod is already terminating or gone, as
+// for a server 1.x had stopped, so the 2.0 StatefulSet gets its serviceName.
+func TestLegacyStatefulSetWithoutLivePod(t *testing.T) {
+	for _, name := range []string{"terminating", "gone"} {
+		t.Run(name, func(t *testing.T) {
+			h := legacyServer(t, v1alpha1.PowerStopped, v1alpha1.ProcessOffline)
+			pod := h.pod()
+			if name == "gone" {
+				pod.Finalizers = nil
+				if err := h.c.Update(context.Background(), pod); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.c.Delete(context.Background(), pod); err != nil {
+				t.Fatal(err)
+			}
+			h.reconcile(3)
+			if sts := (&appsv1.StatefulSet{}); h.get(sts, names.StatefulSet(uuid)) && sts.Spec.ServiceName == names.AgentService(uuid) {
+				t.Fatal("the 1.x StatefulSet must be deleted")
+			}
+			if name == "terminating" {
+				if h.get(&appsv1.StatefulSet{}, names.AgentStatefulSet(uuid)) {
+					t.Fatal("no agent pod may start while the legacy pod terminates")
+				}
+				pod = h.pod()
+				pod.Finalizers = nil
+				if err := h.c.Update(context.Background(), pod); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.reconcile(2)
+			game := &appsv1.StatefulSet{}
+			if !h.get(game, names.StatefulSet(uuid)) || game.Spec.ServiceName != names.ExposureService(uuid) {
+				t.Fatalf("game StatefulSet with serviceName %q expected, got %q", names.ExposureService(uuid), game.Spec.ServiceName)
+			}
+			if !h.get(&appsv1.StatefulSet{}, names.AgentStatefulSet(uuid)) {
+				t.Fatal("the agent StatefulSet must be created")
+			}
+		})
+	}
+}
+
 // 1.x set desired Stopped on every Panel restart and left desired Running
 // after a crash; the upgrade keeps each server doing what its process did.
 func TestLegacyPowerFollowsTheProcess(t *testing.T) {
