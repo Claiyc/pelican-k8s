@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format follows
 - A process that reached `running` moments after `starting` could stay at `starting` in `status.process`, because the agent's two state posts arrived in the wrong order. The gateway now records the state the agent reports on a fresh poll, and writes it only if the GameServer did not change since before the poll, so with several gateway replicas an older poll cannot overwrite a newer one. When that poll fails it records the posted state and polls the agent again until it answers.
 
 ### Security
-- Built with Go 1.27.2 and `golang.org/x/net` v0.60.0, which fix the `net/http`, HTTP/2, `crypto/tls`, `mime/multipart` and `html/template` advisories GO-2026-6599 to GO-2026-6617.
+- Built with Go 1.27.2 and `golang.org/x/net` v0.60.0, which fix the `net/http`, HTTP/2, `crypto/tls`, `mime/multipart` and `html/template` advisories GO-2026-6599, -6600, -6603, -6604, -6605, -6607, -6608, -6610, -6611, -6612, -6613 and -6617.
 
 ### Added
 - Open consoles survive an agent pod replacement: the gateway holds the browser's websocket for up to `gateway.agentWait` (default `120s`), moves it to the new agent and asks the Panel for a fresh token. File-manager and other HTTP calls wait up to 10 s for the new agent.
