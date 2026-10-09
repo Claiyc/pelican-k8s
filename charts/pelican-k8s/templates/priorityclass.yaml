@@ -6,7 +6,7 @@ metadata:
   name: {{ .Values.agentPriorityClass.name }}
   labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
 value: {{ .Values.agentPriorityClass.value }}
-preemptionPolicy: PreemptLowerPriority
+preemptionPolicy: {{ .Values.agentPriorityClass.preemptionPolicy }}
 globalDefault: false
 description: "pelican-k8s agent pods: above game pods, so an agent can follow its game pod to a full node."
 {{- end }}

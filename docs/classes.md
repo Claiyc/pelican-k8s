@@ -221,7 +221,7 @@ with a clear message otherwise.
 | `terminationGracePeriodSeconds` | 660 | Must exceed Wings' 10-minute stop wait |
 | `nodeSelector` / `tolerations` | | Applied to game pods, agent pods and install Jobs |
 | `priorityClassName` | | Priority class of game pods |
-| `agentPriorityClassName` | `pelican-agent` | Priority class of agent pods. It must rank above the game pods', so an agent that follows its game pod to a full node can preempt lower-priority pods there; it stays `Pending` when the node has nothing the scheduler may evict |
+| `agentPriorityClassName` | `pelican-agent` | Priority class of agent pods. It must rank above the game pods', so an agent that follows its game pod to a full node can preempt lower-priority pods there; it stays `Pending` when the node has nothing the scheduler may evict, or when the class's `preemptionPolicy` is `Never` (chart `agentPriorityClass.preemptionPolicy`) and the node is full |
 
 ## Multiple classes
 

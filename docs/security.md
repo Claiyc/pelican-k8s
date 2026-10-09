@@ -79,6 +79,27 @@ pods with the namespace UID range, `anyuid` for the installer).
   cluster network is not trusted. A CNI that encrypts between nodes does not
   protect against an observer on the node itself.
 
+## Shared clusters
+
+On a cluster that also runs other workloads:
+
+- Agent pods run with PriorityClass `pelican-agent` (value 1000,
+  `preemptionPolicy: PreemptLowerPriority`). An agent that follows its game
+  pod to a full node evicts lower-priority pods there, which includes other
+  workloads' pods at the default priority 0. Set
+  `agentPriorityClass.preemptionPolicy: Never` to stop that; the agent then
+  waits until the node has room, and its server stays `Starting` meanwhile.
+- With `tls.certManager.enabled`, cert-manager lets a Certificate in any
+  namespace use a ClusterIssuer, the chart-created one included. Anyone who
+  may create Certificates in some namespace can therefore get a client
+  certificate for `pelican-gateway` that agents accept (they still require the
+  agent token). Limit who may use the issuer with cert-manager's
+  approver-policy (approve requests for it only from the release and servers
+  namespaces), or keep Certificate creation to cluster administrators. The
+  operator may create Certificates in the servers namespace, so a compromised
+  operator could request them from any ClusterIssuer; approver-policy covers
+  that too.
+
 ## Blast radius
 
 A compromised game process can read and write its own files and use the game
