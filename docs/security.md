@@ -97,15 +97,18 @@ On a cluster that also runs other workloads:
   namespace use a ClusterIssuer, the chart-created one included. Anyone who
   may create Certificates in some namespace can therefore get a client
   certificate for `pelican-gateway` that agents accept (they still require the
-  agent token). Limit who may use the issuer with cert-manager's
-  approver-policy (approve requests for it only from the release and servers
-  namespaces), or keep Certificate creation to cluster administrators.
-  approver-policy only restricts anything once cert-manager's own approver is
-  off (`disableAutoApproval: true` in cert-manager's chart from v1.15, the
-  version's own setting before that); otherwise it approves every request. The
-  operator may create Certificates in the servers namespace, so a compromised
-  operator could request them from any ClusterIssuer; approver-policy covers
-  that too.
+  agent token). Limit what the issuer signs with cert-manager's
+  approver-policy, or keep Certificate creation to cluster administrators. A
+  namespace selector alone is not enough, because the operator creates
+  Certificates in the servers namespace: approve `pelican-gateway` and
+  `pelican-operator` (client auth) only from the release namespace, and from
+  the servers namespace only the agents' `gs-<uuid>-agent` server certificates
+  (`digital signature`, `server auth`, no `client auth`). approver-policy only
+  restricts anything once cert-manager's own approver is off
+  (`disableAutoApproval: true` in cert-manager's chart from v1.15, the
+  version's own setting before that); otherwise it approves every request. A
+  compromised operator could request certificates from any ClusterIssuer;
+  policies on those issuers cover that.
 
 ## Blast radius
 
