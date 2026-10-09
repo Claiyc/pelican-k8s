@@ -1,10 +1,13 @@
 package protocol
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +89,40 @@ func TestClientRequestAndEvents(t *testing.T) {
 	case <-c.Done():
 	case <-ctx.Done():
 		t.Fatal("client did not observe close")
+	}
+}
+
+// stalledReader never has data and never ends.
+type stalledReader struct{}
+
+func (stalledReader) Read([]byte) (int, error) { return 0, nil }
+
+func TestDecoderLimit(t *testing.T) {
+	long := `{"type":"output","data":"` + strings.Repeat("A", 8000) + `"}` + "\n"
+	d := NewDecoder(strings.NewReader(long))
+	d.limit = 4096
+	if err := d.Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("over the limit: %v, want ErrTooLong", err)
+	}
+	if err := NewDecoder(strings.NewReader(long)).Decode(&Message{}); err != nil {
+		t.Fatalf("within MaxLineSize: %v", err)
+	}
+	head, tail := `{"type":"output"`, `}`
+	for _, eol := range []string{"\n", "\r\n"} {
+		full := head + strings.Repeat(" ", MaxLineSize-len(head)-len(tail)) + tail + eol
+		if err := NewDecoder(strings.NewReader(full)).Decode(&Message{}); err != nil {
+			t.Fatalf("line of MaxLineSize ending in %q: %v", eol, err)
+		}
+	}
+	// An unfinished line one byte past the limit is cut unless that byte is
+	// the "\r" of its ending.
+	d = NewDecoder(io.MultiReader(strings.NewReader(strings.Repeat("A", 4097)), stalledReader{}))
+	d.limit = 4096
+	if err := d.Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("unfinished line of limit+1: %v, want ErrTooLong", err)
+	}
+	over := head + strings.Repeat(" ", MaxLineSize+1-len(head)-len(tail)) + tail + "\n"
+	if err := NewDecoder(strings.NewReader(over)).Decode(&Message{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("line of MaxLineSize+1: %v, want ErrTooLong", err)
 	}
 }

@@ -30,6 +30,15 @@ const (
 // HandshakeTimeout bounds the authentication of a new connection.
 const HandshakeTimeout = 5 * time.Second
 
+// handshakeLineSize bounds a line before the peer is authenticated; the
+// handshake messages are a few hundred bytes.
+const handshakeLineSize = 4 * 1024
+
+// MaxPendingHandshakes bounds the connections the agent authenticates at
+// once. Further connections wait in the accept queue, so connections that
+// never authenticate cannot hold more than a few small buffers.
+const MaxPendingHandshakes = 16
+
 const challengeSize = 32
 
 // Roles bind a proof to the side that computed it, so one side's answer can
@@ -73,6 +82,7 @@ func Answer(conn net.Conn, enc *Encoder, token []byte, podUID string, timeout ti
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 	dec := NewDecoder(conn)
+	dec.limit = handshakeLineSize
 	var m Message
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("protocol: read challenge: %w", err)
@@ -94,6 +104,7 @@ func Answer(conn net.Conn, enc *Encoder, token []byte, podUID string, timeout ti
 	if m.Type != TypeAuth || !hmac.Equal(m.Data, Proof(token, roleAgent, mine, string(agentChallenge))) {
 		return nil, ErrUnauthenticated
 	}
+	dec.limit = MaxLineSize
 	return dec, nil
 }
 
@@ -110,6 +121,7 @@ func Challenge(conn net.Conn, token []byte, timeout time.Duration) (*Client, err
 	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	enc, dec := NewEncoder(conn), NewDecoder(conn)
+	dec.limit = handshakeLineSize
 	if err := enc.Encode(&Message{Type: TypeChallenge, Data: challenge}); err != nil {
 		return nil, err
 	}
@@ -124,6 +136,7 @@ func Challenge(conn net.Conn, token []byte, timeout time.Duration) (*Client, err
 		return nil, err
 	}
 	_ = conn.SetDeadline(time.Time{})
+	dec.limit = MaxLineSize
 	c := newClient(conn, enc, dec)
 	c.podUID = m.PodUID
 	return c, nil
@@ -139,6 +152,8 @@ type Listener struct {
 	log   *slog.Logger
 
 	ready chan *Client
+	// pending holds a slot per connection being authenticated.
+	pending chan struct{}
 
 	mu      sync.Mutex
 	current *Client
@@ -166,7 +181,7 @@ func Listen(addr string, token []byte, tlsConfig *tls.Config, log *slog.Logger) 
 		// under its deadline.
 		ln = tls.NewListener(ln, tlsConfig)
 	}
-	l := &Listener{ln: ln, token: token, log: log, ready: make(chan *Client, 4), closed: make(chan struct{})}
+	l := &Listener{ln: ln, token: token, log: log, ready: make(chan *Client, 4), pending: make(chan struct{}, MaxPendingHandshakes), closed: make(chan struct{})}
 	go l.acceptLoop()
 	return l, nil
 }
@@ -176,6 +191,11 @@ func (l *Listener) Addr() string { return l.ln.Addr().String() }
 
 func (l *Listener) acceptLoop() {
 	for {
+		select {
+		case l.pending <- struct{}{}:
+		case <-l.closed:
+			return
+		}
 		conn, err := l.ln.Accept()
 		if err != nil {
 			select {
@@ -184,6 +204,7 @@ func (l *Listener) acceptLoop() {
 			default:
 			}
 			// Transient (e.g. EMFILE): back off briefly and keep accepting.
+			<-l.pending
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -193,6 +214,7 @@ func (l *Listener) acceptLoop() {
 
 func (l *Listener) authenticate(conn net.Conn) {
 	c, err := Challenge(conn, l.token, HandshakeTimeout)
+	<-l.pending
 	if err != nil {
 		l.log.Warn("rejected shim connection", "remote", conn.RemoteAddr().String(), "error", err)
 		_ = conn.Close()

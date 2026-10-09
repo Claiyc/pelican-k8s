@@ -212,3 +212,71 @@ func TestHandshakeCarriesPodUID(t *testing.T) {
 		t.Fatalf("pod UID swapped after the proof: %v", err)
 	}
 }
+
+// Before the handshake a peer cannot make the agent buffer a long line: the
+// connection is dropped as soon as the line outgrows the handshake's.
+func TestListenerDropsLongPreAuthLine(t *testing.T) {
+	ln := listen(t, "secret")
+	conn, err := net.Dial("tcp", ln.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	start := time.Now()
+	go func() {
+		chunk := make([]byte, 1024)
+		for i := range chunk {
+			chunk[i] = 'x'
+		}
+		for range 64 {
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+	buf := make([]byte, 4096)
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			break
+		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("connection with an oversized pre-auth line held for %v", d)
+	}
+}
+
+// Connections that never authenticate occupy at most MaxPendingHandshakes
+// slots; the next connection is challenged once one of them goes.
+func TestListenerBoundsPendingHandshakes(t *testing.T) {
+	ln := listen(t, "secret")
+	silent := make([]net.Conn, MaxPendingHandshakes)
+	for i := range silent {
+		c, err := net.Dial("tcp", ln.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		// Wait for the challenge, so the connection holds its slot.
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := NewDecoder(c).Decode(&Message{}); err != nil {
+			t.Fatalf("connection %d not challenged: %v", i, err)
+		}
+		silent[i] = c
+	}
+	next, err := net.Dial("tcp", ln.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	_ = next.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := next.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a connection beyond MaxPendingHandshakes was challenged")
+	}
+	_ = silent[0].Close()
+	_ = next.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var m Message
+	if err := NewDecoder(next).Decode(&m); err != nil || m.Type != TypeChallenge {
+		t.Fatalf("no challenge once a slot was freed: %+v %v", m, err)
+	}
+}

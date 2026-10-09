@@ -154,13 +154,33 @@ const MaxLineSize = 4 * 1024 * 1024
 // Decoder reads JSON lines.
 type Decoder struct {
 	s *bufio.Scanner
+	// limit bounds a line; it starts at MaxLineSize and is lowered while a
+	// connection is not yet authenticated.
+	limit int
 }
 
 // NewDecoder wraps r.
 func NewDecoder(r io.Reader) *Decoder {
-	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 0, 64*1024), MaxLineSize)
-	return &Decoder{s: s}
+	d := &Decoder{s: bufio.NewScanner(r), limit: MaxLineSize}
+	// The buffer also holds the line's "\r\n", which the token leaves out.
+	d.s.Buffer(make([]byte, 0, 64*1024), MaxLineSize+2)
+	d.s.Split(d.split)
+	return d
+}
+
+// split is bufio.ScanLines that fails once a line grows past the limit. An
+// unfinished line may hold one byte more, a "\r" waiting for its "\n".
+func (d *Decoder) split(data []byte, atEOF bool) (int, []byte, error) {
+	advance, token, err := bufio.ScanLines(data, atEOF)
+	if err == nil && (len(token) > d.limit || token == nil && pastLimit(data, d.limit)) {
+		return 0, nil, bufio.ErrTooLong
+	}
+	return advance, token, err
+}
+
+// pastLimit reports an unfinished line that can no longer end within limit.
+func pastLimit(data []byte, limit int) bool {
+	return len(data) > limit+1 || len(data) == limit+1 && data[limit] != '\r'
 }
 
 // ErrClosed is returned by Decode when the stream ended.
