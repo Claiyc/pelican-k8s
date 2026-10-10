@@ -70,6 +70,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/remote/servers/{uuid}/container/status", h.own(h.containerStatus))
 	mux.HandleFunc("POST /api/remote/servers/{uuid}/install/prepared", h.own(h.installPrepared))
 	mux.HandleFunc("GET /api/remote/servers/{uuid}/install/state", h.own(h.installState))
+	mux.HandleFunc("POST /api/remote/servers/{uuid}/transfer/success", h.own(h.transferResult(true)))
+	mux.HandleFunc("POST /api/remote/servers/{uuid}/transfer/failure", h.own(h.transferResult(false)))
 	mux.HandleFunc("GET /api/remote/backups/{backup}", h.backup)
 	mux.HandleFunc("POST /api/remote/backups/{backup}", h.backup)
 	mux.HandleFunc("POST /api/remote/backups/{backup}/restore", h.backup)
@@ -226,6 +228,35 @@ func (h *Handler) installResult(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// transferResult forwards the result of an incoming transfer to the Panel,
+// then keeps or removes the server (serversync.FinishTransfer). A success the
+// Panel did not accept leaves the server as it is: the Panel still has the
+// transfer open. A failure removes it either way, the Panel keeps the server
+// on its old node.
+func (h *Handler) transferResult(successful bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uuid := caller(r)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+		defer cancel()
+		err := h.Panel.SetTransferStatus(ctx, uuid, successful)
+		if err != nil {
+			h.Log.Warn("forwarding transfer result to panel failed", "uuid", uuid, "successful", successful, "error", err)
+		}
+		if err == nil || !successful {
+			if err := h.Sync.FinishTransfer(ctx, uuid, successful); err != nil {
+				h.Log.Warn("finishing incoming transfer failed", "uuid", uuid, "successful", successful, "error", err)
+			}
+		}
+		if err != nil {
+			// Wings deletes the received files when a failure cannot be reported.
+			writeErr(w, http.StatusBadGateway, "BadGateway", err.Error())
+			return
+		}
+		h.Log.Info("incoming transfer finished", "uuid", uuid, "successful", successful)
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // containerStatus records the observed state and derives the intentional stop

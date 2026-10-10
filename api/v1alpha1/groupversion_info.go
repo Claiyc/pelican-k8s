@@ -34,6 +34,10 @@ const (
 	LabelOrphanedAt = "pelican-k8s.io/orphaned-at"
 	// AnnotationPanelName carries the human readable Panel server name.
 	AnnotationPanelName = "pelican-k8s.io/panel-name"
+	// AnnotationTransferIn marks a GameServer created for a server another
+	// node is pushing here (a Panel transfer) until the transfer's result
+	// arrives. Its value is the time the transfer started.
+	AnnotationTransferIn = "pelican-k8s.io/transfer-in"
 	// Finalizer protects a GameServer until the operator has cleaned up.
 	Finalizer = "pelican-k8s.io/finalizer"
 )

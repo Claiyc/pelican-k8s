@@ -279,10 +279,6 @@ func TestStaticEndpoints(t *testing.T) {
 func TestUnsupportedTransfers(t *testing.T) {
 	f := newFixture(t)
 	f.create()
-	// The Panel-signed transfer endpoint has no node token.
-	if code, _, _ := f.do("POST", "/api/transfers", "", ""); code != 501 {
-		t.Fatalf("POST /api/transfers = %d", code)
-	}
 	for _, c := range [][2]string{
 		{"DELETE", "/api/transfers/" + uuid},
 		{"POST", "/api/servers/" + uuid + "/transfer"},
@@ -750,6 +746,85 @@ func fileClaims(scope string, exp time.Time) map[string]any {
 	return map[string]any{
 		"iat": time.Now().Unix(), "exp": exp.Unix(), "jti": "j", "server_uuid": uuid,
 		"user_uuid": "u", "scope": scope, "unique_id": "one", "file_path": "/x.txt",
+	}
+}
+
+func transferClaims(subject, scope string, exp time.Time) map[string]any {
+	return map[string]any{"iat": time.Now().Unix(), "exp": exp.Unix(), "jti": "j", "sub": subject, "scope": scope}
+}
+
+func TestIncomingTransfer(t *testing.T) {
+	f := newFixture(t)
+	f.addPod()
+	tok := signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(time.Minute)))
+
+	code, body, _ := f.do("POST", "/api/transfers", "the archive", tok)
+	if code != 200 || body != "agent says /api/transfers" {
+		t.Fatalf("%d %s", code, body)
+	}
+	gs := f.gs()
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok || gs.Spec.Install.Generation != 0 {
+		t.Fatalf("the server must be created for the transfer, without an install: %v %+v", gs.Annotations, gs.Spec.Install)
+	}
+	last := f.calls()[len(f.calls())-1]
+	if last.method != "POST" || last.uri != "/api/transfers" || last.body != "the archive" {
+		t.Fatalf("agent call = %+v", last)
+	}
+	agentToken, ok := strings.CutPrefix(last.auth, "Bearer ")
+	if !ok || agentToken == tok {
+		t.Fatalf("the agent must get a re-signed token: %q", last.auth)
+	}
+	claims, _, err := jwtx.Verify([]byte(agentToken), []byte(agentTok))
+	if err != nil || claims.Subject != uuid || claims.Scope != "transfer" {
+		t.Fatalf("the agent token must verify with the agent key: %+v %v", claims, err)
+	}
+
+	// The source retries a push with the same server.
+	if code, _, _ := f.do("POST", "/api/transfers", "again", tok); code != 200 {
+		t.Fatalf("retry = %d", code)
+	}
+}
+
+func TestIncomingTransferRejections(t *testing.T) {
+	f := newFixture(t)
+	old := TransferAgentWait
+	TransferAgentWait = 50 * time.Millisecond
+	t.Cleanup(func() { TransferAgentWait = old })
+	exp := time.Now().Add(time.Minute)
+
+	tests := []struct {
+		name  string
+		token string
+		code  int
+	}{
+		{"no token", "", 401},
+		{"garbage", "garbage", 403},
+		{"other key", signToken(t, "other", transferClaims(uuid, "transfer", exp)), 403},
+		{"expired", signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(-time.Minute))), 403},
+		{"wrong scope", signToken(t, nodeToken, transferClaims(uuid, "websocket", exp)), 403},
+		{"no subject", signToken(t, nodeToken, transferClaims("", "transfer", exp)), 403},
+		{"unknown to the panel", signToken(t, nodeToken, transferClaims(otherUUID, "transfer", exp)), 404},
+		{"no agent", signToken(t, nodeToken, transferClaims(uuid, "transfer", exp)), 503},
+	}
+	for _, tt := range tests {
+		if code, body, _ := f.do("POST", "/api/transfers", "x", tt.token); code != tt.code {
+			t.Errorf("%s: %d %s, want %d", tt.name, code, body, tt.code)
+		}
+	}
+	if f.st.Exists(context.Background(), otherUUID) {
+		t.Fatal("a server the Panel does not know must not be created")
+	}
+
+	// A server that already runs here is never overwritten.
+	g := newFixture(t)
+	g.create()
+	g.addPod()
+	code, body, _ := g.do("POST", "/api/transfers", "x", signToken(t, nodeToken, transferClaims(uuid, "transfer", exp)))
+	if code != 409 {
+		t.Fatalf("existing server: %d %s", code, body)
+	}
+	if len(g.calls()) != 0 {
+		t.Fatalf("the agent must not be called: %+v", g.calls())
 	}
 }
 

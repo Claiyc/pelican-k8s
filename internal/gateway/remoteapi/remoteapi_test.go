@@ -226,9 +226,88 @@ func TestUnmatchedRoute(t *testing.T) {
 	if code, _ := f.do("GET", "/api/remote/nothing", "", bearer); code != 404 {
 		t.Fatalf("code = %d", code)
 	}
-	// Transfers are not supported.
-	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 404 {
-		t.Fatalf("transfer code = %d", code)
+}
+
+// withTransfer creates the GameServer the way an incoming transfer does,
+// plus the agent secret and a ready pod.
+func (f *fixture) withTransfer() {
+	f.t.Helper()
+	ctx := context.Background()
+	if err := f.h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
+		f.t.Fatal(err)
+	}
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(uuid), Namespace: ns,
+		Labels: map[string]string{v1alpha1.LabelServerUUID: uuid, v1alpha1.LabelComponent: "agent"}},
+		Data: map[string][]byte{"token_id": []byte(agentID), "token": []byte(agentTok)}}
+	if err := f.c.Create(ctx, sec); err != nil {
+		f.t.Fatal(err)
+	}
+	f.addPod("10.0.0.1")
+}
+
+func TestTransferSuccess(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withTransfer()
+	// Another server's transfer is not the agent's to report.
+	if code, _ := f.do("POST", "/api/remote/servers/"+otherID+"/transfer/success", "", bearer); code != 404 {
+		t.Fatalf("foreign server = %d", code)
+	}
+	// The Panel hands the server this node's allocation when it accepts.
+	f.fp.Get(uuid).Settings["allocations"].(map[string]any)["default"].(map[string]any)["port"] = 30570
+	if code, body := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 204 {
+		t.Fatalf("%d %s", code, body)
+	}
+	if got := f.fp.CallsMatching("POST /api/remote/servers/" + uuid + "/transfer/success"); len(got) != 1 {
+		t.Fatalf("panel calls = %v", f.fp.Calls)
+	}
+	gs := f.gs()
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; ok || !strings.Contains(string(gs.Spec.Panel.Settings.Raw), "30570") {
+		t.Fatalf("the server must stay with the Panel's configuration: %v %s", gs.Annotations, gs.Spec.Panel.Settings.Raw)
+	}
+}
+
+func TestTransferFailure(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withTransfer()
+	if code, body := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/failure", "", bearer); code != 204 {
+		t.Fatalf("%d %s", code, body)
+	}
+	if got := f.fp.CallsMatching("POST /api/remote/servers/" + uuid + "/transfer/failure"); len(got) != 1 {
+		t.Fatalf("panel calls = %v", f.fp.Calls)
+	}
+	if f.st.Exists(context.Background(), uuid) {
+		t.Fatal("a failed transfer must remove the server")
+	}
+
+	// A server that was not transferred here is never removed by a report.
+	g := newFixture(t, options{})
+	g.withServer(false)
+	if code, _ := g.do("POST", "/api/remote/servers/"+uuid+"/transfer/failure", "", bearer); code != 204 {
+		t.Fatalf("code = %d", code)
+	}
+	if !g.st.Exists(context.Background(), uuid) {
+		t.Fatal("an ordinary server was removed")
+	}
+}
+
+func TestTransferResultPanelDown(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withTransfer()
+	f.h.Panel = panel.New("http://127.0.0.1:1", nodeID, nodeTok, "test")
+	// An unreported success keeps the server as it is: the Panel still has
+	// the transfer open.
+	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 502 {
+		t.Fatalf("success = %d", code)
+	}
+	if _, ok := f.gs().Annotations[v1alpha1.AnnotationTransferIn]; !ok {
+		t.Fatal("an unreported success must not finish the transfer")
+	}
+	// A failure removes the server either way and tells Wings it was not reported.
+	if code, _ := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/failure", "", bearer); code != 502 {
+		t.Fatalf("failure = %d", code)
+	}
+	if f.st.Exists(context.Background(), uuid) {
+		t.Fatal("a failed transfer must remove the server")
 	}
 }
 

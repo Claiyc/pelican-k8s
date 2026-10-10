@@ -236,6 +236,15 @@ func TestPosts(t *testing.T) {
 	if got := fp.InstallResults[uuid]; len(got) != 1 || got[0]["successful"] != true {
 		t.Fatalf("install results = %v", got)
 	}
+	if err := c.SetTransferStatus(ctx, uuid, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetTransferStatus(ctx, uuid, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(fp.CallsMatching("POST /api/remote/servers/"+uuid+"/transfer/success")) != 1 || len(fp.CallsMatching("POST /api/remote/servers/"+uuid+"/transfer/failure")) != 1 {
+		t.Fatalf("calls = %v", fp.Calls)
+	}
 	// Posts to an unknown server surface the Panel's status.
 	if err := c.PushServerStateChange(ctx, "missing", "a", "b"); !IsNotFound(err) {
 		t.Fatalf("err = %v", err)

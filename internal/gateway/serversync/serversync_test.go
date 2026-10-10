@@ -3,6 +3,7 @@ package serversync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/names"
+	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
 	"github.com/Claiyc/pelican-k8s/test/fakepanel"
 )
 
@@ -328,6 +330,105 @@ func TestAdopt(t *testing.T) {
 	bad, _ := f.panel.GetServerConfiguration(ctx, uuid)
 	if err := f.sync.Adopt(ctx, uuid, bad); err == nil {
 		t.Fatal("mismatching uuid must fail")
+	}
+}
+
+func TestAdoptForTransfer(t *testing.T) {
+	f := newFixture(t)
+	f.addPanelServer(uuid, 1024)
+	ctx := context.Background()
+	if err := f.sync.AdoptForTransfer(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	gs := f.gs(uuid)
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok {
+		t.Fatalf("annotations = %v", gs.Annotations)
+	}
+	if gs.Spec.Install.Generation != 0 || gs.Spec.Power.Desired != v1alpha1.PowerStopped {
+		t.Fatalf("a transferred server must be neither installed nor started: %+v %+v", gs.Spec.Install, gs.Spec.Power)
+	}
+	// The Panel still serves the old node's allocation; nothing is exposed here yet.
+	st, err := settings.Parse(gs.Spec.Panel.Settings)
+	if err != nil || st.HasAllocation() || len(st.Ports()) != 0 {
+		t.Fatalf("a server in transfer must have no allocation: %+v %v", st, err)
+	}
+	if _, err := f.st.EnvSecret(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	// A retried push reuses the server of the first attempt.
+	if err := f.sync.AdoptForTransfer(ctx, uuid); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	// A server that runs here was not pushed and is refused.
+	f.addPanelServer(uuid2, 1024)
+	if err := f.sync.Create(ctx, uuid2, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.AdoptForTransfer(ctx, uuid2); !errors.Is(err, ErrTransferConflict) {
+		t.Fatalf("existing server: %v", err)
+	}
+
+	// So is an earlier attempt that is still being removed.
+	patch := client.MergeFrom(gs.DeepCopy())
+	gs.Finalizers = []string{v1alpha1.Finalizer}
+	if err := f.c.Patch(ctx, gs, patch); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.Delete(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.AdoptForTransfer(ctx, uuid); !errors.Is(err, ErrTransferConflict) || !strings.Contains(err.Error(), "being removed") {
+		t.Fatalf("server being deleted: %v", err)
+	}
+
+	// A server the Panel does not know is not created.
+	if err := f.sync.AdoptForTransfer(ctx, "3a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"); !panel.IsNotFound(err) {
+		t.Fatalf("unknown server: %v", err)
+	}
+}
+
+func TestFinishTransfer(t *testing.T) {
+	f := newFixture(t)
+	s := f.addPanelServer(uuid, 1024)
+	ctx := context.Background()
+	if err := f.sync.AdoptForTransfer(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	// The Panel moves the server to this node's allocation on success.
+	s.Settings["allocations"].(map[string]any)["default"].(map[string]any)["port"] = 30570
+	if err := f.sync.FinishTransfer(ctx, uuid, true); err != nil {
+		t.Fatal(err)
+	}
+	gs := f.gs(uuid)
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; ok {
+		t.Fatal("a finished transfer must drop its mark")
+	}
+	if !strings.Contains(string(gs.Spec.Panel.Settings.Raw), "30570") {
+		t.Fatalf("the Panel's new allocation was not synced: %s", gs.Spec.Panel.Settings.Raw)
+	}
+	// Once finished the server is an ordinary one: a late failure keeps it.
+	if err := f.sync.FinishTransfer(ctx, uuid, false); err != nil {
+		t.Fatal(err)
+	}
+	if !f.st.Exists(ctx, uuid) {
+		t.Fatal("a late failure deleted a finished server")
+	}
+
+	// A failed transfer removes the copy made here.
+	f.addPanelServer(uuid2, 1024)
+	if err := f.sync.AdoptForTransfer(ctx, uuid2); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.FinishTransfer(ctx, uuid2, false); err != nil {
+		t.Fatal(err)
+	}
+	if f.st.Exists(ctx, uuid2) {
+		t.Fatal("a failed transfer must remove its server")
+	}
+	// Nothing to finish is not an error.
+	if err := f.sync.FinishTransfer(ctx, uuid2, false); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -111,6 +112,90 @@ func (s *Syncer) Adopt(ctx context.Context, uuid string, cfg *panel.ServerConfig
 		return client.IgnoreAlreadyExists(err)
 	}
 	return s.writeEnvSecret(ctx, gs, envData)
+}
+
+// ErrTransferConflict means a transfer was pushed for a server that already
+// exists here and was not created for a transfer.
+var ErrTransferConflict = errors.New("the server already exists on this node")
+
+// AdoptForTransfer creates the GameServer of a server another node is pushing
+// here (a Panel transfer) without an install: the agent receives the files.
+// It is marked with AnnotationTransferIn so FinishTransfer can keep or remove
+// it. A server that already runs here is refused; one left by an earlier
+// attempt at the same transfer is reused.
+func (s *Syncer) AdoptForTransfer(ctx context.Context, uuid string) error {
+	gs, err := s.Store.Get(ctx, uuid)
+	switch {
+	case err == nil:
+		if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok {
+			return ErrTransferConflict
+		}
+		if gs.DeletionTimestamp != nil {
+			return fmt.Errorf("%w: an earlier attempt is still being removed", ErrTransferConflict)
+		}
+		return nil
+	case !apierrors.IsNotFound(err):
+		return err
+	}
+	cfg, err := s.Panel.GetServerConfiguration(ctx, uuid)
+	if err != nil {
+		return fmt.Errorf("fetch configuration: %w", err)
+	}
+	// Until the transfer succeeds the Panel serves the old node's allocation,
+	// which is not this node's to expose; FinishTransfer syncs the new one.
+	if cfg.Settings, err = withoutAllocations(cfg.Settings); err != nil {
+		return err
+	}
+	gs, envData, err := s.build(uuid, cfg)
+	if err != nil {
+		return err
+	}
+	gs.Annotations[v1alpha1.AnnotationTransferIn] = time.Now().UTC().Format(time.RFC3339)
+	if err := s.Store.Client.Create(ctx, gs); err != nil {
+		return err
+	}
+	return s.writeEnvSecret(ctx, gs, envData)
+}
+
+// withoutAllocations returns settings with the allocations the Panel sends
+// for a server that has none.
+func withoutAllocations(raw json.RawMessage) (json.RawMessage, error) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("settings: %w", err)
+	}
+	allocs, _ := m["allocations"].(map[string]any)
+	if allocs == nil {
+		allocs = map[string]any{}
+	}
+	allocs["default"] = map[string]any{"ip": "127.0.0.1", "port": 0}
+	allocs["mappings"] = map[string]any{}
+	m["allocations"] = allocs
+	return json.Marshal(m)
+}
+
+// FinishTransfer applies the result of an incoming transfer to a server
+// AdoptForTransfer created. On success the server stays and takes the Panel's
+// configuration, which now carries this node's allocations. On failure the
+// Panel keeps the server on its old node, so the copy made here is deleted.
+// Servers not created for a transfer are left alone.
+func (s *Syncer) FinishTransfer(ctx context.Context, uuid string, successful bool) error {
+	gs, err := s.Store.Get(ctx, uuid)
+	if err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok {
+		return nil
+	}
+	if !successful {
+		return s.Delete(ctx, uuid)
+	}
+	patch := client.MergeFrom(gs.DeepCopy())
+	delete(gs.Annotations, v1alpha1.AnnotationTransferIn)
+	if err := s.Store.Client.Patch(ctx, gs, patch); err != nil {
+		return err
+	}
+	return s.Sync(ctx, uuid)
 }
 
 func (s *Syncer) build(uuid string, cfg *panel.ServerConfiguration) (*v1alpha1.GameServer, map[string]string, error) {

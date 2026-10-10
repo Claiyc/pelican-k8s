@@ -17,6 +17,7 @@ import (
 	"github.com/pelican/wings/environment"
 	"github.com/pelican/wings/router/downloader"
 	"github.com/pelican/wings/server"
+	"github.com/pelican/wings/server/transfer"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
 	"github.com/Claiyc/pelican-k8s/internal/pki"
@@ -75,8 +76,37 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	// A Panel transfer pushes the server's files here, through the gateway.
+	mux.Handle("POST /api/transfers", incomingTransfer(wings, m))
 	mux.Handle("/", act.Track(wings))
 	return mux
+}
+
+// incomingTransfer lets Wings receive a Panel transfer into the server this
+// agent already runs. Without a registered incoming transfer Wings would build
+// a second server from the Panel's configuration, so one is registered first
+// and Wings extracts into it. Wings drops the registration once it handled the
+// transfer; a request it rejected earlier (a bad token) is undone here.
+func incomingTransfer(wings http.Handler, m *server.Manager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var registered []*transfer.Transfer
+		for _, s := range m.All() {
+			if transfer.Incoming().Get(s.ID()) != nil {
+				continue
+			}
+			t := transfer.New(r.Context(), s)
+			s.SetTransferring(true)
+			transfer.Incoming().Add(t)
+			registered = append(registered, t)
+		}
+		wings.ServeHTTP(w, r)
+		for _, t := range registered {
+			if transfer.Incoming().Get(t.Server.ID()) == t {
+				transfer.Incoming().Remove(t)
+				t.Server.SetTransferring(false)
+			}
+		}
+	})
 }
 
 // authorized guards a route with the agent's own Wings token, as the Panel's
@@ -150,6 +180,9 @@ func (a *Activity) Reasons(m *server.Manager) []string {
 		}
 		if s.IsInstalling() {
 			set["install"] = true
+		}
+		if s.IsTransferring() {
+			set["transfer"] = true
 		}
 	}
 	out := make([]string, 0, len(set))

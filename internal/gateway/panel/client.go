@@ -170,6 +170,15 @@ func (c *Client) SetInstallationStatus(ctx context.Context, uuid string, success
 	return c.post(ctx, "/servers/"+uuid+"/install", remote.InstallStatusRequest{Successful: successful, Reinstall: reinstall})
 }
 
+// SetTransferStatus forwards the result of an incoming transfer.
+func (c *Client) SetTransferStatus(ctx context.Context, uuid string, successful bool) error {
+	state := "failure"
+	if successful {
+		state = "success"
+	}
+	return c.post(ctx, "/servers/"+uuid+"/transfer/"+state, nil)
+}
+
 // ValidateSftpCredentials asks the Panel to authenticate an SFTP login.
 func (c *Client) ValidateSftpCredentials(ctx context.Context, req remote.SftpAuthRequest) (*remote.SftpAuthResponse, error) {
 	b, err := json.Marshal(req)

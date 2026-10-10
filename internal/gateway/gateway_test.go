@@ -236,8 +236,9 @@ func TestAuthAndUserAgent(t *testing.T) {
 	if code, body, _ := h.call("DELETE", "/api/system/docker/image/prune", "", nodeToken); code != 200 || !strings.Contains(body, "SpaceReclaimed") {
 		t.Fatalf("prune: %d %s", code, body)
 	}
-	if code, _, _ := h.call("POST", "/api/transfers", "", ""); code != 501 {
-		t.Fatal("transfers must be unsupported")
+	// Incoming transfers carry a Panel-signed JWT, not the node token.
+	if code, _, _ := h.call("POST", "/api/transfers", "", nodeToken); code != 403 {
+		t.Fatal("the node token must not authorize a transfer")
 	}
 }
 
@@ -499,9 +500,17 @@ func TestRemoteAPI(t *testing.T) {
 	if len(h.gs().Status.Backups.Pending) != 0 {
 		t.Fatal("completion must clear the pending record")
 	}
-	// Transfers and unknown paths are 404.
-	if code, _ := h.remoteCall("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 404 {
-		t.Fatal("transfer call must be 404")
+	// A transfer result is passed to the Panel; a server that was not
+	// transferred here stays.
+	if code, _ := h.remoteCall("POST", "/api/remote/servers/"+uuid+"/transfer/failure", "", bearer); code != 204 || !h.st.Exists(ctx, uuid) {
+		t.Fatal("a transfer failure must not remove an ordinary server")
+	}
+	if len(h.panel.CallsMatching("/transfer/failure")) != 1 {
+		t.Fatal("the transfer result was not forwarded")
+	}
+	// Unknown paths are 404.
+	if code, _ := h.remoteCall("POST", "/api/remote/nothing", "", bearer); code != 404 {
+		t.Fatal("unknown path must be 404")
 	}
 	// SFTP auth answered from relay sessions only.
 	if code, _ := h.remoteCall("POST", "/api/remote/sftp/auth", `{"username":"admin.1a2b3c4d","password":"nope"}`, bearer); code != 403 {
