@@ -34,7 +34,10 @@
 #
 # Prints the version. Exits 3 when there is nothing to prepare: nothing was
 # merged since the last release (a pre-release always has its release to
-# follow), or the chart's version is not tagged yet.
+# follow), or the chart's version is not tagged yet. Exits 4 when the label
+# asks for the next pre-release but nothing was merged since the last one:
+# the release PR stays as it is until something is, and the reason is
+# printed as "unchanged: ...".
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -48,7 +51,8 @@ if ! git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
 fi
 # Release PRs only carry this script's edits; they are not changes to release.
 # A pre-release is followed by its release even with nothing new.
-if [[ $current != *-* && -z "$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)" ]]; then
+merged_since_current=$(git log --format=%s "v$current..HEAD" | grep -v '^release: ' || true)
+if [[ $current != *-* && -z "$merged_since_current" ]]; then
   echo "nothing merged since v$current, nothing to release" >&2
   exit 3
 fi
@@ -84,7 +88,7 @@ elif [[ -z "$next" ]]; then
   # number is the last "(#N)" of a squash merge's subject, or "#N" of a merge
   # commit's "Merge pull request #N".
   r=$(repo)
-  for pr in $(git log --format=%s "v$current..HEAD" | grep -v '^release: ' |
+  for pr in $(printf '%s\n' "$merged_since_current" |
     sed -nE -e 's/^Merge pull request #([0-9]+).*/\1/p' -e 's/.*\(#([0-9]+)\)$/\1/p' | sort -un); do
     raise_by_label "#$pr" < <(gh api "repos/$r/issues/$pr" --jq '.labels[].name')
   done
@@ -117,6 +121,12 @@ if [[ -n "$reason" ]]; then
     next="$next-beta$n"
   fi
   echo "bump: $reason" >&2
+fi
+# The next pre-release after X.Y.Z-betaN has to have something in it: with
+# nothing merged since, its notes would be empty.
+if [[ $next == *-* && $current == *-* && -z "$merged_since_current" ]]; then
+  echo "unchanged: the release PR is labelled prerelease, but nothing was merged since v$current, so there is no new pre-release to make yet. Merging this PR as it stands releases the version in its title; the next merge makes it v$next." >&2
+  exit 4
 fi
 # A release, or a pre-release of one (X.Y.Z-betaN).
 [[ $next =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || { echo "not a release version: $next" >&2; exit 1; }

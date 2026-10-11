@@ -86,14 +86,33 @@ jobs:
           case $rc in
             0) echo "version=$v" >> "$GITHUB_OUTPUT" ;;
             3) echo "version=" >> "$GITHUB_OUTPUT" ;;  # nothing to release, or a release still running
+            4) echo "version=" >> "$GITHUB_OUTPUT"; echo "unchanged=true" >> "$GITHUB_OUTPUT" ;;  # no new pre-release yet
             *) exit "$rc" ;;
           esac
       - name: Close a release PR left over from before the last release
-        if: steps.prep.outputs.version == ''
+        if: steps.prep.outputs.version == '' && steps.prep.outputs.unchanged != 'true'
         run: |
           for n in $(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number'); do
             gh pr close "$n" --delete-branch --comment "Nothing was merged since the last release, so there is nothing to release."
           done
+      # Labelled prerelease with nothing merged since the last pre-release:
+      # the PR keeps its version, and a note at the top of its body says why
+      # (the next update rewrites the body and drops it).
+      - name: Say why the release PR did not change
+        if: steps.prep.outputs.unchanged == 'true'
+        run: |
+          n=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          [ -n "$n" ] || exit 0
+          {
+            echo "<!-- release-pr-note -->"
+            echo "> [!NOTE]"
+            echo "> $(sed -n 's/^unchanged: //p' "$RUNNER_TEMP/prep.log")"
+            echo "<!-- /release-pr-note -->"
+            echo
+            gh pr view "$n" --json body --jq .body |
+              sed '/^<!-- release-pr-note -->[[:space:]]*$/,/^<!-- \/release-pr-note -->[[:space:]]*$/d' | sed '/./,$!d'
+          } > "$RUNNER_TEMP/body.md"
+          gh pr edit "$n" --body-file "$RUNNER_TEMP/body.md"
       - name: Check the prepared tree
         if: steps.prep.outputs.version != ''
         run: go test ./test/docs/
