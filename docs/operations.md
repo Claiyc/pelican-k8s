@@ -32,6 +32,7 @@ Status fields worth knowing:
 | `spec.power.desired` | gateway (operator: once per server on the upgrade from 1.x) | `Running` or `Stopped`; a stop from the Panel, the console or suspension sets `Stopped`; a crash leaves `Running` while Wings restarts the process and becomes `Stopped` after a minute when it does not |
 | `status.power.observedGeneration` | operator | Last `spec.power.generation` acted on |
 | `status.install.*` | both | Requested/prepared generation, Job name, result |
+| `metadata.annotations["pelican-k8s.io/transfer-in"]` | gateway | Start time of an incoming transfer; removed when it succeeds. The server is deleted when it fails, or after 24 h if the Panel still does not list it on this node |
 | `status.conditions` | operator (`Orphaned`: gateway) | `VolumeReady`, `ExposureReady`, `AgentReady`, `GamePodReady`, `AgentRelocating`, `InstallPrepared`, `Installed`, `ResizePending`, `RecreatePending`, `NodeLost`, `Orphaned`, `DiskShrinkRefused` |
 
 `kubectl edit` is legitimate for `spec.power` (for example set `desired: Running`
@@ -50,11 +51,13 @@ owned by the gateway and overwritten on the next Panel sync.
 | Game pod deleted / node drained | the shim runs the stop command or signal itself and waits for the process before it exits; the new game pod starts the server again if `desired: Running` |
 | Game container OOM-killed | kubelet restarts the container; the operator relays the exit to the agent; Wings' crash handler restarts the process (unless the previous crash was < 60 s ago) |
 | Process crashes and Wings does not restart it (second crash within 60 s, clean exit, crash detection off) | the Panel shows the server as offline; after a minute `desired` becomes `Stopped` and the game pod is removed |
-| Agent container restarts, or the agent pod is replaced | the game keeps running; the shim reconnects and the agent re-attaches. Open consoles stay connected through the gateway |
+| Agent container restarts, or the agent pod is replaced | the game keeps running; the shim reconnects and the agent re-attaches. Open consoles stay connected for up to `gateway.agentWait` (default `120s`): the gateway connects them to the new agent and asks the browser for a fresh token; if no agent comes back in time the console gets `daemon error` and closes |
 | Agent moves to another node | only before a start, and never while it has in-flight work (transfers, backups, installs, active SFTP). Consoles stay connected; idle SFTP sessions end and the client has to connect again; local-adapter backups are lost |
+| A server on a shared LoadBalancer IP (`sharingAnnotation`, `Local`) runs on another node than the other servers on that IP | `RecreatePending` (`SharedIPNodeMismatch`, or `SharedIPPortsOutdated` for a game pod from before 2.0): the operator stops the server and recreates its game pod on their node, where it starts again; if it does not fit there it stays `Pending` (see [classes.md](classes.md#planning-addresses-under-local)) |
+| Server transferred here from another node (Panel *Transfer*) | the gateway creates the GameServer without an install, marked `pelican-k8s.io/transfer-in`, and its agent receives the archive. On success the Panel moves the server to this node and the gateway drops the mark and syncs it; on failure the GameServer and its volume are deleted |
 | Gateway restarts | live console and SFTP sessions drop and reconnect; no state is lost |
 | Operator restarts | reconciles are idempotent |
-| Panel server deleted | CR deleted; the operator's finalizer stops the process, removes the workload and applies the class deletion policy to the volume |
+| Panel server deleted | CR deleted; the operator's finalizer stops the process, removes the workload and applies the class deletion policy to the volume. A server still marked `pelican-k8s.io/transfer-in` (a failed or abandoned incoming transfer) always has its volume deleted, without a final snapshot |
 
 ## Backups
 
@@ -75,6 +78,11 @@ server's pods are recreated (or use `deletionPolicy: Retain` and swap the PVC).
    in-flight work (transfers, backups, installs, active SFTP). A stopped server's
    next start uses the new shim; a running server's game pod is replaced once its
    process is offline.
+
+To change `agentPriorityClass.preemptionPolicy` on an installed release, delete
+the PriorityClass `pelican-agent` right before the `helm upgrade`: Kubernetes
+does not let that field change. Running agent pods keep the old policy until
+they are replaced.
 
 ### From 1.x to 2.0
 
@@ -98,6 +106,15 @@ first:
   ServiceAccount `pelican-game` also need `pelican-agent`.
 - Local backups (the `wings` adapter) of a server are lost when its agent pod
   moves to another node; switch to S3 for durable backups.
+- Custom NetworkPolicies must let each game pod reach its agent pod on TCP
+  8082 (`gs-<uuid>-agent`); the chart's own policies are now one per pod,
+  `gs-<uuid>` and `gs-<uuid>-agent`.
+- Both charts validate values against `values.schema.json`, so a misspelt or
+  unknown key fails the `helm upgrade`; fix the values file first.
+- The gateway and the operator run two replicas each with a
+  PodDisruptionBudget. On a single-node cluster set
+  `gateway.podDisruptionBudget.enabled=false` and
+  `operator.podDisruptionBudget.enabled=false`, or a node drain waits forever.
 
 Upgrading the Panel is independent; re-run the compatibility checks in
 `test/upstream` when bumping the pinned Wings version.
@@ -109,12 +126,13 @@ Upgrading the Panel is independent; re-run the compatibility checks in
 | Node shows an exception in the Panel | `curl -H "Authorization: Bearer <token>" https://wings.../api/system`; the Panel caches system info for 6 minutes (`php artisan cache:clear`) |
 | `AgentReady=False` for long | `kubectl describe pod gs-<uuid>-agent-0`: image pulls, volume attach, agent logs (`failed to load server configuration from gateway, retrying` → NetworkPolicy/DNS) |
 | Server stays in `Starting`, `GamePodReady=False` | `Unschedulable`: no node has room for the game pod (or the agent has in-flight work and its node is full; the requirement lifts when the work ends). `WaitingForVolume`: the volume is still attached to the agent's old node. `ShimNotAttached`: `kubectl describe pod gs-<uuid>-0` for image pulls and the `probe-entrypoint` init container (unknown egg image layout); `kubectl logs gs-<uuid>-0` with no `connected to agent` line from the shim means it cannot reach `gs-<uuid>-agent:8082` (NetworkPolicy/DNS) or the handshake fails (TLS or the shim token; the agent logs `rejected shim connection`); the shim logs at Info and does not log the failed dials themselves |
-| `AgentRelocating=True` for a long time | `WaitingForWork`: the agent has in-flight work (the message lists it: a transfer, a backup, an install, SFTP activity in the last minute) and moves once it ends. `Relocating`: the new agent pod is `Pending` on the game pod's node; `kubectl describe pod gs-<uuid>-agent-0` shows why (no room even after preemption, a taint) |
+| `AgentRelocating=True` for a long time | `WaitingForWork`: the agent has in-flight work (the message lists it: a transfer, a backup, an install, SFTP activity in the last minute) and moves once it ends. `Relocating`: the new agent pod is `Pending` on the game pod's node; `kubectl describe pod gs-<uuid>-agent-0` shows why (no room even after preemption, or at all with `agentPriorityClass.preemptionPolicy: Never`; a taint) |
 | Install stuck in `InstallPrepared=False` | the agent must reach the gateway's remote API; `prepareTimeoutSeconds` fails it eventually |
 | Install Job never gets a pod | `kubectl describe job`: admission policy or SCC rejection message |
 | Console shows nothing | websocket goes browser → ingress → gateway → agent; check ingress websocket support and `gateway.allowedOrigins` |
 | `server pod unavailable` (503) | the agent pod is not running; the gateway waited for it first |
-| Players cannot connect | `kubectl get svc gs-<uuid>`; NodePort mode needs allocation ports in the NodePort range; check `ExposureReady` |
+| Players cannot connect | `kubectl get svc gs-<uuid>`; NodePort mode needs allocation ports in the NodePort range; check `ExposureReady`. With a shared LoadBalancer IP under `Local`, every server on that IP must run on the node that announces it; check `RecreatePending` |
+| Incoming transfer fails | `409`: a server with that UUID already exists on this node. `404`: the Panel does not know the server. `503`: its agent pod did not come up within 3 minutes. A proxy in front of the gateway with a short read timeout can cut off larger archives. A transfer whose result never arrived stays marked `pelican-k8s.io/transfer-in` until Resync finishes it (the Panel lists it here) or deletes it after 24 h |
 | `ExposureReady=False` with `Pending` | A `LoadBalancer` Service has no address. Under two minutes this is normal provisioning; after that the message names the likely cause — the cluster has no load balancer implementation. Install one, or switch the class to `NodePort` (ports 30000–32767) or `HostPort` |
 | `ExposureReady=False` with `AllocationIPNotOnNode` | `NodePort` (`externalTrafficPolicy: Local`) or `HostPort` on a cluster with more than one node, and no node has the allocation IP as its InternalIP or ExternalIP, so the pod cannot be placed where that address receives traffic. Use a node address for the allocation, give the receiving node that address as ExternalIP (k3s `--node-external-ip`), or switch the class to `LoadBalancer` |
 | `ExposureReady=False` with `PortOutOfRange` | The API server refused the allocation port as a NodePort. Move the allocation into the range, widen `--service-node-port-range`, or switch the class to `LoadBalancer` or `HostPort`. The server stays in `Error` and gets no pod until then |

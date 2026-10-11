@@ -101,7 +101,7 @@ func exprName(e ast.Expr) string {
 // else under /api/servers/:server/ is proxied by prefix.
 var gatewayRoutes = map[route]string{
 	{"GET", "/download/backup"}: "signedProxy", {"GET", "/download/file"}: "signedProxy", {"POST", "/upload/file"}: "signedProxy",
-	{"GET", "/api/servers/:server/ws"}: "websocket", {"POST", "/api/transfers"}: "unsupported",
+	{"GET", "/api/servers/:server/ws"}: "websocket", {"POST", "/api/transfers"}: "transfers",
 	{"POST", "/api/update"}: "update", {"GET", "/api/system"}: "systemInfo", {"GET", "/api/diagnostics"}: "diagnostics",
 	{"GET", "/api/system/docker/disk"}: "stub", {"DELETE", "/api/system/docker/image/prune"}: "stub",
 	{"GET", "/api/system/ips"}: "systemIPs", {"GET", "/api/system/utilization"}: "utilization",
@@ -207,7 +207,7 @@ var remoteAPI = map[string]string{
 	"Get /servers/%s/install":           "getInstall",
 	"Post /servers/%s/install":          "installResult",
 	"Post /servers/%s/archive":          "not served: dead Panel route (contract doc 3)",
-	"Post /servers/%s/transfer/%s":      "not served: transfers unsupported",
+	"Post /servers/%s/transfer/%s":      "transferResult",
 	"Post /sftp/auth":                   "sftpAuth",
 	"Get /backups/%s":                   "backup",
 	"Post /backups/%s":                  "backup",

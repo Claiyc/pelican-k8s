@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Servers can share one LoadBalancer address under `externalTrafficPolicy: Local` (class `exposure.loadBalancer.sharingAnnotation`, e.g. MetalLB's `metallb.io/allow-shared-ip`). Their Services select the game pods by a shared-address label and target server-specific named ports, and their game pods run on one node, where the load balancer announces the address. A running server found on another node is stopped and its game pod recreated there (`RecreatePending`, reasons `SharedIPNodeMismatch` and `SharedIPPortsOutdated`).
+
 ## [2.0.0-beta1] - 2026-10-11
 
 ### Added

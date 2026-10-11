@@ -58,9 +58,9 @@ start to the next; with node-local storage it stays where the volume is. See
 | `externalTrafficPolicy` | `Local` | `Local` keeps the players' IP addresses and ties the game pod to where traffic arrives; `Cluster` lets any node forward but hides the players' addresses. See [Local or Cluster](#local-or-cluster) |
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
-| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
+| `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`, also set by `provider: metallb`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
 | `loadBalancer.annotations` | | Added verbatim to exposure Services |
-| `externalIPs` | | Addresses reported to the Panel for allocations |
+| `externalIPs` | | Addresses `/api/system/ips` offers the Panel for allocations. Only the default class's list is used, and only when `gateway.externalIPs` is empty |
 
 Invariant: container port = Service port = external port = Panel allocation
 port, so `SERVER_PORT` always matches what players connect to.
@@ -89,7 +89,7 @@ What each mode means per exposure mode:
 
 | `mode` | `Local` | `Cluster` |
 |---|---|---|
-| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With `sharingAnnotation`, all servers on one IP run on one node, because a load balancer that announces a shared address from one node (MetalLB, kube-vip in ARP mode) only reaches the pods there; MetalLB also requires identical selectors to share a `Local` address; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
+| `LoadBalancer` | The load balancer sends traffic only to nodes running the game pod. With a sharing annotation (`sharingAnnotation`, or `provider: metallb`), all servers on one IP run on one node, because a load balancer that announces a shared address from one node (MetalLB, kube-vip in ARP mode) only reaches the pods there; MetalLB also requires identical selectors to share a `Local` address; a running server found elsewhere (after the class or its allocation changed) is stopped and moved there, since it receives no traffic where it is; a server that does not fit there stays `Pending` | Servers on one IP spread over any nodes; the announcing node forwards to them. Nothing waits for room on a particular node |
 | `NodePort` | The game pod runs on the node that owns the allocation IP (`AllocationIPNotOnNode` when none does) | Every node forwards the port, the game pod runs anywhere |
 | `HostPort` | No Service; the setting has no effect | No Service; the setting has no effect |
 
@@ -103,7 +103,8 @@ moved to the others' node right away.
 
 #### Planning addresses under `Local`
 
-With `LoadBalancer`, `Local` and `sharingAnnotation`, the allocation decides
+With `LoadBalancer`, `Local` and a sharing annotation (`sharingAnnotation`, or
+`provider: metallb`), the allocation decides
 placement: the servers on one IP run on one node, the node the load balancer
 announces that IP from. Kubernetes cannot spread them, and the operator never changes allocations to make room;
 they stay the Panel admin's choice, because players, DNS records and firewall
@@ -125,7 +126,7 @@ rules depend on them. So plan addresses like nodes:
   MetalLB, kube-vip and Cilium do): traffic for every port lands on the
   announcing node. A load balancer that forwards each Service port to that
   Service's own nodes (cloud load balancers such as Azure's) does not need it.
-  Leave `sharingAnnotation` empty there and put any annotation it needs into
+  Leave `sharingAnnotation` and `provider` empty there and put any annotation it needs into
   `loadBalancer.annotations`: the Services share the IP while each server keeps
   its own selector and runs anywhere.
 
@@ -162,8 +163,8 @@ Panel `swap`, `io_weight`, `threads` and OOM-killer disable are not expressible 
 | `preferAgentNode` | true | The game pod prefers the node its agent pod runs on. It lands there when it fits and elsewhere when it does not, and the agent then moves to it. `false` gives the agent's node no advantage, so the agent moves more often |
 
 The scheduler places the game pod at every start, and the agent pod follows it
-to its node. While the agent has in-flight work (file transfers, backups,
-restores, installs, active SFTP sessions) a start is bound to the agent's node
+to its node. While the agent has in-flight work (file transfers, remote downloads,
+backups, restores, installs, incoming server transfers, active SFTP sessions) a start is bound to the agent's node
 instead and waits there if the node is full. See ARCHITECTURE.md §7.7.
 
 ## security
@@ -214,8 +215,8 @@ with a clear message otherwise.
 | Field | Default | Meaning |
 |---|---|---|
 | `images.shim` / `images.agent` / `images.pullPolicy` | chart | pelican-k8s images of game and agent pods |
-| `serviceAccountName` | `pelican-game` | Game pod ServiceAccount (`-hostport` suffix added in HostPort mode) |
-| `agentServiceAccountName` | `pelican-agent` | Agent pod ServiceAccount |
+| `serviceAccountName` | `pelican-game` | Game pod ServiceAccount (`-hostport` suffix added in HostPort mode). The chart's admission policy and OpenShift SCC bindings cover only the chart's ServiceAccounts; another one must exist and escapes them |
+| `agentServiceAccountName` | `pelican-agent` | Agent pod ServiceAccount (the same applies) |
 | `agentConfigMap` | `pelican-agent-config` | Agent `config.yml` |
 | `suspendScalesToZero` | false | Run no agent pod for a suspended server (it never has a game pod) |
 | `terminationGracePeriodSeconds` | 660 | Must exceed Wings' 10-minute stop wait |
@@ -229,3 +230,11 @@ Create more classes (`kubectl apply`) and point servers at them by editing
 `spec.className` on the `GameServer` (the gateway only sets it on creation).
 Typical uses: a class per storage tier, a `HostPort` class for a few fixed
 ports, or a class with `snapshotSchedule` for production servers.
+
+The chart fills `images`, `agentConfigMap`, the ServiceAccounts and
+`agentPriorityClassName` into the default class only (these fields cannot be
+set under `defaultClass.spec`). A class you create yourself has no `images`
+and no `entrypointOverrides`: copy both from the default class
+(`kubectl get gameserverclass default -o yaml`), and update `images` after
+every chart upgrade. Set `agentPriorityClassName` when
+`agentPriorityClass.name` is not `pelican-agent`.

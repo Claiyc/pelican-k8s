@@ -8,7 +8,7 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
-# Namespace holding GameServers and game pods.
+# Namespace holding GameServers, agent pods, game pods and install Jobs.
 serversNamespace:
   name: pelican-servers
   create: true
@@ -50,8 +50,9 @@ gateway:
   advertisedVersion: "1.0.0"
   # Extra websocket origins besides panelURL.
   allowedOrigins: []
-  # Addresses returned to the Panel for allocations (defaults to the class
-  # exposure.externalIPs, then node addresses).
+  # Addresses returned to the Panel for allocations (defaults to the default
+  # class's exposure.externalIPs, then the MetalLB pool addresses with
+  # metallb.discoverPools, then node addresses).
   externalIPs: []
   # Offer MetalLB's pool addresses to the Panel's allocation form, so an
   # allocation cannot land on an address MetalLB will never announce. Needs the
@@ -140,7 +141,7 @@ tls:
       # How long each step waits for the new trust bundle to reach every pod.
       overlap: 1h
   # Issue every certificate through cert-manager instead of the internal CA.
-  # Needs cert-manager installed.
+  # Needs tls.enabled and cert-manager installed.
   certManager:
     enabled: false
     # The issuer, e.g. {name: corp-ca, kind: ClusterIssuer}. It must issue
@@ -178,8 +179,9 @@ agentPriorityClass:
   # PreemptLowerPriority lets an agent evict any lower-priority pod on its
   # game pod's node, including other workloads' pods; on a shared cluster set
   # Never, and the agent waits for room instead (docs/security.md). Kubernetes
-  # does not let this change on an existing PriorityClass: delete it right
-  # before the upgrade that changes the value.
+  # does not let this or value change on an existing PriorityClass: delete it
+  # right before the upgrade that changes either. With create: false, a
+  # PriorityClass with this name must exist.
   preemptionPolicy: PreemptLowerPriority
 
 # The default GameServerClass (cluster policy). See docs/classes.md.
@@ -203,7 +205,8 @@ defaultClass:
       mode: LoadBalancer
       # Local: player traffic is delivered only on nodes running the game pod,
       # and game servers see each player's real IP (bans, whitelists, per-IP
-      # limits work). Servers sharing a LoadBalancer IP run on one node.
+      # limits work). Servers sharing a LoadBalancer IP through a sharing
+      # annotation (sharingAnnotation, or provider metallb) run on one node.
       # Cluster: any node forwards, so pods run anywhere, but kube-proxy
       # rewrites the source address and game servers see a node IP instead.
       # Details: docs/classes.md, "Local or Cluster".
@@ -277,7 +280,7 @@ defaultClass:
     tolerations: []
     priorityClassName: ""
 
-# Admission policies enforcing the restricted shape of game pods and the
+# Admission policies enforcing the restricted shape of game and agent pods and the
 # volume allow-list of install Jobs (ValidatingAdmissionPolicy, Kubernetes >= 1.30).
 admissionPolicies:
   enabled: true
@@ -287,11 +290,11 @@ admissionPolicies:
 networkPolicies:
   enabled: true
 
-# OpenShift specifics: SCC role bindings for the pinned-UID game pods and the
+# OpenShift specifics: SCC role bindings for the pinned-UID game and agent pods and the
 # root install Jobs, and namespace UID range handling.
 openshift:
   enabled: false
-  # SCC for game pods (restricted-v2 works when useNamespaceUIDRange is true).
+  # SCC for game and agent pods (restricted-v2 works when useNamespaceUIDRange is true).
   gameSCC: restricted-v2
   installerSCC: anyuid
 
