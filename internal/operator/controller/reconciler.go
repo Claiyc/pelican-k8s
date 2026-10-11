@@ -520,13 +520,18 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureService(s.in.UUID())}
 	udp := render.ExposureServiceUDP(s.in)
 	udpKey := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureServiceUDP(s.in.UUID())}
-	// merged is set when a split exposure goes back to one Service: the UDP
-	// half is deleted first, because a load balancer does not give one
-	// address to two Services that both carry a port as UDP.
-	merged := false
+	// A split exposure that goes back to one Service loses its UDP half
+	// first, because a load balancer does not give one address to two
+	// Services that both carry a port as UDP. From then on nothing is
+	// published until this reconcile, or a later one, has seen the Service
+	// that is left: every return below that does not set the endpoints leaves
+	// them empty.
 	if udp == nil {
-		var err error
-		if merged, err = r.deleteService(s, udpKey); err != nil {
+		merged, err := r.deleteService(s, udpKey)
+		if merged {
+			s.gs.Status.Endpoints = nil
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -559,11 +564,6 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 				s.gs.Status.Endpoints = nil
 				return errExposureBlocked
 			}
-		}
-		if merged {
-			// The UDP half is gone and the Service that should carry UDP
-			// again was not written: nothing is published until it is.
-			s.gs.Status.Endpoints = nil
 		}
 		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 		return err

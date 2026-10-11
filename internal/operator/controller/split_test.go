@@ -252,6 +252,68 @@ func TestFailedSplitWithdrawsTheEndpoints(t *testing.T) {
 	}
 }
 
+// A split exposure that changes its type: the UDP Service goes, the TCP one
+// is deleted to be recreated with the new type, and until it exists again
+// nothing is published.
+func TestSplitExposureChangingTypeWithdrawsTheEndpoints(t *testing.T) {
+	h := newHarness(t, newGS(), metalLBClass())
+	h.reconcile(2)
+	h.assign(names.ExposureService(uuid), "192.0.2.10")
+	h.assign(names.ExposureServiceUDP(uuid), "192.0.2.10")
+	h.reconcile(1)
+	if eps := h.gs().Status.Endpoints; len(eps) != 1 {
+		t.Fatalf("endpoints %+v", eps)
+	}
+
+	cls := &v1alpha1.GameServerClass{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Name: "default"}, cls); err != nil {
+		t.Fatal(err)
+	}
+	cls.Spec.Exposure = v1alpha1.ExposureSpec{Mode: v1alpha1.ExposureNodePort}
+	if err := h.c.Update(context.Background(), cls); err != nil {
+		t.Fatal(err)
+	}
+	// The pass that deletes both Services ends without one to read.
+	_, _ = h.reconcileResult()
+	if h.get(&corev1.Service{}, names.ExposureServiceUDP(uuid)) {
+		t.Fatal("the UDP Service stays")
+	}
+	if eps := h.gs().Status.Endpoints; len(eps) != 0 {
+		t.Fatalf("endpoints stay while no Service exists: %+v", eps)
+	}
+
+	h.reconcile(2)
+	svc := &corev1.Service{}
+	if !h.get(svc, names.ExposureService(uuid)) || svc.Spec.Type != corev1.ServiceTypeNodePort || len(svc.Spec.Ports) != 2 {
+		t.Fatalf("NodePort Service with both protocols expected: %+v", svc.Spec)
+	}
+}
+
+// A server that loses its allocation, and whose TCP Service cannot be
+// deleted after the UDP one went, publishes nothing either.
+func TestSplitExposureLosingItsAllocationWithdrawsTheEndpoints(t *testing.T) {
+	h := newHarness(t, newGS(), metalLBClass())
+	h.reconcile(2)
+	h.assign(names.ExposureService(uuid), "192.0.2.10")
+	h.assign(names.ExposureServiceUDP(uuid), "192.0.2.10")
+	h.reconcile(1)
+
+	boom := errors.New("boom")
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Panel.Settings = settingsWithoutAllocation()
+	})
+	h.failServices("delete", names.ExposureService(uuid), boom)
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if h.get(&corev1.Service{}, names.ExposureServiceUDP(uuid)) {
+		t.Fatal("the UDP Service stays")
+	}
+	if eps := h.gs().Status.Endpoints; len(eps) != 0 {
+		t.Fatalf("endpoints stay: %+v", eps)
+	}
+}
+
 // The way back: the UDP Service is gone and the one that should carry both
 // protocols again cannot be written.
 func TestFailedMergeWithdrawsTheEndpoints(t *testing.T) {
