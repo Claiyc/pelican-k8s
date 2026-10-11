@@ -38,7 +38,7 @@ spec:
 | `scratch.type` | `Ephemeral` | `Ephemeral` (generic ephemeral volume) or `EmptyDir` for backup archives and agent temp files; part of the agent pod |
 | `scratch.storageClassName` | `storageClassName` | Class of the ephemeral scratch volume |
 | `scratch.sizeGiB` | 0 = PVC size | An archive can be as large as the server; a changed size applies when the agent pod is next replaced |
-| `deletionPolicy` | `Delete` | `Delete`, `Retain` (PVC orphaned and labelled `pelican-k8s.io/orphaned-at`) or `SnapshotThenDelete` |
+| `deletionPolicy` | `Delete` | `Delete`, `Retain` (PVC orphaned and labelled `pelican-k8s.io/orphaned-at`) or `SnapshotThenDelete`. The copy a failed incoming transfer leaves behind is always deleted |
 | `volumeSnapshotClassName` | cluster default | `VolumeSnapshotClass` for `SnapshotThenDelete` and `snapshotSchedule` |
 | `snapshotSchedule` | | Cron expression for crash-consistent `VolumeSnapshot`s per server |
 | `snapshotRetain` | 7 | Scheduled snapshots kept per server |

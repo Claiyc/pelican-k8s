@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Incoming server transfers: the Panel's Transfer action moves a server from a Docker Wings node to the cluster. The gateway creates the server without an install, its agent receives the files, and the result is reported to the Panel; a failed transfer removes the copy. Transfers away from the cluster still answer `501`.
+- Incoming server transfers: the Panel's Transfer action moves a server from a Docker Wings node to the cluster. The gateway creates the server without an install, its agent receives the files, and the result is reported to the Panel; a failed transfer removes the copy and its volume, whatever the class `deletionPolicy`. Transfers away from the cluster still answer `501`.
 
 ### Changed
 - BREAKING: every server runs in two pods. The agent pod `gs-<uuid>-agent-0` (StatefulSet `gs-<uuid>-agent`) serves files, SFTP, the console and backups for as long as the server exists. The game pod `gs-<uuid>-0` (StatefulSet `gs-<uuid>`) runs only while the server is on, so a stopped server requests no game resources. `kubectl logs gs-<uuid>-0 -c agent` becomes `kubectl logs gs-<uuid>-agent-0`; `kubectl logs gs-<uuid>-0` still shows the console.

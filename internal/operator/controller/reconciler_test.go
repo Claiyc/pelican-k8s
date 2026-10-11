@@ -1384,3 +1384,44 @@ func TestRestartRequestWaitsForAgentWork(t *testing.T) {
 		t.Fatal("the agent pod must be replaced once idle")
 	}
 }
+
+// A copy left by an incoming transfer goes with its volume whatever the class
+// policy: the server stays on its old node.
+func TestFinalizeTransferCopyDeletesTheVolume(t *testing.T) {
+	for _, policy := range []v1alpha1.DeletionPolicy{v1alpha1.DeletionRetain, v1alpha1.DeletionSnapshotThenDelete} {
+		t.Run(string(policy), func(t *testing.T) { finalizeTransferCopy(t, policy) })
+	}
+}
+
+func finalizeTransferCopy(t *testing.T, policy v1alpha1.DeletionPolicy) {
+	cls := newClass()
+	cls.Spec.Storage.DeletionPolicy = policy
+	cls.Spec.Storage.VolumeSnapshotClassName = "csi"
+	gs := newGS()
+	gs.Annotations = map[string]string{v1alpha1.AnnotationTransferIn: "2026-10-11T00:00:00Z"}
+	h := newHarness(t, gs, cls)
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	if err := h.c.Delete(context.Background(), h.gs()); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	if calls := h.agent.Calls(); len(calls) != 0 {
+		t.Fatalf("agent calls %v: a transfer copy needs none", calls)
+	}
+	if err := h.deletePods(); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(1)
+	var pvc corev1.PersistentVolumeClaim
+	if h.get(&pvc, names.PVC(uuid)) {
+		t.Fatalf("the transfer copy's volume must be deleted: %+v", pvc.Labels)
+	}
+	if snaps := listSnapshots(h, "final-snapshot"); len(snaps) != 0 {
+		t.Fatalf("no snapshot of a transfer copy: %+v", snaps)
+	}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: names.ForUUID(uuid)}, &v1alpha1.GameServer{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("gameserver should be gone: %v", err)
+	}
+}
