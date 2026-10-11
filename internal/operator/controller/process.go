@@ -23,6 +23,10 @@ import (
 // configuration sync and installs (ARCHITECTURE.md 7.6 "Process").
 func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 	if s.agent == nil {
+		// A kill does not wait for an agent that cannot be reached.
+		if err := r.killPendingGamePod(s); err != nil {
+			return err
+		}
 		return r.reconcileInstall(s)
 	}
 	gs := s.gs
@@ -43,6 +47,10 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 	// a move of the agent (section 7.7).
 	if freshAgent || gs.Status.Game.PodUID != gameUID {
 		if s.pod != nil && (s.shim == nil || !s.shim.Attached || s.shim.PodUID != gameUID || !s.shim.Running && !colocated(s)) {
+			// Nor for a shim that is not attached.
+			if err := r.killPendingGamePod(s); err != nil {
+				return err
+			}
 			s.requeue = requeueFast
 			return r.reconcileInstall(s)
 		}
@@ -70,6 +78,9 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 				if err := r.power(s, "start"); err != nil {
 					return err
 				}
+			}
+			if err := r.killPendingGamePod(s); err != nil {
+				return err
 			}
 			gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 			return r.reconcileInstall(s)
@@ -140,10 +151,8 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 					return err
 				}
 			}
-			if gs.Spec.Power.Kill {
-				if err := r.killGamePod(s); err != nil {
-					return err
-				}
+			if err := r.killPendingGamePod(s); err != nil {
+				return err
 			}
 			gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 		}
@@ -153,6 +162,23 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 
 // killGracePeriod is the grace period of a game pod that goes with a kill.
 const killGracePeriod int64 = 1
+
+// killPending reports a kill the operator has not acted on yet.
+func killPending(gs *v1alpha1.GameServer) bool {
+	p := gs.Spec.Power
+	return p.Desired == v1alpha1.PowerStopped && p.Kill && p.Generation != gs.Status.Power.ObservedGeneration
+}
+
+// killPendingGamePod deletes the game pod if a kill is pending. It runs on
+// every path that handles the power generation, also where the agent cannot
+// be asked: the pod must not be left to the StatefulSet, which deletes it
+// with the whole grace period.
+func (r *GameServerReconciler) killPendingGamePod(s *scope) error {
+	if !killPending(s.gs) {
+		return nil
+	}
+	return r.killGamePod(s)
+}
 
 // killGamePod deletes the game pod of a killed server with almost no grace
 // period. The kill ends the process, but Wings may start it again at once: a

@@ -369,7 +369,7 @@ func (r *GameServerReconciler) gameReplicas(s *scope) (int32, error) {
 		// recreating it.
 		return 0, nil
 	}
-	if s.gs.Spec.Power.Kill && s.gs.Spec.Power.Generation != s.gs.Status.Power.ObservedGeneration {
+	if killPending(s.gs) {
 		// A kill takes the pod with it (killGamePod); it is not recreated.
 		return 0, nil
 	}
