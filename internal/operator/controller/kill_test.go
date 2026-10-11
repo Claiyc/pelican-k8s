@@ -205,7 +205,11 @@ func TestKillScalesTheStatefulSetDownBeforeItDeletesThePod(t *testing.T) {
 	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			if _, ok := obj.(*corev1.Pod); ok && obj.GetName() == names.Pod(uuid) {
-				replicasAtDelete = h.replicas(names.StatefulSet(uuid))
+				sts := &appsv1.StatefulSet{}
+				if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: names.StatefulSet(uuid)}, sts); err != nil {
+					return err
+				}
+				replicasAtDelete = *sts.Spec.Replicas
 			}
 			return c.Delete(ctx, obj, opts...)
 		},
@@ -227,6 +231,59 @@ func TestKillScalesTheStatefulSetDownBeforeItDeletesThePod(t *testing.T) {
 	}
 	if got := h.replicas(names.StatefulSet(uuid)); got != 0 {
 		t.Fatalf("the StatefulSet can create the pod again: replicas %d", got)
+	}
+}
+
+// A kill of a server that is already stopped has nothing to delete and is
+// recorded as done.
+func TestKillOfAStoppedServerIsANoOp(t *testing.T) {
+	h := newHarness(t, newGS(), newClass())
+	h.reconcile(2)
+	h.createAgentPod(true)
+	h.reconcile(2)
+	h.agent.state = v1alpha1.ProcessOffline
+
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+	})
+	h.reconcile(1)
+	if calls := h.agent.Calls(); len(calls) != 0 {
+		t.Fatalf("calls %v", calls)
+	}
+	if got := h.gs().Status.Power.ObservedGeneration; got != 2 {
+		t.Fatalf("observed generation %d", got)
+	}
+	if got := h.replicas(names.StatefulSet(uuid)); got != 0 {
+		t.Fatalf("replicas %d", got)
+	}
+}
+
+// A StatefulSet that cannot be read fails the reconcile before the pod is
+// touched, like one that cannot be scaled.
+func TestKillThatCannotReadTheStatefulSetIsRetried(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	boom := errors.New("boom")
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+	})
+	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*appsv1.StatefulSet); ok && key.Name == names.StatefulSet(uuid) {
+				return boom
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if h.pod() == nil {
+		t.Fatal("the pod went although the StatefulSet could not be read")
 	}
 }
 
