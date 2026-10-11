@@ -156,7 +156,7 @@
           "examples": [["https://panel.example.org"]]
         },
         "externalIPs": {
-          "description": "Addresses offered to the Panel for allocations. Empty falls back to defaultClass.spec.exposure.externalIPs, then to the node addresses.",
+          "description": "Addresses offered to the Panel for allocations. Empty falls back to defaultClass.spec.exposure.externalIPs, then to the MetalLB pool addresses with metallb.discoverPools, then to the node addresses.",
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/definitions/ipAddress"},
@@ -569,7 +569,7 @@
           "default": 1000
         },
         "preemptionPolicy": {
-          "description": "PreemptLowerPriority lets an agent pod that follows its game pod to a full node evict lower-priority pods there, other workloads' included. Never keeps its place in the scheduling queue without evicting anything; the agent then stays Pending, and its server Starting, until the node has room.",
+          "description": "PreemptLowerPriority lets an agent pod that follows its game pod to a full node evict lower-priority pods there, other workloads' included. Never keeps its place in the scheduling queue without evicting anything; the agent then stays Pending, and its server does not start, until the node has room. Kubernetes does not let it change on an existing PriorityClass.",
           "type": "string",
           "enum": ["PreemptLowerPriority", "Never"],
           "default": "PreemptLowerPriority"
@@ -597,7 +597,7 @@
       }
     },
     "admissionPolicies": {
-      "description": "ValidatingAdmissionPolicies enforcing the restricted shape of game pods and the volume allow-list of install Jobs.",
+      "description": "ValidatingAdmissionPolicies enforcing the restricted shape of game and agent pods and the volume allow-list of install Jobs.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -631,7 +631,7 @@
           "default": false
         },
         "gameSCC": {
-          "description": "SCC granted to game pods. `restricted-v2` works because game pods then run with the namespace's UID.",
+          "description": "SCC granted to game and agent pods. `restricted-v2` works because they then run with the namespace's UID.",
           "allOf": [{"$ref": "#/definitions/dnsSubdomain"}],
           "default": "restricted-v2"
         },
@@ -981,13 +981,13 @@
           "additionalProperties": false,
           "properties": {
             "mode": {
-              "description": "LoadBalancer creates a LoadBalancer Service per allocation IP. NodePort and HostPort pin the game pod to the node owning the allocation IP; HostPort also needs serversNamespace.podSecurityLevel privileged.",
+              "description": "LoadBalancer creates a LoadBalancer Service per allocation IP. HostPort, and NodePort under externalTrafficPolicy Local, pin the game pod to the node owning the allocation IP; HostPort also needs serversNamespace.podSecurityLevel privileged.",
               "type": "string",
               "enum": ["LoadBalancer", "NodePort", "HostPort"],
               "default": "LoadBalancer"
             },
             "externalTrafficPolicy": {
-              "description": "externalTrafficPolicy of exposure Services. Local keeps the player's source IP but delivers only on nodes running the game pod (servers sharing a LoadBalancer IP run on one node); Cluster forwards from any node but game servers see a node IP. See docs/classes.md.",
+              "description": "externalTrafficPolicy of exposure Services. Local keeps the player's source IP but delivers only on nodes running the game pod (servers sharing a LoadBalancer IP through a sharing annotation run on one node); Cluster forwards from any node but game servers see a node IP. See docs/classes.md.",
               "type": "string",
               "enum": ["Local", "Cluster"],
               "default": "Local"
@@ -1023,7 +1023,7 @@
               }
             },
             "externalIPs": {
-              "description": "Addresses advertised to the Panel for allocations. Empty uses node addresses (NodePort, HostPort) or the observed LoadBalancer ingress IPs.",
+              "description": "Addresses advertised to the Panel for allocations. Only the default class's list is used, when gateway.externalIPs is empty; empty falls back to the MetalLB pool addresses with gateway.metallb.discoverPools, then to the node addresses.",
               "type": "array",
               "uniqueItems": true,
               "items": {"$ref": "#/definitions/ipAddress"},
@@ -1215,7 +1215,7 @@
           }
         },
         "failover": {
-          "description": "Handling of game pods on lost nodes.",
+          "description": "Handling of agent and game pods on lost nodes.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -1264,7 +1264,7 @@
           }
         },
         "terminationGracePeriodSeconds": {
-          "description": "Grace period of game pods in seconds. Keep it above 600: Wings waits up to 10 minutes for a server to stop before killing it. 0 uses 660.",
+          "description": "Grace period of agent and game pods in seconds. Keep it above 600: Wings waits up to 10 minutes for a server to stop before killing it. 0 uses 660.",
           "type": "integer",
           "minimum": 0,
           "default": 660

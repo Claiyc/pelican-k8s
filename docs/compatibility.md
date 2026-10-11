@@ -22,7 +22,7 @@
 | `/api/system` Docker fields, image prune, docker disk | ⚠️ | Stubbed |
 | Container hostname | ⚠️ | `gs-<uuid>-0`; `/etc/machine-id` is provided |
 | Container network | ⚠️ | The game pod gets a new IP at every start (`INTERNAL_IP`) |
-| Server transfers | ⚠️ | Incoming only: a transfer from another node (a Docker Wings) creates the server here and its agent receives the files (ARCHITECTURE.md §8.10). Transfers away from the cluster are refused (`501`). A reverse proxy in front of the gateway must not time out the upload (Traefik's default `readTimeout` is 60 s) |
+| Server transfers | ⚠️ | Incoming only: a transfer from another node (a Docker Wings) creates the server here and its agent receives the files (ARCHITECTURE.md §8.10). A failed transfer deletes the copy and its volume, whatever the class `deletionPolicy`. Transfers away from the cluster, and cancelling an incoming one, are refused (`501`). A reverse proxy in front of the gateway must not time out the upload (Traefik's default `readTimeout` is 60 s) |
 | Panel mounts | ❌ | |
 | `force_outgoing_ip`, swap, `io_weight`, `threads`, OOM-killer disable | ❌ | Not expressible per pod |
 | Docker-specific egg assumptions (Docker network aliases, a hard-coded `172.18.0.1`) | ❌ | Rare; check the egg |

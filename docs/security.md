@@ -21,7 +21,8 @@ the agent.
 
 Every server has an agent pod, which runs Wings and holds the server's tokens,
 and, while it is on, a game pod, which runs the egg's code. The two share only
-the server's volume; the game pod mounts just the server directory of it.
+the server's volume; the game pod mounts just the server directory of it and
+a read-only machine-id file.
 
 Agent pods and game pods satisfy the `restricted` Pod Security Standard (in
 `HostPort` mode the game pod additionally uses host ports, which needs a
@@ -47,11 +48,12 @@ pods with the namespace UID range, `anyuid` for the installer).
   `100.64.0.0/10`, which cover the usual pod, service, node and LAN ranges),
   and the in-cluster allowances of the class.
 - Each agent pod gets a policy allowing its HTTP and SFTP ports from the
-  gateway and operator only, its shim port from its own game pod only, DNS,
+  gateway and operator only (and its HTTP port from `network.nodeCIDRs`, for
+  the kubelet's probes), its shim port from its own game pod only, DNS,
   the gateway's remote API port, the same internet egress and the class's
   additional in-cluster allowances.
-- Install Jobs get DNS and the same internet egress, without the in-cluster
-  allowances.
+- Install Jobs get DNS and internet egress outside the default class's
+  blocked ranges, without the in-cluster allowances.
 - With `tls.enabled: true` every hop between the components is TLS 1.3 from an
   internal CA the operator keeps: gateway and operator to the agent's HTTP API
   (with client certificates, on top of the agent token), the agent to the
@@ -89,8 +91,9 @@ On a cluster that also runs other workloads:
   `preemptionPolicy: PreemptLowerPriority`). An agent that follows its game
   pod to a full node evicts lower-priority pods there when that makes room for
   it, which includes other workloads' pods at the default priority 0. Set
-  `agentPriorityClass.preemptionPolicy: Never` to stop that; the agent then
-  waits until the node has room, and its server stays `Starting` meanwhile.
+  `agentPriorityClass.preemptionPolicy: Never` to stop that; the agent pod
+  then stays `Pending` until the node has room, and the server does not start
+  meanwhile (GameServer phase `Pending`, `AgentReady=False`).
   Kubernetes does not let a PriorityClass's `preemptionPolicy` change, so on
   an installed release delete the PriorityClass `pelican-agent` right before
   the `helm upgrade` that changes it. A pod takes the policy when it is
