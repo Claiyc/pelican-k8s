@@ -212,6 +212,9 @@ func (l *Listener) acceptLoop() {
 	}
 }
 
+// replacedGrace bounds the wait for a replaced connection's read loop to end.
+const replacedGrace = time.Second
+
 func (l *Listener) authenticate(conn net.Conn) {
 	c, err := Challenge(conn, l.token, HandshakeTimeout)
 	<-l.pending
@@ -226,6 +229,14 @@ func (l *Listener) authenticate(conn net.Conn) {
 	l.mu.Unlock()
 	if prev != nil {
 		_ = prev.Close()
+		// Its read loop marks it done once it sees the closed connection.
+		// Wait for that before the newer one is offered: Accept skips a
+		// connection that is done, and would otherwise hand out the replaced
+		// one in between.
+		select {
+		case <-prev.Done():
+		case <-time.After(replacedGrace):
+		}
 	}
 	select {
 	case l.ready <- c:
