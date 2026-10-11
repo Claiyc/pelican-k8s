@@ -442,9 +442,9 @@ func (h *Handler) writeState(ctx context.Context, uuid string, pick func(state s
 	}
 }
 
-// restartWindow is how long after the operator issued a restart its stop
-// half is not taken for an intentional stop: Wings waits up to 10 minutes for
-// the process to stop before it starts it again.
+// restartWindow is how long after the operator issued a restart, or a stop
+// to recreate the game pod, that stop is not taken for an intentional stop:
+// Wings waits up to 10 minutes for the process to stop.
 const restartWindow = 10 * time.Minute
 
 // podTerminating reports a game or agent pod that is terminating: a drain or
@@ -463,14 +463,18 @@ func (h *Handler) podTerminating(ctx context.Context, uuid string) bool {
 // server's new desired state: the stop command typed into the console, a
 // suspension, or a stop the operator issued for desired Stopped. A stop the
 // operator issued for a pending power generation (a restart into a new game
-// pod under RecreatePending) or the stop half of a restart does not change
-// what the user wants. A console stop within restartWindow of a restart is
-// then settled by crashwatch.
+// pod under RecreatePending), the stop half of a restart, or a stop the
+// operator issued while desired is Running (to recreate a game pod that
+// receives no traffic through its shared address, after which the fresh-pod
+// rule starts it again) does not change what the user wants. Any start sets
+// lastAction to start, so a later console stop is intentional again. A
+// console stop within restartWindow of a restart is then settled by
+// crashwatch.
 func intentionalStop(gs *v1alpha1.GameServer) bool {
 	if gs.Spec.Power.Desired == v1alpha1.PowerStopped {
 		return false
 	}
-	if la := gs.Status.Power.LastAction; la != nil && la.Action == "restart" && time.Since(la.At.Time) < restartWindow {
+	if la := gs.Status.Power.LastAction; la != nil && (la.Action == "restart" || la.Action == "stop") && time.Since(la.At.Time) < restartWindow {
 		return false
 	}
 	return gs.Spec.Power.Generation == gs.Status.Power.ObservedGeneration

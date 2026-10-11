@@ -712,6 +712,30 @@ func TestContainerStatusIntentionalStop(t *testing.T) {
 		}
 	}
 
+	// A stop the operator issued while desired is Running recreates the game
+	// pod (a shared-address move) and is not the user's; one long ago is.
+	for _, c := range []struct {
+		ago  time.Duration
+		want v1alpha1.PowerState
+	}{{time.Minute, v1alpha1.PowerRunning}, {restartWindow + time.Minute, v1alpha1.PowerStopped}} {
+		f := newFixture(t, options{})
+		f.withServer(false)
+		_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+		_ = f.st.PatchStatus(ctx, uuid, map[string]any{"power": map[string]any{"lastAction": map[string]any{"action": "stop", "at": metav1.NewTime(time.Now().Add(-c.ago))}}})
+		if got := stop(f); got != c.want {
+			t.Fatalf("operator stop %s ago: desired %s, want %s", c.ago, got, c.want)
+		}
+	}
+
+	// After a start, a console stop is the user's again.
+	f = newFixture(t, options{})
+	f.withServer(false)
+	_ = f.st.PatchSpec(ctx, uuid, map[string]any{"power": map[string]any{"desired": "Running"}})
+	_ = f.st.PatchStatus(ctx, uuid, map[string]any{"power": map[string]any{"lastAction": map[string]any{"action": "start", "at": metav1.NewTime(time.Now())}}})
+	if stop(f) != v1alpha1.PowerStopped {
+		t.Fatal("a console stop after a start must record an intentional stop")
+	}
+
 	// While either pod is terminating (eviction, drain) the stop is not intentional.
 	for _, name := range []string{names.AgentPod(uuid), names.Pod(uuid)} {
 		f := newFixture(t, options{})
