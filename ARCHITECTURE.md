@@ -1198,20 +1198,21 @@ generation (not a reinstall).
    - egg variables and the derived `SERVER_*`/`STARTUP` via `envFrom` the `gs-<uuid>-env` Secret;
      `HOME=/mnt/server`
    - command: `shim install-run --log /pelican/install/output.log --exit /pelican/install/exit-code --chown <uid>:<uid> --chown-path /mnt/server -- <entrypoint> /mnt/install/install.sh`;
-     after the script the shim `chown -R`s `/mnt/server` to the game UID
+     after the script the shim `chown -R`s `/mnt/server` to the game UID. When the pod is terminated
+     (the Job is deleted, times out or is evicted) the shim ends the script, writes no `exit-code` and
+     exits non-zero, so the pod and the Job fail.
 5. **Completion.** When `exit-code` appears or the Job fails or times out, the installer writes
    `logs/install/<uuid>.log` in Wings' format, Wings publishes `install completed`, sets `offline` and
    posts `POST /servers/{uuid}/install {successful, reinstall}` through the gateway to the Panel. Success
-   is `true` unless `strictExitCode` is set and the exit code is non-zero, or the Job failed. The shim
-   writes an exit code also for a killed script (a deleted or timed-out Job), so an exit code is the
-   result only once the gateway confirms that the generation is current and its Job did not fail; while
-   the gateway does not answer, the installer keeps waiting.
+   is `true` unless `strictExitCode` is set and the exit code is non-zero, or the Job failed. An exit code
+   is the result only once the gateway confirms that the generation is current and its Job did not fail;
+   while the gateway does not answer, the installer keeps waiting.
 6. **Cleanup.** The operator records `status.install.observedGeneration` once the agent's result and the
    Job are final. Successful Jobs are deleted; failed ones stay for an hour for their logs.
 7. **Superseded.** A new generation while one is in flight (a second Reinstall) supersedes it: the
    operator deletes the older Job, and the gateway answers the older generation's poll with `Superseded`.
-   The installer ends that run within one poll, or as soon as a running Job's killed script leaves its
-   exit code (step 5), and drops its result: it would otherwise be recorded against the new generation
+   A finished generation's Job is not deleted, so a failed one keeps its logs (step 6). The installer
+   ends that run within one poll, and drops its result: it would otherwise be recorded against the new generation
    and reach the Panel as a failed or successful install. Wings releases the install lock and then
    reports; the new generation's `/install` or `/reinstall` is answered `409` until the dropped report
    has gone, so the new run's own report can never be the one dropped. A run that took the lock before

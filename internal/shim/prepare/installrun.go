@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,7 +21,10 @@ import (
 // InstallRun executes an egg install script the way Wings' installer container
 // does: in a PTY, with the Job's environment, streaming output to a log file
 // that the agent tails. When the script ends the exit code is written to
-// ExitFile and the server directory is chowned to the game UID.
+// ExitFile and the server directory is chowned to the game UID. A script that
+// was ended because the Job's pod is terminated (Job deleted, timed out or
+// evicted) leaves no exit code: Run returns ErrTerminated, the pod fails, and
+// the agent takes the result from the gateway instead.
 type InstallRun struct {
 	Argv      []string
 	LogFile   string
@@ -31,8 +35,12 @@ type InstallRun struct {
 	Stdout    io.Writer
 }
 
-// Run executes the script and returns its exit code. An error is returned only
-// when the script could not be run at all.
+// ErrTerminated is returned when the pod's termination ended the script.
+var ErrTerminated = errors.New("install-run: terminated before the script finished")
+
+// Run executes the script and returns its exit code. An error is returned when
+// the script could not be run at all, its exit code could not be recorded, or
+// the pod's termination ended it (ErrTerminated).
 func (r InstallRun) Run(ctx context.Context) (int, error) {
 	if len(r.Argv) == 0 {
 		return 0, errors.New("install-run: no command")
@@ -63,12 +71,14 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
+	var terminated atomic.Bool
 	go func() {
 		select {
 		case <-sigs:
 		case <-ctx.Done():
 			return
 		}
+		terminated.Store(true)
 		_ = unix.Kill(-cmd.Process.Pid, unix.SIGTERM)
 		time.Sleep(10 * time.Second)
 		_ = unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
@@ -101,6 +111,11 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 		if err := chownRecursive(r.ChownPath, r.UID, r.GID); err != nil {
 			fmt.Fprintf(r.Stdout, "install-run: warning: chown %s: %v\n", r.ChownPath, err)
 		}
+	}
+	// The killed script's code is no install result: the operator records
+	// the Job as failed, or the generation was superseded.
+	if terminated.Load() {
+		return code, ErrTerminated
 	}
 	if err := writeAtomic(r.ExitFile, []byte(fmt.Sprintf("%d\n", code))); err != nil {
 		return code, err
