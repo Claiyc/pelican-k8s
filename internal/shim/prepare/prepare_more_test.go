@@ -224,7 +224,8 @@ func TestInstallRunSuccessWritesZeroAndWarnsAboutAMissingChownPath(t *testing.T)
 	}
 }
 
-// The Job's termination signal reaches the script's process group.
+// The Job's termination signal reaches the script's process group, and the
+// killed script leaves no exit code.
 func TestInstallRunForwardsSIGTERM(t *testing.T) {
 	dir := t.TempDir()
 	r := InstallRun{Argv: []string{"/bin/sh", "-c", "echo ready; sleep 60"}, LogFile: filepath.Join(dir, "log"), ExitFile: filepath.Join(dir, "exit"), Stdout: os.Stderr}
@@ -253,8 +254,11 @@ func TestInstallRunForwardsSIGTERM(t *testing.T) {
 	}
 	select {
 	case res := <-done:
-		if res.err != nil || res.code != 128+int(syscall.SIGTERM) {
+		if !errors.Is(res.err, ErrTerminated) || res.code != 128+int(syscall.SIGTERM) {
 			t.Fatalf("code %d err %v", res.code, res.err)
+		}
+		if _, err := os.Stat(r.ExitFile); !os.IsNotExist(err) {
+			t.Fatalf("a terminated script must leave no exit code: %v", err)
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("the script was not terminated")

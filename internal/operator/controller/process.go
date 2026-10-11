@@ -249,10 +249,13 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 	s.requeue = requeueFast
 	r.setCondition(s, v1alpha1.ConditionInstalled, metav1.ConditionFalse, "InProgress", fmt.Sprintf("install generation %d in progress", gen))
 
-	// A new generation supersedes an older in-flight one.
+	// A new generation supersedes an older in-flight one. A finished one's Job
+	// is left alone: a failed Job stays for its logs until its TTL.
 	if st.RequestedGeneration != 0 && st.RequestedGeneration != gen {
-		if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
-			return err
+		if st.RequestedGeneration > st.ObservedGeneration {
+			if err := r.deleteInstallJob(s, st.RequestedGeneration); err != nil {
+				return err
+			}
 		}
 		st.RequestedGeneration, st.RequestedAt, st.JobName = 0, nil, ""
 	}

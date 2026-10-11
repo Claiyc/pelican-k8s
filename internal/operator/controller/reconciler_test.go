@@ -638,11 +638,42 @@ func TestInstallJobFailureAndTimeout(t *testing.T) {
 	if h.gs().Status.Install.RequestedGeneration != 2 {
 		t.Fatal("generation 2 not requested")
 	}
+	if !h.get(&job, names.InstallJob(uuid, 1)) {
+		t.Fatal("a new generation must keep the finished failed job for inspection")
+	}
 	h.now = h.now.Add(11 * time.Minute)
 	h.reconcile(2)
 	st = h.gs().Status.Install
 	if st.Result != v1alpha1.InstallFailed || st.ObservedGeneration != 2 {
 		t.Fatalf("expected timeout failure, got %+v", st)
+	}
+}
+
+// TestInstallSupersedeDeletesTheInFlightJob covers a second Reinstall while
+// the first one's Job runs: that Job is deleted and the new generation asked for.
+func TestInstallSupersedeDeletesTheInFlightJob(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Install = v1alpha1.InstallSpec{Generation: 1, ScriptConfigMap: names.InstallConfigMap(uuid, 1)}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: names.InstallConfigMap(uuid, 1), Namespace: ns}, Data: map[string]string{"install.sh": "x"}}
+	h := newHarness(t, gs, newClass(), cm)
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	h.patchStatus(func(gs *v1alpha1.GameServer) { gs.Status.Install.PreparedGeneration = 1 })
+	h.reconcile(1)
+	var job batchv1.Job
+	if !h.get(&job, names.InstallJob(uuid, 1)) {
+		t.Fatal("job expected")
+	}
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Install = v1alpha1.InstallSpec{Generation: 2, Reinstall: true, ScriptConfigMap: names.InstallConfigMap(uuid, 2)}
+	})
+	h.reconcile(1)
+	if h.get(&job, names.InstallJob(uuid, 1)) && job.DeletionTimestamp == nil {
+		t.Fatal("the superseded generation's job must be deleted")
+	}
+	if st := h.gs().Status.Install; st.RequestedGeneration != 2 {
+		t.Fatalf("generation 2 not requested: %+v", st)
 	}
 }
 
