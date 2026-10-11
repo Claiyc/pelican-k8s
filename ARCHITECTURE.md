@@ -1773,7 +1773,7 @@ and the agent is SSH and needs none of it.
   install, a transfer) is lost. With `tls.enabled: false` the operator deletes each `gs-<uuid>-tls`
   Secret it wrote once no pod mounts it; `<release>-ca` and `<release>-gateway-tls` stay, so turning
   TLS on again keeps the CA. The gateway's pod waits for its certificate Secret, which the operator
-  writes when it starts.
+  writes when it starts, or cert-manager with `tls.certManager.enabled`.
 
 ---
 
