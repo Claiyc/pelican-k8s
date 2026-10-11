@@ -228,6 +228,63 @@ func TestSplitExposureReportsAFailedUDPService(t *testing.T) {
 	}
 }
 
+// A published exposure that is split, and whose UDP Service cannot be
+// created, publishes nothing: its ports are not served as UDP meanwhile.
+func TestFailedSplitWithdrawsTheEndpoints(t *testing.T) {
+	cls := metalLBClass()
+	cls.Spec.Exposure.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+	h := newHarness(t, newGS(), cls)
+	h.reconcile(2)
+	h.assign(names.ExposureService(uuid), "192.0.2.10")
+	h.reconcile(1)
+	if eps := h.gs().Status.Endpoints; len(eps) != 1 {
+		t.Fatalf("endpoints %+v", eps)
+	}
+
+	boom := errors.New("boom")
+	h.setPolicy(corev1.ServiceExternalTrafficPolicyLocal)
+	h.failServices("create", names.ExposureServiceUDP(uuid), boom)
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if eps := h.gs().Status.Endpoints; len(eps) != 0 {
+		t.Fatalf("endpoints stay while UDP is not served: %+v", eps)
+	}
+}
+
+// The way back: the UDP Service is gone and the one that should carry both
+// protocols again cannot be written.
+func TestFailedMergeWithdrawsTheEndpoints(t *testing.T) {
+	h := newHarness(t, newGS(), metalLBClass())
+	h.reconcile(2)
+	h.assign(names.ExposureService(uuid), "192.0.2.10")
+	h.assign(names.ExposureServiceUDP(uuid), "192.0.2.10")
+	h.reconcile(1)
+	if eps := h.gs().Status.Endpoints; len(eps) != 1 {
+		t.Fatalf("endpoints %+v", eps)
+	}
+
+	boom := errors.New("boom")
+	h.setPolicy(corev1.ServiceExternalTrafficPolicyCluster)
+	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*corev1.Service); ok && obj.GetName() == names.ExposureService(uuid) {
+				return boom
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if h.get(&corev1.Service{}, names.ExposureServiceUDP(uuid)) {
+		t.Fatal("the UDP Service stays")
+	}
+	if eps := h.gs().Status.Endpoints; len(eps) != 0 {
+		t.Fatalf("endpoints stay while UDP is not served: %+v", eps)
+	}
+}
+
 // Nor is a UDP Service that cannot be read or deleted passed over.
 func TestSplitExposureServiceErrorsFailTheReconcile(t *testing.T) {
 	boom := errors.New("boom")

@@ -520,13 +520,18 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureService(s.in.UUID())}
 	udp := render.ExposureServiceUDP(s.in)
 	udpKey := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureServiceUDP(s.in.UUID())}
+	// merged is set when a split exposure goes back to one Service: the UDP
+	// half is deleted first, because a load balancer does not give one
+	// address to two Services that both carry a port as UDP.
+	merged := false
 	if udp == nil {
-		if err := r.deleteService(s, udpKey); err != nil {
+		var err error
+		if merged, err = r.deleteService(s, udpKey); err != nil {
 			return err
 		}
 	}
 	if exposure == nil {
-		if err := r.deleteService(s, key); err != nil {
+		if _, err := r.deleteService(s, key); err != nil {
 			return err
 		}
 		s.gs.Status.Endpoints = nil
@@ -555,11 +560,21 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 				return errExposureBlocked
 			}
 		}
+		if merged {
+			// The UDP half is gone and the Service that should carry UDP
+			// again was not written: nothing is published until it is.
+			s.gs.Status.Endpoints = nil
+		}
 		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 		return err
 	}
 	if udp != nil {
+		// After the TCP Service, which gives up the ports as UDP: the load
+		// balancer refuses the address to a second Service while the first
+		// still carries them.
 		if err := r.applyService(s, udp); err != nil {
+			// The ports are not served as UDP until this Service exists.
+			s.gs.Status.Endpoints = nil
 			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 			return err
 		}
@@ -645,13 +660,17 @@ func ingressAddresses(svc *corev1.Service) []string {
 	return out
 }
 
-// deleteService deletes a Service that may not exist.
-func (r *GameServerReconciler) deleteService(s *scope, key types.NamespacedName) error {
+// deleteService deletes a Service that may not exist and reports whether
+// there was one.
+func (r *GameServerReconciler) deleteService(s *scope, key types.NamespacedName) (bool, error) {
 	existing := &corev1.Service{}
 	if err := r.Get(s.ctx, key, existing); err != nil {
-		return client.IgnoreNotFound(err)
+		return false, client.IgnoreNotFound(err)
 	}
-	return client.IgnoreNotFound(r.Delete(s.ctx, existing))
+	if err := r.Delete(s.ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
 }
 
 // defaultNodePortLow and defaultNodePortHigh are Kubernetes' default
