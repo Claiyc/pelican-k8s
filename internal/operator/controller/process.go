@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -144,6 +145,67 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 		}
 	}
 	return r.reconcileInstall(s)
+}
+
+// killGracePeriod is the grace period of a game pod that goes with a kill.
+const killGracePeriod int64 = 1
+
+// killPending reports a kill the operator has not acted on yet.
+func killPending(gs *v1alpha1.GameServer) bool {
+	p := gs.Spec.Power
+	return p.Desired == v1alpha1.PowerStopped && p.Kill && p.Generation != gs.Status.Power.ObservedGeneration
+}
+
+// killPendingGamePod deletes the game pod if a kill is pending. The
+// reconcile runs it right after it read the pods: the pod must not be left to
+// the StatefulSet, which deletes it with the whole grace period.
+func (r *GameServerReconciler) killPendingGamePod(s *scope) error {
+	if !killPending(s.gs) {
+		return nil
+	}
+	return r.killGamePod(s)
+}
+
+// killGamePod deletes the game pod of a killed server with almost no grace
+// period. The kill ends the process, but Wings may start it again at once: a
+// restart that was waiting for the process to stop goes on to its start. That
+// start lands in a pod the operator is already removing, whose shim then
+// stops the process with the egg's stop command for the whole grace period,
+// which a server that is still starting may ignore. A kill means the process
+// goes now, so its pod does too.
+func (r *GameServerReconciler) killGamePod(s *scope) error {
+	// The StatefulSet goes to zero first: this runs before the reconcile
+	// writes it, and a step in between may fail, which would leave the
+	// StatefulSet free to create the pod again.
+	if err := r.scaleGameStatefulSetToZero(s); err != nil {
+		return err
+	}
+	if s.pod == nil {
+		return nil
+	}
+	grace := killGracePeriod
+	if err := r.Delete(s.ctx, s.pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	r.event(s, corev1.EventTypeNormal, "Killed", "deleted game pod %s with the kill", s.pod.Name)
+	s.pod = nil
+	s.requeue = requeueFast
+	return nil
+}
+
+// scaleGameStatefulSetToZero sets the replicas of the game StatefulSet to 0,
+// if it exists and asks for any.
+func (r *GameServerReconciler) scaleGameStatefulSetToZero(s *scope) error {
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.StatefulSet(s.in.UUID())}, sts); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+		return nil
+	}
+	patch := client.MergeFrom(sts.DeepCopy())
+	sts.Spec.Replicas = new(int32)
+	return client.IgnoreNotFound(r.Patch(s.ctx, sts, patch))
 }
 
 func (r *GameServerReconciler) power(s *scope, action string) error {
