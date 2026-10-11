@@ -553,7 +553,7 @@ func (s *Supervisor) start(env []string) error {
 		cleanDir(s.o.TmpDir)
 	}
 
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // running the egg's startup command is the product, as in Wings
 	cmd.Dir = s.o.Dir
 	// The shim token never reaches the game process.
 	cmd.Env = WithoutKey(MergeEnv(os.Environ(), env), protocol.TokenEnv)

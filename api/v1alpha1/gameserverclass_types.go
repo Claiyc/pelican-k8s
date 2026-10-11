@@ -10,6 +10,7 @@ import (
 // +kubebuilder:validation:Enum=Ephemeral;EmptyDir
 type ScratchVolumeType string
 
+// Scratch volume types.
 const (
 	ScratchEphemeral ScratchVolumeType = "Ephemeral"
 	ScratchEmptyDir  ScratchVolumeType = "EmptyDir"
@@ -19,6 +20,7 @@ const (
 // +kubebuilder:validation:Enum=Delete;Retain;SnapshotThenDelete
 type DeletionPolicy string
 
+// Deletion policies.
 const (
 	DeletionDelete             DeletionPolicy = "Delete"
 	DeletionRetain             DeletionPolicy = "Retain"
@@ -29,6 +31,7 @@ const (
 // +kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort
 type ExposureMode string
 
+// Exposure modes.
 const (
 	ExposureLoadBalancer ExposureMode = "LoadBalancer"
 	ExposureNodePort     ExposureMode = "NodePort"

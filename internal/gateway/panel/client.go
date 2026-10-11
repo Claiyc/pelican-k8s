@@ -33,8 +33,24 @@ func New(panelURL, tokenID, token, userAgent string) *Client {
 		tokenID:   tokenID,
 		token:     token,
 		userAgent: userAgent,
-		http:      &http.Client{Timeout: 30 * time.Second},
+		http:      &http.Client{Timeout: 30 * time.Second, CheckRedirect: sameOrigin},
 	}
+}
+
+// sameOrigin follows a redirect only to the host of the original request,
+// and each hop keeps its scheme or goes from http up to https (never back
+// down). A 307 or 308 replays the body, and the body of an SFTP credential
+// check carries the user's password.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("panel: stopped after 10 redirects")
+	}
+	first, previous := via[0].URL, via[len(via)-1].URL
+	upgrade := previous.Scheme == "http" && req.URL.Scheme == "https"
+	if req.URL.Host != first.Host || (req.URL.Scheme != previous.Scheme && !upgrade) {
+		return fmt.Errorf("panel: refusing redirect from %s://%s to %s://%s", previous.Scheme, previous.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // Error is a non-2xx Panel response.
@@ -181,7 +197,7 @@ func (c *Client) SetTransferStatus(ctx context.Context, uuid string, successful 
 
 // ValidateSftpCredentials asks the Panel to authenticate an SFTP login.
 func (c *Client) ValidateSftpCredentials(ctx context.Context, req remote.SftpAuthRequest) (*remote.SftpAuthResponse, error) {
-	b, err := json.Marshal(req)
+	b, err := json.Marshal(req) //nolint:gosec // the SFTP password goes to the Panel's /sftp/auth for verification (Wings contract) and is never logged
 	if err != nil {
 		return nil, err
 	}

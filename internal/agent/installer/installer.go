@@ -152,7 +152,7 @@ func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int6
 	defer poll.Stop()
 	checkFailed := false
 	for {
-		if b, err := os.ReadFile(exitFile); err == nil {
+		if b, err := os.ReadFile(exitFile); err == nil { //nolint:gosec // <agent root>/install/<generation>/exit-code, no Panel or user text in the path
 			code, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err != nil {
 				return 0, "", fmt.Errorf("installer: parse exit code %q: %w", b, err)
@@ -205,7 +205,7 @@ func (i *Installer) tail(ctx context.Context, path string, sink *system.SinkPool
 	for {
 		if f == nil {
 			var err error
-			f, err = os.Open(path)
+			f, err = os.Open(path) //nolint:gosec // output.log in <agent root>/install/<generation>, no Panel or user text in the path
 			if err != nil {
 				select {
 				case <-ctx.Done():
@@ -264,7 +264,7 @@ var logHeader = template.Must(template.New("header").Parse(`Pelican Server Insta
 
 // writeInstallLog writes <log_dir>/install/<uuid>.log in Wings' format so that
 // GET /api/servers/:s/install-logs keeps working.
-func (i *Installer) writeInstallLog(s *server.Server, script *remote.InstallationScript, outputLog string) error {
+func (i *Installer) writeInstallLog(s *server.Server, script *remote.InstallationScript, outputLog string) (err error) {
 	logDir := i.LogDir
 	if logDir == "" {
 		logDir = config.Get().System.LogDirectory
@@ -273,11 +273,17 @@ func (i *Installer) writeInstallLog(s *server.Server, script *remote.Installatio
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // <log_directory>/install/<server uuid>.log from the agent's own config
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// The log is written through on Close (NFS-backed volumes report write
+	// errors there), so a failed Close is a failed write.
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	kernel := "unknown"
 	if b, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
 		kernel = strings.TrimSpace(string(b))
@@ -285,7 +291,7 @@ func (i *Installer) writeInstallLog(s *server.Server, script *remote.Installatio
 	if err := logHeader.Execute(f, map[string]any{"UUID": s.ID(), "Image": script.ContainerImage, "Entrypoint": script.Entrypoint, "Kernel": kernel, "Env": s.GetEnvironmentVariables()}); err != nil {
 		return err
 	}
-	in, err := os.Open(outputLog)
+	in, err := os.Open(outputLog) //nolint:gosec // <agent root>/install/<generation>/output.log, no Panel or user text in the path
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil

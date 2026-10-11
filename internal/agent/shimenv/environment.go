@@ -664,7 +664,7 @@ func (e *Environment) Readlog(lines int) ([]string, error) {
 
 // TailLines returns the last n lines of a file.
 func TailLines(path string, n int) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // the agent-written console log <log_directory>/console/<server uuid>.log
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return []string{}, nil

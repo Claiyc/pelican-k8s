@@ -287,3 +287,76 @@ func TestValidateSftpCredentialsBadResponse(t *testing.T) {
 		t.Fatal("an unparsable response must be an error")
 	}
 }
+
+func TestRedirectsStayOnTheOrigin(t *testing.T) {
+	var elsewhere sync.Mutex
+	hit := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Lock()
+		hit = true
+		elsewhere.Unlock()
+	}))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/remote/moved":
+			http.Redirect(w, r, "/api/remote/here", http.StatusTemporaryRedirect)
+		case "/api/remote/here":
+			_, _ = w.Write([]byte("ok"))
+		case "/api/remote/away":
+			http.Redirect(w, r, other.URL+"/steal", http.StatusTemporaryRedirect)
+		case "/api/remote/loop":
+			http.Redirect(w, r, "/api/remote/loop", http.StatusTemporaryRedirect)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.URL, tokenID, token, "ua")
+	ctx := context.Background()
+
+	if status, body, err := c.Do(ctx, http.MethodPost, "/moved", []byte(`{"password":"p"}`), nil); err != nil || status != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("same-origin redirect: %d %q %v", status, body, err)
+	}
+	if _, _, err := c.Do(ctx, http.MethodPost, "/away", []byte(`{"password":"p"}`), nil); err == nil || !strings.Contains(err.Error(), "refusing redirect") {
+		t.Fatalf("cross-origin redirect: err = %v", err)
+	}
+	elsewhere.Lock()
+	defer elsewhere.Unlock()
+	if hit {
+		t.Fatal("the request reached the other host")
+	}
+	if _, _, err := c.Do(ctx, http.MethodGet, "/loop", nil, nil); err == nil || !strings.Contains(err.Error(), "10 redirects") {
+		t.Fatalf("redirect loop: err = %v", err)
+	}
+}
+
+func TestSameOriginSchemes(t *testing.T) {
+	req := func(raw string) *http.Request {
+		r, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		via []string
+		to  string
+		ok  bool
+	}{
+		{[]string{"http://panel.example.com/a"}, "https://panel.example.com/a", true},
+		{[]string{"https://panel.example.com/a"}, "http://panel.example.com/a", false},
+		{[]string{"https://panel.example.com/a"}, "https://other.example.com/a", false},
+		{[]string{"https://panel.example.com/a"}, "https://panel.example.com:8443/a", false},
+		{[]string{"http://panel.example.com/a", "https://panel.example.com/b"}, "https://panel.example.com/c", true},
+		{[]string{"http://panel.example.com/a", "https://panel.example.com/b"}, "http://panel.example.com/c", false},
+	} {
+		var via []*http.Request
+		for _, v := range tc.via {
+			via = append(via, req(v))
+		}
+		if err := sameOrigin(req(tc.to), via); (err == nil) != tc.ok {
+			t.Errorf("%v -> %s: err = %v, want ok %v", tc.via, tc.to, err, tc.ok)
+		}
+	}
+}

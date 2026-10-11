@@ -42,7 +42,7 @@ func (l Layout) Run() error {
 	}
 	if l.Shared != "" {
 		for _, d := range []string{"run", "etc"} {
-			if err := os.MkdirAll(filepath.Join(l.Shared, d), 0o770); err != nil {
+			if err := os.MkdirAll(filepath.Join(l.Shared, d), 0o770); err != nil { //nolint:gosec // shared emptyDir of containers running as the game UID with fsGroup; group access needed
 				return err
 			}
 		}
@@ -63,7 +63,7 @@ func (l Layout) Run() error {
 	}
 	mid := filepath.Join(l.Data, "machine-id")
 	if _, err := os.Stat(mid); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(mid, []byte(strings.ReplaceAll(l.UUID, "-", "")+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(mid, []byte(strings.ReplaceAll(l.UUID, "-", "")+"\n"), 0o644); err != nil { //nolint:gosec // the server UUID, mounted read-only as /etc/machine-id, world-readable by convention
 			return fmt.Errorf("prepare: write machine-id: %w", err)
 		}
 	}
@@ -75,12 +75,12 @@ func copySelf(dst string) error {
 	if err != nil {
 		return err
 	}
-	in, err := os.Open(self)
+	in, err := os.Open(self) //nolint:gosec // our own executable, from os.Executable
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { //nolint:gosec // the probe, game and install containers execute the shim from here
 		return err
 	}
 	// The copy and the rename stay inside dst's directory.
@@ -154,10 +154,10 @@ func (p Probe) Run() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p.ArgvOut), 0o770); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p.ArgvOut), 0o770); err != nil { //nolint:gosec // shared emptyDir with fsGroup; group access needed, mounted read-only in the game container
 		return err
 	}
-	if err := os.WriteFile(p.ArgvOut, b, 0o644); err != nil {
+	if err := os.WriteFile(p.ArgvOut, b, 0o644); err != nil { //nolint:gosec // the game's own startup command, which it can read in /proc anyway; read-only mount
 		return err
 	}
 	if p.PasswdOut != "" {
@@ -221,7 +221,7 @@ func filterEntries(lines []string, name string, id int) []string {
 }
 
 func readLines(path string) []string {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // fixed etc/passwd and etc/group under the game image root
 	if err != nil {
 		return nil
 	}
@@ -237,8 +237,8 @@ func readLines(path string) []string {
 }
 
 func writeLines(path string, lines []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o770); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o770); err != nil { //nolint:gosec // shared emptyDir with fsGroup; group access needed
 		return err
 	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644) //nolint:gosec // replaces /etc/passwd and /etc/group, which nss needs world-readable; no hashes
 }

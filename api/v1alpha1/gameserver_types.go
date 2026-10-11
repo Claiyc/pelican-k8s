@@ -10,6 +10,7 @@ import (
 // +kubebuilder:validation:Enum=Running;Stopped
 type PowerState string
 
+// Power states.
 const (
 	PowerRunning PowerState = "Running"
 	PowerStopped PowerState = "Stopped"
@@ -18,6 +19,7 @@ const (
 // Phase is a coarse summary of a GameServer for kubectl output.
 type Phase string
 
+// Phases.
 const (
 	PhasePending    Phase = "Pending"
 	PhaseInstalling Phase = "Installing"

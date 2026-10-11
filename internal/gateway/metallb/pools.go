@@ -72,9 +72,9 @@ func (p *Pools) Addresses(ctx context.Context) []string {
 	}
 	p.warned = false
 
-	max := p.Max
-	if max <= 0 {
-		max = DefaultMax
+	limit := p.Max
+	if limit <= 0 {
+		limit = DefaultMax
 	}
 	var out []string
 	seen := map[string]bool{}
@@ -86,19 +86,19 @@ func (p *Pools) Addresses(ctx context.Context) []string {
 		entries, _, _ := unstructured.NestedStringSlice(item.Object, "spec", "addresses")
 		avoidBuggy, _, _ := unstructured.NestedBool(item.Object, "spec", "avoidBuggyIPs")
 		for _, e := range entries {
-			for _, a := range expand(e, avoidBuggy, max-len(out)) {
+			for _, a := range expand(e, avoidBuggy, limit-len(out)) {
 				if !seen[a] {
 					seen[a] = true
 					out = append(out, a)
 				}
 			}
-			if len(out) >= max {
+			if len(out) >= limit {
 				break
 			}
 		}
-		if len(out) >= max {
+		if len(out) >= limit {
 			if p.Log != nil {
-				p.Log.Warn("metallb pool discovery truncated", "max", max)
+				p.Log.Warn("metallb pool discovery truncated", "max", limit)
 			}
 			break
 		}

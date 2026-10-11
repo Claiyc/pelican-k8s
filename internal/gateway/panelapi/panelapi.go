@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -235,8 +236,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) systemInfo(w http.ResponseWriter, r *http.Request) {
 	kernel := "unknown"
-	if b, err := readFile("/proc/sys/kernel/osrelease"); err == nil {
-		kernel = strings.TrimSpace(b)
+	if b, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
+		kernel = strings.TrimSpace(string(b))
 	}
 	info := system.Information{
 		Version: h.Cfg.AdvertisedVersion,

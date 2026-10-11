@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -113,7 +114,7 @@ func FromEnv() (*Config, error) {
 	// Tokens may be supplied through files (mounted Secrets).
 	if c.NodeToken == "" {
 		if p := os.Getenv("PELICAN_GW_TOKEN_FILE"); p != "" {
-			b, err := os.ReadFile(p)
+			b, err := os.ReadFile(p) //nolint:gosec // PELICAN_GW_TOKEN_FILE, a mounted Secret set by whoever deploys the gateway
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +123,7 @@ func FromEnv() (*Config, error) {
 	}
 	if c.NodeTokenID == "" {
 		if p := os.Getenv("PELICAN_GW_TOKEN_ID_FILE"); p != "" {
-			b, err := os.ReadFile(p)
+			b, err := os.ReadFile(p) //nolint:gosec // PELICAN_GW_TOKEN_ID_FILE, a mounted Secret set by whoever deploys the gateway
 			if err != nil {
 				return nil, err
 			}
@@ -141,6 +142,13 @@ func (c *Config) Validate() error {
 		return errors.New("PELICAN_GW_TOKEN_ID and PELICAN_GW_TOKEN are required")
 	}
 	return nil
+}
+
+// PlainHTTPPanel reports whether PanelURL is plain http, which sends SFTP
+// passwords and the node token to the Panel unencrypted.
+func (c *Config) PlainHTTPPanel() bool {
+	u, err := url.Parse(c.PanelURL)
+	return err == nil && u.Scheme == "http"
 }
 
 // UserAgent is the Wings User-Agent the Panel expects on every response.
