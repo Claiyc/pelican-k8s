@@ -809,7 +809,7 @@ spec:
     unlimitedCpuPercent: 0        # used when cpu_limit = 0; 0 = no limit
     minCpu: 100m
     tmpSizeMiB: 100
-    agent: {cpu: 50m, memory: 128Mi, memoryLimit: 512Mi}   # the agent pod
+    agent: {cpu: 10m, memory: 64Mi, memoryLimit: 512Mi}    # the agent pod
   scheduling:
     preferAgentNode: true         # the game pod prefers the node its agent runs on (§7.7)
   security:
@@ -914,7 +914,7 @@ spec:
         - {name: WINGS_TOKEN_ID, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token_id}}}
         - {name: WINGS_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token}}}
         - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}
-      resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}   # class resources.agent
+      resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 512Mi}}   # class resources.agent
       securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
       volumeMounts:
         - {name: data, mountPath: /var/lib/pelican}
@@ -1475,6 +1475,13 @@ gets no affinity. With more than one node and no match, the game pod is not pinn
 (`AllocationIPNotOnNode`) names the address; the server keeps running. With
 `externalTrafficPolicy: Cluster` every node forwards the NodePort and the game pod is not pinned.
 
+**Annotations.** The operator sets the class's annotations on an exposure Service and records their
+keys in `pelican-k8s.io/managed-annotations`. On later reconciles it changes and removes only those
+keys: a load balancer keeps annotations of its own on the Service (MetalLB's
+`metallb.io/ip-allocated-from-pool`), and removing one makes it write it again, which triggers the
+next reconcile. A Service whose labels, annotations, selector, ports and traffic policy already match
+is not written.
+
 **Shared addresses (LoadBalancer with `Local` and `sharingAnnotation`).** Several servers can use one
 allocation IP on different ports, each with its own Service. The grouping below follows MetalLB, the
 load balancer `provider` supports; a sharing annotation set through `loadBalancer.annotations` instead
@@ -1584,13 +1591,13 @@ clusters and node-local storage, where the agent does not move.
 | PIDs (`container_pid_limit` 512) | `PidsLimit` | kubelet `podPidsLimit` (node setting) |
 | OOM detection | `OOMKilled` from container inspect | shim `memory.events` and the relayed container status (§6.4) |
 | tmpfs `/tmp` (100 MiB) | tmpfs | `emptyDir{medium: Memory, sizeLimit: tmpSizeMiB}` (counts toward memory) |
-| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; requests equal the server's |
+| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; the memory request is the server's, at most class `install.resources.memory` when that is set, and the CPU request is class `resources.minCpu` |
 
 The game container's requests and limits exist only while the game pod does: **a stopped server
 requests nothing but its agent.**
 
 **Agent resources:** the agent pod has its own requests and limits from class `resources.agent`
-(requests 50m CPU and 128Mi memory, memory limit 512Mi, no CPU limit). The memory limit leaves room for
+(requests 10m CPU and 64Mi memory, memory limit 512Mi, no CPU limit). The memory limit leaves room for
 Wings' compress, decompress and archive code on large servers.
 
 ---
@@ -1654,7 +1661,7 @@ enforce the workload shapes:
 | Component | Permissions |
 |---|---|
 | Gateway | Servers namespace: `gameservers` get/list/watch/create/update/patch/delete; `gameservers/status` get/update/patch; `gameservers/finalizers` update; `configmaps`, `secrets` get/list/watch/create/update/patch; `pods` get/list/watch. Release namespace: `secrets` get on the SFTP host key Secret only (`gateway.sftp.hostKeySecret`), and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes` get/list/watch; MetalLB `ipaddresspools` get/list with `gateway.metallb.discoverPools` |
-| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/patch/delete (patch keeps the shared-IP label of §9.3 current) and `pods/resize` update/patch; `secrets` get/list/watch/create/update; `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also `secrets` delete (cert-manager leaves a deleted server's certificate Secret behind) and cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
+| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/patch/delete (patch keeps the shared-IP label of §9.3 current) and `pods/resize` update/patch; `secrets` get/list/watch/create/update/delete (delete: the agents' certificate Secrets once `tls.enabled` is off again, and the one cert-manager leaves behind for a deleted server); `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
 | Agent, game, installer ServiceAccounts | none; no ServiceAccount token is mounted in agent pods, game pods or install Jobs |
 
 ### 12.4 NetworkPolicies
@@ -1829,7 +1836,7 @@ node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
 - Agents make short remote-API calls (state changes, activity every 60 s); the gateway polls state on
   demand with a 2 s cache. Long-lived agent connections exist only for relayed sessions.
 - The gateway's informer caches GameServers, pods, Secrets, ConfigMaps, GameServerClasses and nodes.
-- A stopped server costs its agent pod (128 MiB memory and 50m CPU requested by default); a running
+- A stopped server costs its agent pod (64 MiB memory and 10m CPU requested by default); a running
   one adds the game pod.
 - A start takes as long as scheduling, image pull and init containers of the game pod, plus a volume
   detach and attach when the agent moves.
@@ -1849,7 +1856,7 @@ node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
   `GameContainerTerminated`; pod: `Recreate`, `Replace`, `Resized`, `AgentRelocating`, `SharedIPMove`, `SharedIPPorts`, `ForceDelete`,
   `LegacyPodDeleted`, `LegacyPowerAdopted`, `ClassNotFound`, `DigestLookupFailed`, `EntrypointLookupFailed`; storage:
   `VolumeExpanded`, `ResizeFailed`, `SnapshotCreated`, `SnapshotFailed`, `InvalidSnapshotSchedule`,
-  `VolumeRetained`; TLS: `CertificateRenewed`; deletion: `AgentDeleteFailed`, `AgentKillFailed`);
+  `VolumeRetained`; TLS: `CertificateRenewed`, `CertificateSecretKept`; deletion: `AgentDeleteFailed`, `AgentKillFailed`);
   conditions (§7.2).
 - **Gateway:** `GET /api/diagnostics` (§5.2) and `GET /healthz`.
 - The gateway and the agent expose no metrics endpoint.

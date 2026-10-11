@@ -98,8 +98,11 @@ gateway:
     host: ""
     annotations:
       haproxy.router.openshift.io/timeout: 16m
+  # Requests are what a replica uses with a handful of servers (a few
+  # millicores, 20-45Mi); the limit leaves room for many open consoles and
+  # transfers.
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
+    requests: {cpu: 10m, memory: 64Mi}
     limits: {memory: 512Mi}
   logLevel: info
 
@@ -119,7 +122,7 @@ operator:
   concurrency: 4
   leaderElect: true
   resources:
-    requests: {cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi}
+    requests: {cpu: 10m, memory: 64Mi, ephemeral-storage: 64Mi}
     limits: {memory: 512Mi}
   logLevel: info
 
@@ -247,7 +250,9 @@ defaultClass:
       unlimitedCpuPercent: 0
       minCpu: 100m
       tmpSizeMiB: 100
-      agent: {cpu: 50m, memory: 128Mi, memoryLimit: 512Mi}
+      # Requested for every server, running or stopped. An idle agent uses
+      # about 5m and 20Mi; a backup or a compress goes up to the limit.
+      agent: {cpu: 10m, memory: 64Mi, memoryLimit: 512Mi}
     security:
       runAsUser: 1000
       generatePasswdEntry: true

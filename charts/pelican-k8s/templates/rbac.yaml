@@ -114,11 +114,12 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims, services, events]
     verbs: [get, list, watch, create, update, patch, delete]
-  # update: agent certificates are renewed in place. delete: cert-manager
+  # update: agent certificates are renewed in place. delete: the agents'
+  # certificate Secrets go once tls.enabled is off again, and cert-manager
   # leaves a deleted server's certificate Secret behind.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch, create, update{{ if and .Values.tls.enabled .Values.tls.certManager.enabled }}, delete{{ end }}]
+    verbs: [get, list, watch, create, update, delete]
   {{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
   - apiGroups: [cert-manager.io]
     resources: [certificates]

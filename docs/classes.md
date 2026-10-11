@@ -59,7 +59,7 @@ start to the next; with node-local storage it stays where the volume is. See
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`, also set by `provider: metallb`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
-| `loadBalancer.annotations` | | Added verbatim to exposure Services |
+| `loadBalancer.annotations` | | Added verbatim to exposure Services. The operator records the keys it set in `pelican-k8s.io/managed-annotations` and removes only those; annotations a load balancer writes itself stay |
 | `externalIPs` | | Addresses `/api/system/ips` offers the Panel for allocations. Only the default class's list is used, and only when `gateway.externalIPs` is empty |
 
 Invariant: container port = Service port = external port = Panel allocation
@@ -149,9 +149,9 @@ rules depend on them. So plan addresses like nodes:
 | `memoryRequestPercentOfLimit` | 100 | Share of `memory_limit` reserved. 100 guarantees it; lower overcommits (memory is incompressible, so an over-full node evicts rather than throttles) |
 | `unlimitedMemoryMiB` | 4096 | Used when `memory_limit` is 0; the agent also reports it as `SERVER_MEMORY` |
 | `unlimitedCpuPercent` | 0 | Used when `cpu_limit` is 0; 0 means no CPU limit |
-| `minCpu` | 100m | Minimum CPU request |
+| `minCpu` | 100m | Minimum CPU request of the game container, and the CPU request of install Jobs |
 | `tmpSizeMiB` | 100 | `/tmp` tmpfs in the game container |
-| `agent.cpu` / `agent.memory` / `agent.memoryLimit` | 50m / 128Mi / 512Mi | Agent pod resources (compress/decompress of large servers needs headroom). This is all a stopped server requests |
+| `agent.cpu` / `agent.memory` / `agent.memoryLimit` | 10m / 64Mi / 512Mi | Agent pod resources (compress/decompress of large servers needs headroom). This is all a stopped server requests |
 
 The game values apply to the game pod, which exists only while the server is on.
 Panel `swap`, `io_weight`, `threads` and OOM-killer disable are not expressible per pod and are ignored.
@@ -180,7 +180,7 @@ instead and waits there if the node is full. See ARCHITECTURE.md §7.7.
 | Field | Default | Meaning |
 |---|---|---|
 | `serviceAccountName` | `pelican-installer` | Job ServiceAccount |
-| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job limits are `max(server, these)` like Wings' `installer_limits`; the CPU value applies only when the server has a CPU limit. Requests equal the server's |
+| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job limits are `max(server, these)` like Wings' `installer_limits`; the CPU value applies only when the server has a CPU limit. Requests do not grow with the server: memory is the server's request, at most `resources.memory` when that is set; CPU is `resources.minCpu`. An install then does not wait for a share of the server's limits to be free |
 | `strictExitCode` | false | Wings ignores script exit codes; `true` fails the install on non-zero |
 | `activeDeadlineSeconds` | 3600 | Job time limit |
 | `prepareTimeoutSeconds` | 600 | How long to wait for the agent to hold the install lock before failing |

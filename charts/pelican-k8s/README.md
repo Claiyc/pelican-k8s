@@ -64,7 +64,7 @@ file against it when the file starts with
 | `gateway.sftp.hostKeySecret` | `pelican-gateway-sftp-hostkey` | Secret holding the generated SSH host key |
 | `gateway.ingress.*` | disabled | Ingress for the Wings API (needs long timeouts, see docs) |
 | `gateway.route.*` | disabled | OpenShift Route alternative (edge TLS, 16m timeout annotation) |
-| `gateway.resources` / `operator.resources` | small | Pod resources |
+| `gateway.resources` / `operator.resources` | 10m CPU and 64Mi requested, 512Mi memory limit | Pod resources |
 | `gateway.logLevel` / `operator.logLevel` | `info` | `debug` for verbose logs |
 | `operator.concurrency` | `4` | Max concurrent reconciles |
 | `operator.leaderElect` | `true` | Leader election; keep it on while `operator.replicas` is above 1, or every replica reconciles |

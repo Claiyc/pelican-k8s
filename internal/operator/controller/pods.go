@@ -612,6 +612,11 @@ func (r *GameServerReconciler) announceStart(s *scope) {
 	case "WaitingForVolume":
 		msg = "Waiting for the volume to attach and mount..."
 	case "Starting":
+		// A pod kubelet has not taken up yet also reads Starting; its volume
+		// comes first and has its own line.
+		if s.pod == nil || !sandboxReady(s.pod) {
+			return
+		}
 		msg = "Pulling the image and starting the game container..."
 	default:
 		return
@@ -901,6 +906,18 @@ func waitingForVolume(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// sandboxReady reports a pod whose sandbox kubelet created: its volumes are
+// mounted and its containers are next. A kubelet that does not report the
+// condition (its feature gate is off) shows it by the first container status.
+func sandboxReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReadyToStartContainers {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses) > 0
 }
 
 // gameContainerRunning reports whether the game container runs now.
