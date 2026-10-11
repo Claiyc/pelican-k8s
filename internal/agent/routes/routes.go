@@ -37,10 +37,15 @@ const (
 // report that it is terminating too (a drain that takes both pods).
 var PrestopShimWait = 10 * time.Second
 
+// InstallLockedHeader marks a 409 that installGuard answered: an install of the
+// server holds the install lock (a 409 from Wings means a power action).
+const InstallLockedHeader = "X-Pelican-K8s-Install-Locked"
+
 // Handler returns the combined handler: /internal/v1/* here, everything else
 // to wings (the gin engine). File transfers through wings are counted as
-// in-flight work for /internal/v1/activity.
-func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.Handler {
+// in-flight work for /internal/v1/activity. reportPending reports a superseded
+// install run whose report Wings has not sent yet; nil means none.
+func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry, reportPending func(uuid string) bool) http.Handler {
 	act := &Activity{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+HealthzPath, func(w http.ResponseWriter, r *http.Request) {
@@ -96,8 +101,8 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 	// A Panel transfer pushes the server's files here, through the gateway.
 	mux.Handle("POST /api/transfers", incomingTransfer(wings, m))
 	// Called by the operator for a new install generation.
-	mux.Handle("POST /api/servers/{server}/install", installGuard(wings, m))
-	mux.Handle("POST /api/servers/{server}/reinstall", installGuard(wings, m))
+	mux.Handle("POST /api/servers/{server}/install", installGuard(wings, m, reportPending))
+	mux.Handle("POST /api/servers/{server}/reinstall", installGuard(wings, m, reportPending))
 	mux.Handle("/", act.Track(wings))
 	return mux
 }
@@ -124,13 +129,17 @@ func incomingTransfer(wings http.Handler, m *server.Manager) http.Handler {
 }
 
 // installGuard answers 409 while an earlier install still holds Wings' install
-// lock, which the operator retries: Wings would fail the new install at once
-// and report it as failed. A superseded run lets go of the lock within one
-// poll of the gateway (section 8.2). Requests without the agent's token go to
-// Wings, which rejects them, so the lock state is told only to the operator.
-func installGuard(wings http.Handler, m *server.Manager) http.Handler {
+// lock, or a superseded run has not reported yet, which the operator retries:
+// Wings would fail the new install at once and report it as failed. A
+// superseded run lets go of the lock within one poll of the gateway and
+// reports right after (section 8.2). The 409 carries InstallLockedHeader.
+// Requests without the agent's token go to Wings, which rejects them, so the
+// lock state is told only to the operator.
+func installGuard(wings http.Handler, m *server.Manager, reportPending func(uuid string) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s, ok := m.Get(r.PathValue("server")); ok && s.IsInstalling() && hasAgentToken(r) {
+		s, ok := m.Get(r.PathValue("server"))
+		if ok && hasAgentToken(r) && (s.IsInstalling() || (reportPending != nil && reportPending(s.ID()))) {
+			w.Header().Set(InstallLockedHeader, "true")
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "An earlier installation of this server still holds the install lock."})
 			return
 		}

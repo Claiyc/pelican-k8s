@@ -28,6 +28,9 @@ type fakeGateway struct {
 	strict   bool
 	// endWith is the result runInstall's failAfter sets; empty means "Failed".
 	endWith string
+	// failStates makes that many GetInstallState calls fail.
+	failStates int
+	states     int
 }
 
 func (f *fakeGateway) InstallPrepared(ctx context.Context, uuid string) (*gatewayclient.PreparedResponse, error) {
@@ -40,6 +43,11 @@ func (f *fakeGateway) InstallPrepared(ctx context.Context, uuid string) (*gatewa
 func (f *fakeGateway) GetInstallState(ctx context.Context, uuid string, gen int64) (*gatewayclient.InstallState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.states++
+	if f.failStates > 0 {
+		f.failStates--
+		return nil, errors.New("gateway unavailable")
+	}
 	return &gatewayclient.InstallState{Generation: gen, Result: f.result}, nil
 }
 
@@ -206,11 +214,17 @@ func TestSupersededRunReportsNothing(t *testing.T) {
 
 	// The run Wings reports after was superseded: its result is dropped once.
 	inst.superseded.Store(id, struct{}{})
+	if !inst.ReportPending(id) {
+		t.Fatal("a superseded run that has not reported must be pending")
+	}
 	if err := c.SetInstallationStatus(context.Background(), id, remote.InstallStatusRequest{Successful: false}); err != nil {
 		t.Fatal(err)
 	}
 	if len(rec.reports) != 0 {
 		t.Fatalf("superseded result reached the gateway: %+v", rec.reports)
+	}
+	if inst.ReportPending(id) {
+		t.Fatal("still pending after the report was dropped")
 	}
 	// The newer generation's result goes through.
 	if err := c.SetInstallationStatus(context.Background(), id, remote.InstallStatusRequest{Successful: true, Reinstall: true}); err != nil {
@@ -316,5 +330,67 @@ func TestKilledJobOfASupersededGenerationIsNoResult(t *testing.T) {
 	}
 	if _, ok := inst.superseded.Load(s.ID()); !ok {
 		t.Fatal("the killed run's result must be marked for dropping")
+	}
+}
+
+// runWithExitCode runs an install whose Job left exitCode, with no poll in
+// time: only the check after the exit code can change the outcome.
+func runWithExitCode(t *testing.T, gw *fakeGateway, exitCode string) (*Installer, *server.Server, error) {
+	t.Helper()
+	root := t.TempDir()
+	s := newServer(t, root)
+	inst := &Installer{Gateway: gw, Root: root, LogDir: filepath.Join(root, "logs"), PollInterval: time.Hour}
+	go func() {
+		dir := filepath.Join(root, "install", "3")
+		for {
+			if _, err := os.Stat(dir); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.WriteFile(filepath.Join(dir, "exit-code"), []byte(exitCode+"\n"), 0o644)
+	}()
+	done := make(chan error, 1)
+	go func() { done <- inst.Run(s, &remote.InstallationScript{Entrypoint: "bash", Script: "#!/bin/bash\n"}) }()
+	select {
+	case err := <-done:
+		return inst, s, err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	return nil, nil, nil
+}
+
+// TestKilledJobOfAFailedJobIsAFailure covers a Job of the current generation
+// that timed out: the shim wrote the killed script's code, the operator
+// recorded the Job as failed.
+func TestKilledJobOfAFailedJobIsAFailure(t *testing.T) {
+	_, _, err := runWithExitCode(t, &fakeGateway{result: "Failed"}, "143")
+	if !errors.Is(err, ErrInstallFailed) || errors.Is(err, ErrInstallSuperseded) {
+		t.Fatalf("expected ErrInstallFailed, got %v", err)
+	}
+}
+
+// TestExitCodeWaitsForTheGatewayCheck covers a gateway that cannot answer when
+// the exit code appears: the code is not taken until it can, so a killed run
+// of a superseded generation is still recognised.
+func TestExitCodeWaitsForTheGatewayCheck(t *testing.T) {
+	gw := &fakeGateway{result: "Superseded", failStates: 2}
+	_, _, err := runWithExitCode(t, gw, "143")
+	if !errors.Is(err, ErrInstallSuperseded) {
+		t.Fatalf("expected ErrInstallSuperseded after the gateway recovered, got %v", err)
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if gw.states < 3 {
+		t.Fatalf("the exit code was taken without a successful check (%d calls)", gw.states)
+	}
+}
+
+// TestExitCodeOfTheCurrentGenerationIsTheResult checks that the gateway's
+// answer for the current generation leaves the exit code as the result.
+func TestExitCodeOfTheCurrentGenerationIsTheResult(t *testing.T) {
+	if _, _, err := runWithExitCode(t, &fakeGateway{result: "Running", strict: true}, "2"); err == nil || !strings.Contains(err.Error(), "exit code 2") {
+		t.Fatalf("expected the strict exit code failure, got %v", err)
 	}
 }

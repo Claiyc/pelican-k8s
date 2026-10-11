@@ -71,6 +71,14 @@ type reportFilter struct {
 	i *Installer
 }
 
+// ReportPending reports whether a superseded run of the server has not
+// reported yet. Until it has, a new install must not start: its own report
+// could otherwise come first and be dropped in place of the old one.
+func (i *Installer) ReportPending(uuid string) bool {
+	_, ok := i.superseded.Load(uuid)
+	return ok
+}
+
 func (f reportFilter) SetInstallationStatus(ctx context.Context, uuid string, data remote.InstallStatusRequest) error {
 	if _, ok := f.i.superseded.LoadAndDelete(uuid); ok {
 		return nil
@@ -136,25 +144,36 @@ func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) err
 // waitForCompletion returns when exit-code appears, or when the gateway reports
 // the Job as failed or the generation as superseded: then the returned result
 // is that report, otherwise it is empty. An exit code of a superseded
-// generation counts as superseded.
+// generation or a failed Job counts as that report.
 func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int64, exitFile string) (int, string, error) {
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	poll := time.NewTicker(i.PollInterval)
 	defer poll.Stop()
+	checkFailed := false
 	for {
 		if b, err := os.ReadFile(exitFile); err == nil {
 			code, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err != nil {
 				return 0, "", fmt.Errorf("installer: parse exit code %q: %w", b, err)
 			}
-			// The shim writes an exit code also when the operator deleted the
-			// Job for a newer generation: its script was killed, so the run
-			// is superseded, not finished.
-			if st, err := i.Gateway.GetInstallState(ctx, uuid, gen); err == nil && st.Result == "Superseded" {
+			// The shim writes an exit code also when its Job is deleted or
+			// times out: the script was killed. The code is the result only
+			// once the gateway confirms that this generation is current and
+			// its Job did not fail; until the gateway answers, the file is
+			// read again on the next tick.
+			st, err := i.Gateway.GetInstallState(ctx, uuid, gen)
+			switch {
+			case err != nil:
+				if !checkFailed {
+					i.logger().Warn("install state check failed, retrying", "error", err)
+				}
+				checkFailed = true
+			case st.Result == "Failed" || st.Result == "Superseded":
 				return code, st.Result, nil
+			default:
+				return code, "", nil
 			}
-			return code, "", nil
 		}
 		select {
 		case <-ctx.Done():

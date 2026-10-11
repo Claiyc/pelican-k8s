@@ -142,8 +142,16 @@ func TestCommands(t *testing.T) {
 func TestErrors(t *testing.T) {
 	ctx := context.Background()
 	c, _ := server(t, 409, "busy")
-	if err := c.Power(ctx, "u", "start"); !errors.Is(err, ErrConflict) {
+	if err := c.Power(ctx, "u", "start"); !errors.Is(err, ErrConflict) || errors.Is(err, ErrInstallLocked) {
 		t.Fatalf("409: %v", err)
+	}
+	locked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(installLockedHeader, "true")
+		w.WriteHeader(http.StatusConflict)
+	}))
+	t.Cleanup(locked.Close)
+	if err := New(locked.URL+"/", "tok", nil).Install(ctx, "u", true); !errors.Is(err, ErrInstallLocked) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("install-lock 409: %v", err)
 	}
 	c, _ = server(t, 500, "  boom \n")
 	err := c.Sync(ctx, "u")

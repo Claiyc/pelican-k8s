@@ -36,6 +36,8 @@ type fixture struct {
 	terminate context.CancelFunc
 	// wings, when set, serves the requests that fall through to Wings.
 	wings http.HandlerFunc
+	// reportPending plays a superseded install run that has not reported.
+	reportPending bool
 }
 
 // newFixture wires the handler to a real Wings manager holding one server
@@ -102,7 +104,7 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 		}
 		w.WriteHeader(http.StatusTeapot)
 	})
-	f.handler = Handler(wings, m, reg)
+	f.handler = Handler(wings, m, reg, func(string) bool { return f.reportPending })
 	return f
 }
 
@@ -355,8 +357,8 @@ func TestInstallRefusedWhileAnEarlierInstallHoldsTheLock(t *testing.T) {
 		}
 		f.srv.SetInstalling(true)
 		rec := f.do("POST", path, "Bearer "+apiToken, "")
-		if rec.Code != http.StatusConflict || !strings.Contains(decode(t, rec)["error"].(string), "still holds the install lock") {
-			t.Fatalf("%s while installing: %d %s", path, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusConflict || !strings.Contains(decode(t, rec)["error"].(string), "still holds the install lock") || rec.Header().Get(InstallLockedHeader) != "true" {
+			t.Fatalf("%s while installing: %d %s %v", path, rec.Code, rec.Body.String(), rec.Header())
 		}
 		// Without the agent's token Wings answers, as before.
 		if rec := f.do("POST", path, "Bearer nope", ""); rec.Code != http.StatusTeapot {
@@ -364,6 +366,12 @@ func TestInstallRefusedWhileAnEarlierInstallHoldsTheLock(t *testing.T) {
 		}
 		f.srv.SetInstalling(false)
 	}
+	// The lock is free but the superseded run has not reported yet.
+	f.reportPending = true
+	if rec := f.do("POST", "/api/servers/"+serverID+"/reinstall", "Bearer "+apiToken, ""); rec.Code != http.StatusConflict || rec.Header().Get(InstallLockedHeader) != "true" {
+		t.Fatalf("pending report: %d", rec.Code)
+	}
+	f.reportPending = false
 	// Another server's id, or one this agent does not run, goes to Wings.
 	f.srv.SetInstalling(true)
 	if rec := f.do("POST", "/api/servers/00000000-0000-0000-0000-000000000000/reinstall", "Bearer "+apiToken, ""); rec.Code != http.StatusTeapot {

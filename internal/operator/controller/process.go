@@ -266,8 +266,10 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 		// generation's: it took the lock before a second Reinstall and
 		// prepared after it (the gateway prepares the current generation), or
 		// the status write after an earlier request was lost. It waits for
-		// this generation's Job, so it is adopted instead of asked again.
-		adopted := errors.Is(err, agentclient.ErrConflict) && st.PreparedGeneration == gen
+		// this generation's Job, so it is adopted instead of asked again. Only
+		// the agent's install-lock 409 says that a run holds the lock; a power
+		// action's 409 is retried.
+		adopted := errors.Is(err, agentclient.ErrInstallLocked) && st.PreparedGeneration == gen
 		switch {
 		case adopted:
 		case errors.Is(err, agentclient.ErrConflict):

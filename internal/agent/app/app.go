@@ -165,7 +165,7 @@ func Run(ctx context.Context, o Options) error {
 	engine := router.Configure(manager, client)
 	srv := &http.Server{
 		Addr:              cfg.Api.Host + ":" + strconv.Itoa(cfg.Api.Port),
-		Handler:           routes.Handler(engine, manager, registry),
+		Handler:           routes.Handler(engine, manager, registry, inst.ReportPending),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	certs.secureHTTP(srv)
