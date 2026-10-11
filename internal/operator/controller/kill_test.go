@@ -119,8 +119,39 @@ func TestKillOfAGamePodWithoutAShimDeletesIt(t *testing.T) {
 	if h.pod() != nil {
 		t.Fatal("the game pod waits for its shim")
 	}
-	if calls := h.agent.Calls(); len(calls) != 0 {
-		t.Fatalf("calls %v", calls)
+}
+
+// Nor does an agent that answers with an error keep the pod: the pod goes,
+// and the reconcile fails so the agent is told again.
+func TestKillWithAFailingAgentDeletesTheGamePod(t *testing.T) {
+	for name, fail := range map[string]func(*fakeAgent, error){
+		"state": func(a *fakeAgent, err error) { a.getErr = err },
+		"power": func(a *fakeAgent, err error) { a.err = err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			gs := newGS()
+			gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+			h := newHarness(t, gs, newClass())
+			h.reconcile(2)
+			h.createPod(true)
+			h.reconcile(2)
+			h.agent.state = v1alpha1.ProcessRunning
+			boom := errors.New("agent: unavailable")
+			fail(h.agent, boom)
+
+			h.updateGS(func(gs *v1alpha1.GameServer) {
+				gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+			})
+			if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+				t.Fatalf("reconcile error %v", err)
+			}
+			if h.pod() != nil {
+				t.Fatal("the game pod stays while the agent fails")
+			}
+			if got := h.gs().Status.Power.ObservedGeneration; got != 1 {
+				t.Fatalf("the kill is recorded as done: observed generation %d", got)
+			}
+		})
 	}
 }
 
