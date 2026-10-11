@@ -1,15 +1,8 @@
 package panelapi
 
 import (
-	"os"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-func readFile(p string) (string, error) {
-	b, err := os.ReadFile(p)
-	return string(b), err
-}
 
 // nonNegative converts a quantity to uint64, counting a negative one as zero.
 func nonNegative(v int64) uint64 {

@@ -148,12 +148,12 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 
-	if sched, err := boot.Scheduler(ctx, manager); err != nil {
+	sched, err := boot.Scheduler(ctx, manager)
+	if err != nil {
 		return fmt.Errorf("cron: %w", err)
-	} else {
-		sched.Start()
-		defer func() { _ = sched.Shutdown() }()
 	}
+	sched.Start()
+	defer func() { _ = sched.Shutdown() }()
 
 	go func() {
 		if err := sftp.New(manager).Run(); err != nil {

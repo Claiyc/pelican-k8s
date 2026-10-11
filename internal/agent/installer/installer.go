@@ -264,7 +264,7 @@ var logHeader = template.Must(template.New("header").Parse(`Pelican Server Insta
 
 // writeInstallLog writes <log_dir>/install/<uuid>.log in Wings' format so that
 // GET /api/servers/:s/install-logs keeps working.
-func (i *Installer) writeInstallLog(s *server.Server, script *remote.InstallationScript, outputLog string) error {
+func (i *Installer) writeInstallLog(s *server.Server, script *remote.InstallationScript, outputLog string) (err error) {
 	logDir := i.LogDir
 	if logDir == "" {
 		logDir = config.Get().System.LogDirectory
@@ -277,7 +277,13 @@ func (i *Installer) writeInstallLog(s *server.Server, script *remote.Installatio
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// The log is written through on Close (NFS-backed volumes report write
+	// errors there), so a failed Close is a failed write.
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	kernel := "unknown"
 	if b, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
 		kernel = strings.TrimSpace(string(b))

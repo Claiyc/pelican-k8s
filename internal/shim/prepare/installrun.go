@@ -55,7 +55,13 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer logf.Close()
+	// The log is best effort (the exit code is the result), but a Close that
+	// fails lost output, which the pod log should say.
+	defer func() {
+		if err := logf.Close(); err != nil {
+			fmt.Fprintf(r.Stdout, "install-run: warning: close %s: %v\n", r.LogFile, err)
+		}
+	}()
 	_ = os.Remove(r.ExitFile)
 
 	cmd := exec.Command(r.Argv[0], r.Argv[1:]...)
