@@ -809,7 +809,7 @@ spec:
     unlimitedCpuPercent: 0        # used when cpu_limit = 0; 0 = no limit
     minCpu: 100m
     tmpSizeMiB: 100
-    agent: {cpu: 50m, memory: 128Mi, memoryLimit: 512Mi}   # the agent pod
+    agent: {cpu: 10m, memory: 64Mi, memoryLimit: 512Mi}    # the agent pod
   scheduling:
     preferAgentNode: true         # the game pod prefers the node its agent runs on (§7.7)
   security:
@@ -914,7 +914,7 @@ spec:
         - {name: WINGS_TOKEN_ID, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token_id}}}
         - {name: WINGS_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-agent, key: token}}}
         - {name: PELICAN_SHIM_TOKEN, valueFrom: {secretKeyRef: {name: gs-<uuid>-shim, key: token}}}
-      resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}   # class resources.agent
+      resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 512Mi}}   # class resources.agent
       securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
       volumeMounts:
         - {name: data, mountPath: /var/lib/pelican}
@@ -1591,13 +1591,13 @@ clusters and node-local storage, where the agent does not move.
 | PIDs (`container_pid_limit` 512) | `PidsLimit` | kubelet `podPidsLimit` (node setting) |
 | OOM detection | `OOMKilled` from container inspect | shim `memory.events` and the relayed container status (§6.4) |
 | tmpfs `/tmp` (100 MiB) | tmpfs | `emptyDir{medium: Memory, sizeLimit: tmpSizeMiB}` (counts toward memory) |
-| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; requests equal the server's |
+| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; the memory request is the server's, at most class `install.resources.memory`, and the CPU request is class `resources.minCpu` |
 
 The game container's requests and limits exist only while the game pod does: **a stopped server
 requests nothing but its agent.**
 
 **Agent resources:** the agent pod has its own requests and limits from class `resources.agent`
-(requests 50m CPU and 128Mi memory, memory limit 512Mi, no CPU limit). The memory limit leaves room for
+(requests 10m CPU and 64Mi memory, memory limit 512Mi, no CPU limit). The memory limit leaves room for
 Wings' compress, decompress and archive code on large servers.
 
 ---
@@ -1836,7 +1836,7 @@ node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
 - Agents make short remote-API calls (state changes, activity every 60 s); the gateway polls state on
   demand with a 2 s cache. Long-lived agent connections exist only for relayed sessions.
 - The gateway's informer caches GameServers, pods, Secrets, ConfigMaps, GameServerClasses and nodes.
-- A stopped server costs its agent pod (128 MiB memory and 50m CPU requested by default); a running
+- A stopped server costs its agent pod (64 MiB memory and 10m CPU requested by default); a running
   one adds the game pod.
 - A start takes as long as scheduling, image pull and init containers of the game pod, plus a volume
   detach and attach when the agent moves.

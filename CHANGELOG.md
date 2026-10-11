@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- An install Job no longer reserves a share of the server it installs. Its CPU request is the class's `resources.minCpu` (100m) instead of the game container's request, a quarter of the server's CPU limit by default, and its memory request is at most the class's `install.resources.memory` (1Gi). The limits stay `max(server, class)`. An install for a server with a large limit waited for that much free CPU on the node.
+- Lower default requests, from what the components use: gateway and operator 10m CPU and 64Mi memory each (50m and 128Mi before), and the agent pod of every server 10m and 64Mi (class `resources.agent`, 50m and 128Mi before). The memory limits stay at 512Mi. Agent pods are recreated with the new template once their server is offline.
+
 ### Fixed
 - With `tls.enabled: false`, every server that still had a certificate Secret from an earlier `tls.enabled: true` went to `Error` and was no longer driven: a server that should run stayed off. 2.0.0-beta2 deletes those Secrets, and the operator's Role allowed that only with cert-manager. The Role now allows it, and a Secret that cannot be deleted no longer fails the reconcile.
 - The operator and MetalLB rewrote every LoadBalancer Service about twenty times a second for as long as it existed. The operator replaced the Service's annotations with its own and so removed MetalLB's `metallb.io/ip-allocated-from-pool`; MetalLB set it again, and that write triggered the next reconcile. The operator now leaves annotations it did not set, records its own keys in `pelican-k8s.io/managed-annotations`, and does not write a Service that already matches. This is also what made a failing reconcile repeat several times a second.

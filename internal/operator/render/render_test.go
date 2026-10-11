@@ -662,12 +662,44 @@ func TestMemoryRequestPercentOfLimit(t *testing.T) {
 func TestInstallResourcesFollowTheGameRequest(t *testing.T) {
 	r := v1alpha1.ResourcesSpec{MemoryOverheadPercent: 0, CPURequestPercentOfLimit: 25, MinCPU: resource.MustParse("100m"), MemoryRequestPercentOfLimit: 50}
 	i := v1alpha1.InstallJobSpec{Resources: v1alpha1.ContainerResources{CPU: resource.MustParse("1"), Memory: resource.MustParse("1Gi")}}
-	got := InstallResources(settings.Build{MemoryLimit: 8192, CPULimit: 400}, r, i)
-	if v := got.Requests.Memory().Value(); v != 4096*1024*1024 {
+	got := InstallResources(settings.Build{MemoryLimit: 1024, CPULimit: 400}, r, i)
+	if v := got.Requests.Memory().Value(); v != 512*1024*1024 {
 		t.Fatalf("install memory request %d, want half the limit", v)
+	}
+	// A large server's install reserves the class's install memory, not half
+	// the server's.
+	got = InstallResources(settings.Build{MemoryLimit: 8192, CPULimit: 400}, r, i)
+	if got.Requests.Memory().String() != "1Gi" {
+		t.Fatalf("install memory request %v, want the class's install memory", got.Requests[corev1.ResourceMemory])
 	}
 	if got.Limits.Memory().String() != "8Gi" {
 		t.Fatalf("install memory limit %v must stay at the cap", got.Limits[corev1.ResourceMemory])
+	}
+	// Without a class value the request is the game container's.
+	got = InstallResources(settings.Build{MemoryLimit: 8192, CPULimit: 400}, r, v1alpha1.InstallJobSpec{})
+	if v := got.Requests.Memory().Value(); v != 4096*1024*1024 {
+		t.Fatalf("install memory request %d without a class value", v)
+	}
+}
+
+// An install reserves the class's minimum CPU, whatever the server's limit:
+// a quarter of a 16-core limit would keep the Job Pending on a busy node.
+func TestInstallCPURequestIsTheClassMinimum(t *testing.T) {
+	r := v1alpha1.ResourcesSpec{CPURequestPercentOfLimit: 25, MinCPU: resource.MustParse("100m")}
+	i := v1alpha1.InstallJobSpec{Resources: v1alpha1.ContainerResources{CPU: resource.MustParse("1"), Memory: resource.MustParse("1Gi")}}
+	got := InstallResources(settings.Build{MemoryLimit: 1024, CPULimit: 1600}, r, i)
+	if got.Requests.Cpu().String() != "100m" || got.Limits.Cpu().String() != "16" {
+		t.Fatalf("install cpu %v / %v", got.Requests[corev1.ResourceCPU], got.Limits[corev1.ResourceCPU])
+	}
+	// Without a CPU limit there is no limit to raise, and the request is the same.
+	got = InstallResources(settings.Build{MemoryLimit: 1024}, r, i)
+	if _, limited := got.Limits[corev1.ResourceCPU]; limited || got.Requests.Cpu().String() != "100m" {
+		t.Fatalf("install cpu without a server limit: %v / %v", got.Requests[corev1.ResourceCPU], got.Limits[corev1.ResourceCPU])
+	}
+	// The default when the class sets none.
+	r.MinCPU = resource.Quantity{}
+	if got = InstallResources(settings.Build{MemoryLimit: 1024, CPULimit: 400}, r, i); got.Requests.Cpu().String() != "100m" {
+		t.Fatalf("install cpu request %v", got.Requests[corev1.ResourceCPU])
 	}
 }
 

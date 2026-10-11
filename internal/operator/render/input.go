@@ -203,16 +203,24 @@ func ScratchSize(pvc resource.Quantity, s v1alpha1.StorageSpec) resource.Quantit
 	return pvc
 }
 
-// InstallResources returns the install Job resources: max(server, class) as Wings does.
+// InstallResources returns the install Job resources: limits of max(server,
+// class) as Wings does, and requests that do not depend on the size of the
+// server: the game container's memory request capped at the class's install
+// memory, and the class's minimum CPU.
 func InstallResources(b settings.Build, r v1alpha1.ResourcesSpec, i v1alpha1.InstallJobSpec) corev1.ResourceRequirements {
 	game := GameResources(b, r)
 	mem := game.Limits[corev1.ResourceMemory]
 	if !i.Resources.Memory.IsZero() && i.Resources.Memory.Cmp(mem) > 0 {
 		mem = i.Resources.Memory
 	}
-	// The request follows the game container, so a class that overcommits
-	// memory is not undone by every install Job reserving the full limit.
+	// The request is the game container's, so a class that overcommits memory
+	// is not undone by every install Job reserving the full limit, and at
+	// most the class's install memory: an install script does not need the
+	// memory of the server it installs reserved.
 	memReq := game.Requests[corev1.ResourceMemory]
+	if !i.Resources.Memory.IsZero() && memReq.Cmp(i.Resources.Memory) > 0 {
+		memReq = i.Resources.Memory
+	}
 	if memReq.Cmp(mem) > 0 {
 		memReq = mem
 	}
@@ -220,16 +228,24 @@ func InstallResources(b settings.Build, r v1alpha1.ResourcesSpec, i v1alpha1.Ins
 		Requests: corev1.ResourceList{corev1.ResourceMemory: memReq},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: mem},
 	}
-	cpuLimit, hasLimit := game.Limits[corev1.ResourceCPU]
-	if hasLimit {
+	// The CPU request is the class minimum, not the game container's: an
+	// install uses what is free up to its limit, and reserving a share of the
+	// server's limit keeps the Job Pending on a node the script would run
+	// fine on.
+	cpuReq := r.MinCPU
+	if cpuReq.IsZero() {
+		cpuReq = resource.MustParse("100m")
+	}
+	if cpuLimit, hasLimit := game.Limits[corev1.ResourceCPU]; hasLimit {
 		if !i.Resources.CPU.IsZero() && i.Resources.CPU.Cmp(cpuLimit) > 0 {
 			cpuLimit = i.Resources.CPU
 		}
 		out.Limits[corev1.ResourceCPU] = cpuLimit
-		out.Requests[corev1.ResourceCPU] = game.Requests[corev1.ResourceCPU]
-	} else {
-		out.Requests[corev1.ResourceCPU] = game.Requests[corev1.ResourceCPU]
+		if cpuReq.Cmp(cpuLimit) > 0 {
+			cpuReq = cpuLimit
+		}
 	}
+	out.Requests[corev1.ResourceCPU] = cpuReq
 	return out
 }
 

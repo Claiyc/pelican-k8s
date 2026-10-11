@@ -550,10 +550,10 @@ func clearScratchSize(v *corev1.Volume) {
 func agentResources(r v1alpha1.ContainerResources) corev1.ResourceRequirements {
 	cpu, mem, memLimit := r.CPU, r.Memory, r.MemoryLimit
 	if cpu.IsZero() {
-		cpu = resource.MustParse("50m")
+		cpu = resource.MustParse("10m")
 	}
 	if mem.IsZero() {
-		mem = resource.MustParse("128Mi")
+		mem = resource.MustParse("64Mi")
 	}
 	if memLimit.IsZero() {
 		memLimit = resource.MustParse("512Mi")
