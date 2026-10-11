@@ -285,6 +285,19 @@ defaultClass:
     tolerations: []
     priorityClassName: ""
 
+# More GameServerClasses, keyed by name, each the default class with some fields
+# changed: defaultClass.spec deep-merged with the entry (maps merge; lists and
+# scalars, false and 0 included, replace). The chart sets images,
+# agentConfigMap, the ServiceAccounts and agentPriorityClassName on these as on
+# the default class, so they follow every upgrade. A GameServer uses one through
+# spec.className. See docs/classes.md. Example, a class for mostly idle servers
+# that reserves 30% of each server's memory limit (the limit stays the Panel's):
+#   extraClasses:
+#     burst:
+#       resources:
+#         memoryRequestPercentOfLimit: 30
+extraClasses: {}
+
 # Admission policies enforcing the restricted shape of game and agent pods and the
 # volume allow-list of install Jobs (ValidatingAdmissionPolicy, Kubernetes >= 1.30).
 admissionPolicies:

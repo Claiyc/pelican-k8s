@@ -148,3 +148,31 @@ spec:
       app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- end }}
 {{- end -}}
+
+{{/*
+A GameServerClass from a spec (modified in place: pass a copy), with the fields
+the chart owns filled in. Arguments: "root" (the chart context), "name", "spec".
+*/}}
+{{- define "pelican-k8s.gameServerClass" -}}
+{{- $root := .root }}
+{{- $spec := .spec }}
+{{- $_ := set $spec "images" (dict "shim" (include "pelican-k8s.image" (dict "root" $root "name" "shim")) "agent" (include "pelican-k8s.image" (dict "root" $root "name" "agent")) "pullPolicy" $root.Values.image.pullPolicy) }}
+{{- $_ = set $spec "agentConfigMap" "pelican-agent-config" }}
+{{- $_ = set $spec "serviceAccountName" "pelican-game" }}
+{{- $_ = set $spec "agentServiceAccountName" "pelican-agent" }}
+{{- $_ = set $spec "agentPriorityClassName" $root.Values.agentPriorityClass.name }}
+{{- if $root.Values.openshift.enabled }}
+{{- $_ = set $spec.security "useNamespaceUIDRange" true }}
+{{- $_ = set $spec.install "disableSeccomp" true }}
+{{- end }}
+{{- if not $spec.failover.forceDeleteAfter }}
+{{- $_ = unset $spec.failover "forceDeleteAfter" }}
+{{- end }}
+apiVersion: pelican-k8s.io/v1alpha1
+kind: GameServerClass
+metadata:
+  name: {{ .name | quote }}
+  labels: {{- include "pelican-k8s.labels" $root | nindent 4 }}
+spec:
+{{ toYaml $spec | indent 2 }}
+{{- end -}}

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Chart value `extraClasses`: more GameServerClasses, keyed by name, each `defaultClass.spec` deep-merged with the entry. The chart sets `images`, `agentConfigMap`, the ServiceAccounts and `agentPriorityClassName` on them as on the default class, so they follow every upgrade; a class created by hand has to have its `images` copied after each one. Example: `burst: {resources: {memoryRequestPercentOfLimit: 30}}`, a class for mostly idle servers that reserves 30% of each server's memory limit.
+
 ### Fixed
 - On OVN-Kubernetes (OpenShift) a server on a LoadBalancer address answered no TCP connection under `externalTrafficPolicy: Local`: OVN-Kubernetes forwards only one protocol of a port that one Service carries as TCP and UDP, the one listed last, which was UDP. Where a sharing annotation is set (`loadBalancer.provider: metallb` or `sharingAnnotation`), the operator now writes one Service per protocol on the same address, `gs-<uuid>` for TCP and `gs-<uuid>-udp` for UDP.
 - A kill sent while a restart was waiting for the process to stop did not stop the server: it stayed at `stopping` until a second kill or the end of the game pod's grace period (11 minutes by default). Wings lets the kill pass and the waiting restart then starts the process again; that start landed in a game pod the operator was already removing, whose shim stopped it with the egg's stop command, which a server that is still starting may ignore. A kill now deletes the game pod with a grace period of one second.
