@@ -88,6 +88,7 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.StatefulSet(uuid)}},
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentStatefulSet(uuid)}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.ExposureService(uuid)}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.ExposureServiceUDP(uuid)}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentService(uuid)}},
 		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.NetworkPolicy(uuid)}},
 		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gs.Namespace, Name: names.AgentNetworkPolicy(uuid)}},

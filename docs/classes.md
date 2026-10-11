@@ -108,7 +108,9 @@ With `LoadBalancer`, `Local` and a sharing annotation (`sharingAnnotation`, or
 placement: the servers on one IP run on one node, the node the load balancer
 announces that IP from. Kubernetes cannot spread them, and the operator never changes allocations to make room;
 they stay the Panel admin's choice, because players, DNS records and firewall
-rules depend on them. So plan addresses like nodes:
+rules depend on them. Each server then has two Services on its address,
+`gs-<uuid>` for TCP and `gs-<uuid>-udp` for UDP (docs/compatibility.md,
+"Kubernetes and OpenShift"). So plan addresses like nodes:
 
 - Give a server its own IP when it should be free to run anywhere. A load
   balancer pool with an address per server removes the constraint entirely.

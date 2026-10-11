@@ -15,8 +15,36 @@ import (
 )
 
 // ExposureService renders the player-facing Service, or nil when the server
-// has no allocation or uses HostPort exposure.
+// has no allocation or uses HostPort exposure. It carries every port as TCP
+// and UDP, or as TCP alone where the exposure is split by protocol and
+// ExposureServiceUDP carries the rest.
 func ExposureService(in *Input) *corev1.Service {
+	protos := []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP}
+	if SplitByProtocol(in) {
+		protos = protos[:1]
+	}
+	return exposureService(in, names.ExposureService(in.UUID()), protos)
+}
+
+// ExposureServiceUDP renders the UDP half of a split exposure, or nil where
+// one Service carries both protocols.
+func ExposureServiceUDP(in *Input) *corev1.Service {
+	if !SplitByProtocol(in) {
+		return nil
+	}
+	return exposureService(in, names.ExposureServiceUDP(in.UUID()), []corev1.Protocol{corev1.ProtocolUDP})
+}
+
+// SplitByProtocol reports whether the server gets one Service per protocol.
+// OVN-Kubernetes keeps one flow per Service, load balancer address and port
+// on the node's external bridge, so of a port a Service carries as TCP and
+// UDP only the protocol listed last is forwarded under externalTrafficPolicy
+// Local: the other one is dropped. Two Services do not collide. They need
+// one address, which a load balancer hands out only with a sharing
+// annotation, so the exposure is split exactly where SharedIP applies.
+func SplitByProtocol(in *Input) bool { return SharedIP(in) != "" }
+
+func exposureService(in *Input, name string, protos []corev1.Protocol) *corev1.Service {
 	if !in.Settings.HasAllocation() {
 		return nil
 	}
@@ -25,7 +53,7 @@ func ExposureService(in *Input) *corev1.Service {
 		return nil
 	}
 	svc := &corev1.Service{
-		ObjectMeta: in.Meta(names.ExposureService(in.UUID()), "exposure"),
+		ObjectMeta: in.Meta(name, "exposure"),
 		Spec: corev1.ServiceSpec{
 			Selector:                 map[string]string{v1alpha1.LabelServerUUID: in.UUID(), v1alpha1.LabelComponent: ComponentGame},
 			PublishNotReadyAddresses: true,
@@ -64,7 +92,7 @@ func ExposureService(in *Input) *corev1.Service {
 	}
 	svc.Spec.ExternalTrafficPolicy = policy
 	for _, p := range in.Settings.Ports() {
-		for _, proto := range []corev1.Protocol{corev1.ProtocolTCP, corev1.ProtocolUDP} {
+		for _, proto := range protos {
 			sp := corev1.ServicePort{Name: portName(p, proto), Port: p, TargetPort: intstr.FromInt32(p), Protocol: proto}
 			if shared != "" {
 				sp.TargetPort = intstr.FromString(containerPortName(in, p, proto))
