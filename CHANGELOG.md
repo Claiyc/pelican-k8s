@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-11
+
+### What's Changed
+* chart: run gateway and operator highly available by default by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/77
+* charts: add values.schema.json to both charts by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/79
+* ci: cancel superseded PR runs and skip PR image builds by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/84
+* ci: release as a pre-release when the release PR is labelled prerelease by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/96
+* v2: run every server as an agent pod and a game pod (2.0) by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/85
+* ci: keep the docs on the last release during a pre-release and open the release PR after it by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/97
+* operator: let servers share a MetalLB address under externalTrafficPolicy Local by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/98
+* shim: bound unauthenticated connections to the agent's shim port by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/101
+* operator: keep 1.x servers in their power state across the 2.0 upgrade by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/99
+* security: let shared clusters stop agent pods from preempting other pods by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/102
+* docs: list the HA chart defaults and the values schema in the changelog by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/100
+* Accept incoming server transfers from other Wings nodes by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/104
+* operator: delete a failed transfer's copy with its volume by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/105
+* gateway: ask for the console token after the agent's boot second by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/106
+* docs: bring the docs up to date with master by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/109
+* gateway: keep a server running across a shared-address move by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/111
+* Fix the findings of the 2.0.0-beta1 live test by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/110
+* Fix the findings of the 2.0.0-beta2 live test by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/113
+* ci: keep the release PR when prerelease asks for a beta with nothing new by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/114
+* operator: one exposure Service per protocol on a shared LoadBalancer address by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/117
+* operator: delete the game pod with a kill by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/116
+* agent: end a superseded install, so a Reinstall during an install works by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/118
+* chart: extraClasses — more GameServerClasses from the default class by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/121
+* shim: offer a newer connection only once the replaced one has ended by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/119
+* shim, operator: report a terminated install Job as failed by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/122
+* docs: a class switch that changes only resources resizes the running pod in place by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/123
+* docs: qualify which class changes resize a running pod in place by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/124
+* security: fix the open code scanning findings and harden the Panel client by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/126
+
+### New Contributors
+* @jadrian2006 made their first contribution in https://github.com/Claiyc/pelican-k8s/pull/104
+
 ## [2.0.0-beta4] - 2026-10-11
 
 ### Added
@@ -219,7 +254,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta4...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0
 [2.0.0-beta4]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...v2.0.0-beta4
 [2.0.0-beta3]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...v2.0.0-beta3
 [2.0.0-beta2]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...v2.0.0-beta2
