@@ -135,7 +135,8 @@ func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) err
 
 // waitForCompletion returns when exit-code appears, or when the gateway reports
 // the Job as failed or the generation as superseded: then the returned result
-// is that report, otherwise it is empty.
+// is that report, otherwise it is empty. An exit code of a superseded
+// generation counts as superseded.
 func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int64, exitFile string) (int, string, error) {
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
@@ -146,6 +147,12 @@ func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int6
 			code, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err != nil {
 				return 0, "", fmt.Errorf("installer: parse exit code %q: %w", b, err)
+			}
+			// The shim writes an exit code also when the operator deleted the
+			// Job for a newer generation: its script was killed, so the run
+			// is superseded, not finished.
+			if st, err := i.Gateway.GetInstallState(ctx, uuid, gen); err == nil && st.Result == "Superseded" {
+				return code, st.Result, nil
 			}
 			return code, "", nil
 		}

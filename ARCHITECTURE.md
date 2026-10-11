@@ -1207,7 +1207,9 @@ generation (not a reinstall).
    Job are final. Successful Jobs are deleted; failed ones stay for an hour for their logs.
 7. **Superseded.** A new generation while one is in flight (a second Reinstall) supersedes it: the
    operator deletes the older Job, and the gateway answers the older generation's poll with `Superseded`.
-   The installer then ends that run within one poll, drops its result (it would otherwise be recorded
+   A running Job's script is killed, and the shim still writes its exit code; the installer asks the
+   gateway once more before it takes an exit code as the result. The installer then ends that run within
+   one poll (or as soon as the killed Job's exit code appears), drops its result (it would otherwise be recorded
    against the new generation and reach the Panel as a failed install) and Wings releases the install
    lock; the new generation's `/install` or `/reinstall` is retried until then. A run that took the lock
    before the new generation but prepared after it already waits for the new generation's Job: on a

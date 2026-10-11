@@ -284,3 +284,37 @@ func TestSupersededResultNeverReachesTheGateway(t *testing.T) {
 		t.Fatalf("reports %+v", got)
 	}
 }
+
+// TestKilledJobOfASupersededGenerationIsNoResult covers a superseded install
+// whose Job was already running: deleting it kills the script, and the shim
+// still writes an exit code. That code must not count as the install's result.
+func TestKilledJobOfASupersededGenerationIsNoResult(t *testing.T) {
+	gw := &fakeGateway{result: "Superseded"}
+	root := t.TempDir()
+	s := newServer(t, root)
+	// Only the exit-code check may notice the supersession: no poll in time.
+	inst := &Installer{Gateway: gw, Root: root, LogDir: filepath.Join(root, "logs"), PollInterval: time.Hour}
+	go func() {
+		dir := filepath.Join(root, "install", "3")
+		for {
+			if _, err := os.Stat(dir); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.WriteFile(filepath.Join(dir, "exit-code"), []byte("143\n"), 0o644)
+	}()
+	done := make(chan error, 1)
+	go func() { done <- inst.Run(s, &remote.InstallationScript{Entrypoint: "bash", Script: "#!/bin/bash\n"}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInstallSuperseded) {
+			t.Fatalf("expected ErrInstallSuperseded, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if _, ok := inst.superseded.Load(s.ID()); !ok {
+		t.Fatal("the killed run's result must be marked for dropping")
+	}
+}
