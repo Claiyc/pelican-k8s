@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- On OVN-Kubernetes (OpenShift) a server on a LoadBalancer address answered no TCP connection under `externalTrafficPolicy: Local`: OVN-Kubernetes forwards only one protocol of a port that one Service carries as TCP and UDP, the one listed last, which was UDP. Where a sharing annotation is set (`loadBalancer.provider: metallb` or `sharingAnnotation`), the operator now writes one Service per protocol on the same address, `gs-<uuid>` for TCP and `gs-<uuid>-udp` for UDP.
+
 ## [2.0.0-beta3] - 2026-10-11
 
 ### Changed

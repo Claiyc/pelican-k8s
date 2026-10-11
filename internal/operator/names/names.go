@@ -47,6 +47,10 @@ func AgentPod(uuid string) string { return Prefix + uuid + "-agent-0" }
 // ExposureService exposes the game ports.
 func ExposureService(uuid string) string { return Prefix + uuid }
 
+// ExposureServiceUDP exposes the UDP side of the game ports where the
+// exposure is split by protocol (ARCHITECTURE.md 9.3).
+func ExposureServiceUDP(uuid string) string { return Prefix + uuid + "-udp" }
+
 // AgentService is the headless service for the agent pod; the shim dials it.
 func AgentService(uuid string) string { return Prefix + uuid + "-agent" }
 

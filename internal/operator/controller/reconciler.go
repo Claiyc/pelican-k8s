@@ -518,12 +518,16 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	}
 	exposure := render.ExposureService(s.in)
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureService(s.in.UUID())}
+	udp := render.ExposureServiceUDP(s.in)
+	udpKey := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureServiceUDP(s.in.UUID())}
+	if udp == nil {
+		if err := r.deleteService(s, udpKey); err != nil {
+			return err
+		}
+	}
 	if exposure == nil {
-		existing := &corev1.Service{}
-		if err := r.Get(s.ctx, key, existing); err == nil {
-			if err := r.Delete(s.ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
+		if err := r.deleteService(s, key); err != nil {
+			return err
 		}
 		s.gs.Status.Endpoints = nil
 		if s.class.Spec.Exposure.Mode == v1alpha1.ExposureHostPort && s.settings.HasAllocation() {
@@ -554,18 +558,27 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 		return err
 	}
+	if udp != nil {
+		if err := r.applyService(s, udp); err != nil {
+			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
+			return err
+		}
+	}
 	existing := &corev1.Service{}
 	if err := r.Get(s.ctx, key, existing); err != nil {
 		return err
 	}
 	ips := s.class.Spec.Exposure.ExternalIPs
 	if existing.Spec.Type == corev1.ServiceTypeLoadBalancer {
-		ips = nil
-		for _, ing := range existing.Status.LoadBalancer.Ingress {
-			if ing.IP != "" {
-				ips = append(ips, ing.IP)
-			} else if ing.Hostname != "" {
-				ips = append(ips, ing.Hostname)
+		ips = ingressAddresses(existing)
+		if len(ips) > 0 && udp != nil {
+			// Both halves of a split exposure need the address.
+			half := &corev1.Service{}
+			if err := r.Get(s.ctx, udpKey, half); err != nil {
+				return err
+			}
+			if len(ingressAddresses(half)) == 0 {
+				ips = nil
 			}
 		}
 		if len(ips) == 0 {
@@ -581,6 +594,28 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	}
 	r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
 	return nil
+}
+
+// ingressAddresses returns the addresses a load balancer gave a Service.
+func ingressAddresses(svc *corev1.Service) []string {
+	var out []string
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			out = append(out, ing.IP)
+		} else if ing.Hostname != "" {
+			out = append(out, ing.Hostname)
+		}
+	}
+	return out
+}
+
+// deleteService deletes a Service that may not exist.
+func (r *GameServerReconciler) deleteService(s *scope, key types.NamespacedName) error {
+	existing := &corev1.Service{}
+	if err := r.Get(s.ctx, key, existing); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return client.IgnoreNotFound(r.Delete(s.ctx, existing))
 }
 
 // defaultNodePortLow and defaultNodePortHigh are Kubernetes' default
