@@ -170,8 +170,10 @@ Mark the release PR ready and merge it. Nothing else is manual.
   `X.Y.Z` straight away, even with nothing new merged: the version with no
   suffix and no further bump from labels or notes, with notes covering
   everything since the last release, its pre-releases included. Label that PR
-  `prerelease` and it becomes the next pre-release, `X.Y.Z-beta2`, instead.
-  Only the release PR's own label counts.
+  `prerelease` and it becomes the next pre-release, `X.Y.Z-beta2`, instead,
+  once something was merged since `X.Y.Z-beta1`: until then it stays at
+  `X.Y.Z`, with a note at the top saying so, and the next merge turns it into
+  `X.Y.Z-beta2`. Only the release PR's own label counts.
 - **Merging it.** The `Release` workflow sees a chart version on master with
   no tag. It checks that the chart's `version`, `appVersion` and the
   `CHANGELOG.md` section agree, builds and pushes the images
