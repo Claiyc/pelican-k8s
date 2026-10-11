@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/Claiyc/pelican-k8s/internal/gateway/app"
@@ -26,6 +27,9 @@ func main() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
 	slog.SetDefault(logger)
+	// controller-runtime's client logs through its own logger and prints a
+	// stack trace when none was ever set.
+	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
 
 	cfg, err := config.FromEnv()
 	if err != nil {

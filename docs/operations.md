@@ -43,7 +43,8 @@ owned by the gateway and overwritten on the next Panel sync.
 
 | Event | Behaviour |
 |---|---|
-| Server started | the operator creates the game pod from the current image, limits and ports; the scheduler places it, the agent moves to its node if needed, then Wings starts the process |
+| Server started | the operator creates the game pod from the current image, limits and ports; the scheduler places it, the agent moves to its node if needed, then Wings starts the process. Until then the Panel shows `offline`, and the console prints what the start waits for (the pod, a node that fits it, the volume, the image) |
+| `tls.enabled` switched | every agent pod is recreated; a running server is stopped through its game pod and started again in new pods (`RecreatePending`, reason `TransportChanged`) |
 | Server stopped (Panel, console stop command, suspension) | Wings stops the process; once it is offline the operator removes the game pod |
 | Panel edits limits | `sync` → a running server's game pod is resized in place (CPU/memory); a stopped server gets the new values at its next start. The PVC is expanded (disk) |
 | Panel changes the image | a stopped server uses it at the next start. A running one gets `RecreatePending`, and its game pod is replaced once the process is offline (a restart while pending replaces it first) |
@@ -92,6 +93,12 @@ that pod is gone; a stopped server only gets its agent pod. There is no way back
 before the upgrade. Plan the upgrade for a quiet time, and take the steps below
 first:
 
+- Scale the 1.x operator to zero before the upgrade
+  (`kubectl -n pelican-system scale deploy/<release>-operator --replicas=0`);
+  the upgrade sets the replicas again. The chart writes the 2.0 images into
+  the GameServerClass, and a 1.x operator that still holds the lease puts them
+  into the pods of stopped servers, whose agent container then fails until the
+  2.0 operator replaces the pod.
 - Scripts and runbooks that use `kubectl logs gs-<uuid>-0 -c agent` or
   `kubectl exec gs-<uuid>-0 -c agent` move to `gs-<uuid>-agent-0`.
 - Custom admission policies or SCCs that match the game pods'

@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +36,7 @@ func (r *GameServerReconciler) loadPods(s *scope) error {
 		return err
 	}
 	s.agentPod, s.pod = agent, game
+	s.gameAbsent = game == nil
 	return nil
 }
 
@@ -367,6 +369,11 @@ func (r *GameServerReconciler) gameReplicas(s *scope) (int32, error) {
 		// recreating it.
 		return 0, nil
 	}
+	if s.transportChanged {
+		// The agent cannot be asked; the shim stops the process when the pod
+		// goes (ARCHITECTURE.md 12.6).
+		return 0, nil
+	}
 	if s.agent == nil {
 		// Without the agent nothing tells whether the process still runs.
 		return 1, nil
@@ -448,6 +455,9 @@ func (r *GameServerReconciler) reconcilePods(s *scope) error {
 	}
 
 	switch {
+	case s.transportChanged:
+		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, reasonTransportChanged, "the tls setting changed; a running process is stopped and both pods are recreated")
+		return r.replaceForTransport(s)
 	case restart:
 		r.setCondition(s, v1alpha1.ConditionRecreatePending, metav1.ConditionTrue, "RestartRequested", "restart requested; the pods are recreated once the process is offline and the agent has no in-flight work")
 	case resizeRecreate:
@@ -494,6 +504,12 @@ func (r *GameServerReconciler) reconcileAgentPod(s *scope, lost *bool) error {
 		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Terminating", "agent pod is terminating")
 		return r.fence(s, pod, lost)
 	}
+	if render.PodTLS(pod, s.in.UUID()) != r.tls() {
+		s.transportChanged = true
+		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, reasonTransportChanged, "the agent pod was created for the other tls setting and is being replaced")
+		s.requeue = requeueFast
+		return nil
+	}
 	ready, ip := agentReady(pod)
 	if !ready {
 		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Starting", "agent container is not ready")
@@ -516,6 +532,7 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 	if pod == nil {
 		if s.gs.Spec.Power.Desired == v1alpha1.PowerRunning && !s.settings.Suspended {
 			r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "NoPod", "game pod does not exist yet")
+			r.announceStart(s)
 			s.requeue = requeueFast
 		} else {
 			r.setCondition(s, v1alpha1.ConditionGamePodReady, metav1.ConditionFalse, "NotRequested", "the server is stopped")
@@ -564,7 +581,42 @@ func (r *GameServerReconciler) reconcileGamePod(s *scope, lost, resizeRecreate *
 	if s.agent == nil {
 		return nil
 	}
+	r.announceStart(s)
 	return r.relayTermination(s, pod)
+}
+
+// announceStart tells the console what a start is waiting for while the game
+// pod is not up yet: until the shim runs the process the agent has nothing to
+// print and the Panel shows the server as offline. Each step is printed once,
+// when GamePodReady moves to it. An agent that cannot be told is skipped; the
+// condition carries the same text.
+func (r *GameServerReconciler) announceStart(s *scope) {
+	if s.agent == nil || s.gs.Spec.Power.Desired != v1alpha1.PowerRunning || s.settings.Suspended {
+		return
+	}
+	cur := meta.FindStatusCondition(s.gs.Status.Conditions, v1alpha1.ConditionGamePodReady)
+	if cur == nil || cur.Status == metav1.ConditionTrue {
+		return
+	}
+	if s.orig != nil {
+		if old := meta.FindStatusCondition(s.orig.Status.Conditions, v1alpha1.ConditionGamePodReady); old != nil && old.Reason == cur.Reason {
+			return
+		}
+	}
+	var msg string
+	switch cur.Reason {
+	case "NoPod":
+		msg = "Creating the game pod..."
+	case "Unschedulable":
+		msg = "The game pod cannot be scheduled yet: " + cur.Message
+	case "WaitingForVolume":
+		msg = "Waiting for the volume to attach and mount..."
+	case "Starting":
+		msg = "Pulling the image and starting the game container..."
+	default:
+		return
+	}
+	_ = s.agent.Notice(s.ctx, msg)
 }
 
 // labelSharedIP keeps the game pod's shared-IP label in step with the
@@ -652,6 +704,48 @@ func (r *GameServerReconciler) recreate(s *scope, restart, agent, game bool) err
 		s.gs.Status.Power.ObservedRestartRequest = s.gs.Spec.Power.RestartRequest
 	}
 	return nil
+}
+
+// reasonTransportChanged marks pods rendered for the other tls setting.
+const reasonTransportChanged = "TransportChanged"
+
+// replaceForTransport replaces the pods of a server whose agent pod was
+// rendered for the other tls setting (ARCHITECTURE.md 12.6). Neither the
+// operator nor the gateway can call such an agent, so nothing tells whether
+// the process is offline or the agent has work, and waiting for either would
+// wait forever. The game pod goes first: its shim stops the process on
+// SIGTERM while the agent it is connected to is still there. The agent pod
+// follows once no game pod of the old setting is left.
+func (r *GameServerReconciler) replaceForTransport(s *scope) error {
+	uuid := s.in.UUID()
+	if game := s.pod; game != nil && render.PodTLS(game, uuid) != r.tls() {
+		if game.DeletionTimestamp.IsZero() {
+			r.event(s, corev1.EventTypeNormal, "Recreate", "deleting the game pod: the tls setting changed")
+			if err := r.deletePod(s, game); err != nil {
+				return err
+			}
+		}
+		s.requeue = requeueFast
+		return nil
+	}
+	r.event(s, corev1.EventTypeNormal, "Recreate", "deleting the agent pod: the tls setting changed")
+	if err := r.deletePod(s, s.agentPod); err != nil {
+		return err
+	}
+	s.agentPod, s.agent = nil, nil
+	return nil
+}
+
+// settleProcess records the process as offline for a server without a game
+// pod. The gateway writes status.process from what the agent posts, and an
+// agent that started without a game pod has nothing to post, so a state from
+// before its predecessor went would stay.
+func (r *GameServerReconciler) settleProcess(s *scope) {
+	p := &s.gs.Status.Process
+	if !s.gameAbsent || p.State == "" || p.State == v1alpha1.ProcessOffline {
+		return
+	}
+	p.State, p.Since = v1alpha1.ProcessOffline, &s.now
 }
 
 func (r *GameServerReconciler) deleteForRecreate(s *scope, pod *corev1.Pod, kind string) error {

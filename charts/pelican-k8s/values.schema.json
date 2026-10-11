@@ -469,7 +469,7 @@
       }
     },
     "tls": {
-      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace or from cert-manager (docs/security.md). Turning it on or off recreates every agent pod, and running game pods with them through the usual RecreatePending path.",
+      "description": "TLS between the gateway, the operator, the agents and the shims, from an internal CA the operator keeps in the release namespace or from cert-manager (docs/security.md). Turning it on or off recreates every agent pod and restarts every running server; switch it at a quiet time.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

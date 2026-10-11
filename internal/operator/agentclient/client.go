@@ -128,6 +128,11 @@ func (c *Client) Activity(ctx context.Context) (*Activity, error) {
 	return &out, nil
 }
 
+// Notice prints a line from the daemon on the server's console.
+func (c *Client) Notice(ctx context.Context, message string) error {
+	return c.do(ctx, http.MethodPost, "/internal/v1/notice", map[string]any{"message": message}, nil)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var r io.Reader
 	if body != nil {

@@ -67,9 +67,11 @@ pods with the namespace UID range, `anyuid` for the installer).
   names `pelican-gateway` and `pelican-operator`. cert-manager renewing that
   CA with a new key breaks trust until every leaf renews, so give it a long
   lifetime or distribute its bundle separately (trust-manager).
-  Turning the value on or off recreates every agent pod and, through
-  `RecreatePending`, running game pods. Details, names and rotation:
-  ARCHITECTURE.md §12.6.
+  Turning the value on or off recreates every agent pod and restarts every
+  running server: the operator stops it through its game pod and starts it
+  again in new pods, and in-flight backups, installs and transfers are lost.
+  Switch it at a quiet time. Details, names and rotation: ARCHITECTURE.md
+  §12.6.
 - With `tls.enabled: false` (the default) that traffic is plain HTTP and plain
   TCP inside the cluster, protected by NetworkPolicy, bearer tokens and the
   mutual shim handshake. NetworkPolicy limits who can connect, not who can

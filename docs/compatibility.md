@@ -16,7 +16,8 @@
 | Suspension, deauthorize | ✅ | |
 | Image change at next start | ✅ | A start from stopped creates a game pod with the current image, digest pinned. A running server's pod is replaced once the process is offline. A restart without an image change reuses the pod and its digest, where Wings would pull the tag again |
 | Live resource changes | ✅ | In-place resize of the game pod; `ResizePending` when deferred. Removing a limit (Panel "unlimited") replaces the game pod once the process is offline. A stopped server reserves no game resources |
-| Start time | ⚠️ | A start schedules a pod, checks the image and runs two init containers before the process starts; longer when the agent has to move to another node |
+| Start time | ⚠️ | A start schedules a pod, checks the image and runs two init containers before the process starts; longer when the agent has to move to another node. The Panel shows `offline` until the process starts; the console prints what the start waits for |
+| File mode changes (chmod) | ⚠️ | Wings changes modes with `fchmodat2`, which needs Linux 6.6 on the node. On older kernels (RHEL 9, OpenShift 4) the file manager and SFTP refuse a chmod with an error |
 | Disk limit | ⚠️ | Wings soft limit plus the PVC hard limit; PVCs cannot shrink |
 | `/api/system` Docker fields, image prune, docker disk | ⚠️ | Stubbed |
 | Container hostname | ⚠️ | `gs-<uuid>-0`; `/etc/machine-id` is provided |

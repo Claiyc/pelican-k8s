@@ -12,6 +12,7 @@ import (
 
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
+	"github.com/pelican/wings/events"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/server"
 
@@ -174,6 +175,35 @@ func TestExitStateAuthAndBody(t *testing.T) {
 	}
 	if rec := f.do("GET", "/internal/v1/exit-state", "Bearer "+apiToken, ""); rec.Code == http.StatusNoContent {
 		t.Fatal("exit-state is POST only")
+	}
+}
+
+func TestNoticeIsPrintedOnTheConsole(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
+	if rec := f.do("POST", "/internal/v1/notice", "Bearer nope", `{"message":"x"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("wrong token: %d", rec.Code)
+	}
+	for _, body := range []string{`{not json`, `{"message":""}`} {
+		if rec := f.do("POST", "/internal/v1/notice", "Bearer "+apiToken, body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: %d", body, rec.Code)
+		}
+	}
+
+	out := make(chan []byte, 8)
+	f.srv.Events().On(out)
+	defer f.srv.Events().Off(out)
+	rec := f.do("POST", "/internal/v1/notice", "Bearer "+apiToken, `{"message":"Creating the game pod..."}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("notice: %d %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case raw := <-out:
+		e := events.MustDecode(raw)
+		if line, _ := e.Data.(string); e.Topic != server.ConsoleOutputEvent || !strings.Contains(line, "Daemon]:") || !strings.Contains(line, "Creating the game pod...") {
+			t.Fatalf("event %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("nothing was printed")
 	}
 }
 
