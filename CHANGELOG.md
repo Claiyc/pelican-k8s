@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0-beta3] - 2026-10-11
+
 ### Changed
 - An install Job no longer reserves a share of the server it installs. Its CPU request is the class's `resources.minCpu` (100m) instead of the game container's request, a quarter of the server's CPU limit by default, and its memory request is at most the class's `install.resources.memory` where the class sets it (the chart's default class: 1Gi); without that value it stays the game container's request. The limits stay `max(server, class)`. An install for a server with a large limit waited for that much free CPU on the node.
 - Lower default requests, from what the components use: gateway and operator 10m CPU and 64Mi memory each (50m and 128Mi before), and the agent pod of every server 10m and 64Mi (class `resources.agent`, 50m and 128Mi before). The memory limits stay at 512Mi. Agent pods are recreated with the new template once their server is offline.
@@ -14,6 +16,10 @@ All notable changes to this project are documented here. The format follows
 - With `tls.enabled: false`, every server that still had a certificate Secret from an earlier `tls.enabled: true` went to `Error` and was no longer driven: a server that should run stayed off. 2.0.0-beta2 deletes those Secrets, and the operator's Role allowed that only with cert-manager. The Role now allows it, and a Secret that cannot be deleted no longer fails the reconcile.
 - The operator and MetalLB rewrote every LoadBalancer Service about twenty times a second for as long as it existed. The operator replaced the Service's annotations with its own and so removed MetalLB's `metallb.io/ip-allocated-from-pool`; MetalLB set it again, and that write triggered the next reconcile. The operator now leaves annotations it did not set, records its own keys in `pelican-k8s.io/managed-annotations`, and does not write a Service that already matches. This is also what made a failing reconcile repeat several times a second.
 - A start printed "Pulling the image and starting the game container..." before the line about the volume, and again after it.
+
+### What's Changed
+* Fix the findings of the 2.0.0-beta2 live test by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/113
+* ci: keep the release PR when prerelease asks for a beta with nothing new by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/114
 
 ## [2.0.0-beta2] - 2026-10-11
 
@@ -191,7 +197,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...HEAD
+[2.0.0-beta3]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...v2.0.0-beta3
 [2.0.0-beta2]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...v2.0.0-beta2
 [2.0.0-beta1]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0-beta1
 [1.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...v1.1.0
