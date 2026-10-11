@@ -59,7 +59,7 @@ start to the next; with node-local storage it stays where the volume is. See
 | `loadBalancer.provider` | | `metallb` supplies the two annotation keys below; empty adds none |
 | `loadBalancer.ipAnnotation` | | Annotation set to the allocation IP (`metallb.io/loadBalancerIPs`) |
 | `loadBalancer.sharingAnnotation` | | Annotation allowing several Services to share an IP (MetalLB: `metallb.io/allow-shared-ip`, also set by `provider: metallb`), so servers on one IP can use different ports. Under `Local` it also groups those servers on one node; see [Planning addresses under `Local`](#planning-addresses-under-local) |
-| `loadBalancer.annotations` | | Added verbatim to exposure Services |
+| `loadBalancer.annotations` | | Added verbatim to exposure Services. The operator records the keys it set in `pelican-k8s.io/managed-annotations` and removes only those; annotations a load balancer writes itself stay |
 | `externalIPs` | | Addresses `/api/system/ips` offers the Panel for allocations. Only the default class's list is used, and only when `gateway.externalIPs` is empty |
 
 Invariant: container port = Service port = external port = Panel allocation

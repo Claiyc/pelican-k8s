@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -232,9 +233,7 @@ func (r *GameServerReconciler) reconcile(s *scope) error {
 		return err
 	}
 	r.settleProcess(s)
-	if err := r.dropUnusedTLSSecret(s); err != nil {
-		return err
-	}
+	r.dropUnusedTLSSecret(s)
 	if err := r.reconcileProcess(s); err != nil {
 		return err
 	}
@@ -401,25 +400,29 @@ func (r *GameServerReconciler) ensureCertificate(s *scope, leaf certs.Leaf) erro
 
 // dropUnusedTLSSecret deletes the agent's certificate Secret once tls is off
 // and no pod of the server mounts it any more. Only a Secret the GameServer
-// owns goes: one cert-manager wrote belongs to its Certificate.
-func (r *GameServerReconciler) dropUnusedTLSSecret(s *scope) error {
+// owns goes: one cert-manager wrote belongs to its Certificate. It is a
+// cleanup: a failure is logged and tried again at the next reconcile, and
+// never keeps the reconcile from driving the server.
+func (r *GameServerReconciler) dropUnusedTLSSecret(s *scope) {
 	if r.tls() {
-		return nil
+		return
 	}
 	uuid := s.in.UUID()
 	for _, pod := range []*corev1.Pod{s.agentPod, s.pod} {
 		if pod != nil && render.PodTLS(pod, uuid) {
-			return nil
+			return
 		}
 	}
 	sec := &corev1.Secret{}
 	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.TLSSecret(uuid)}, sec); err != nil {
-		return client.IgnoreNotFound(err)
+		return
 	}
 	if !metav1.IsControlledBy(sec, s.gs) {
-		return nil
+		return
 	}
-	return client.IgnoreNotFound(r.Delete(s.ctx, sec))
+	if err := r.Delete(s.ctx, sec); err != nil && !apierrors.IsNotFound(err) {
+		log.FromContext(s.ctx).Info("cannot delete the unused certificate Secret", "secret", sec.Name, "error", err.Error())
+	}
 }
 
 func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {
@@ -667,16 +670,72 @@ func (r *GameServerReconciler) applyService(s *scope, desired *corev1.Service) e
 		s.requeue = requeueFast
 		return nil
 	}
-	patch := client.MergeFrom(existing.DeepCopy())
+	before := existing.DeepCopy()
+	patch := client.MergeFrom(before)
 	existing.Labels = desired.Labels
-	existing.Annotations = desired.Annotations
+	existing.Annotations = mergeAnnotations(existing.Annotations, desired.Annotations)
 	existing.Spec.Ports = desired.Spec.Ports
 	existing.Spec.Selector = desired.Spec.Selector
 	existing.Spec.PublishNotReadyAddresses = desired.Spec.PublishNotReadyAddresses
 	if serviceType(desired) != corev1.ServiceTypeClusterIP && desired.Spec.ClusterIP != corev1.ClusterIPNone {
 		existing.Spec.ExternalTrafficPolicy = desired.Spec.ExternalTrafficPolicy
 	}
+	if servicePatchEmpty(before, existing) {
+		return nil
+	}
 	return r.Patch(s.ctx, existing, patch)
+}
+
+// servicePatchEmpty reports whether applyService changed nothing it sets.
+// Ports are compared without the node ports the API server assigned, which a
+// rendered Service does not carry.
+func servicePatchEmpty(before, after *corev1.Service) bool {
+	if !equality.Semantic.DeepEqual(before.Labels, after.Labels) || !equality.Semantic.DeepEqual(before.Annotations, after.Annotations) ||
+		!equality.Semantic.DeepEqual(before.Spec.Selector, after.Spec.Selector) ||
+		before.Spec.PublishNotReadyAddresses != after.Spec.PublishNotReadyAddresses ||
+		before.Spec.ExternalTrafficPolicy != after.Spec.ExternalTrafficPolicy || len(before.Spec.Ports) != len(after.Spec.Ports) {
+		return false
+	}
+	for i, p := range before.Spec.Ports {
+		p.NodePort = after.Spec.Ports[i].NodePort
+		if !equality.Semantic.DeepEqual(p, after.Spec.Ports[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// annotationManaged lists, comma-separated, the annotation keys the operator
+// set on a Service, so it can remove one it no longer wants.
+const annotationManaged = "pelican-k8s.io/managed-annotations"
+
+// mergeAnnotations returns have with the operator's annotations brought to
+// want. Annotations of others stay: a load balancer keeps its own on the
+// Service (MetalLB's metallb.io/ip-allocated-from-pool), and removing them
+// makes it write them again, and that write triggers the next reconcile, for
+// as long as the Service exists.
+func mergeAnnotations(have, want map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range have {
+		out[k] = v
+	}
+	for _, k := range strings.Split(have[annotationManaged], ",") {
+		delete(out, k)
+	}
+	delete(out, annotationManaged)
+	keys := make([]string, 0, len(want))
+	for k, v := range want {
+		out[k] = v
+		keys = append(keys, k)
+	}
+	if len(keys) > 0 {
+		sort.Strings(keys)
+		out[annotationManaged] = strings.Join(keys, ",")
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // serviceType applies the API server's ClusterIP default, so a rendered Service

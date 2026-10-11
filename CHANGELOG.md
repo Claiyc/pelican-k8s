@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- With `tls.enabled: false`, every server that still had a certificate Secret from an earlier `tls.enabled: true` went to `Error` and was no longer driven: a server that should run stayed off. 2.0.0-beta2 deletes those Secrets, and the operator's Role allowed that only with cert-manager. The Role now allows it, and a Secret that cannot be deleted no longer fails the reconcile.
+- The operator and MetalLB rewrote every LoadBalancer Service about twenty times a second for as long as it existed. The operator replaced the Service's annotations with its own and so removed MetalLB's `metallb.io/ip-allocated-from-pool`; MetalLB set it again, and that write triggered the next reconcile. The operator now leaves annotations it did not set, records its own keys in `pelican-k8s.io/managed-annotations`, and does not write a Service that already matches. This is also what made a failing reconcile repeat several times a second.
+- A start printed "Pulling the image and starting the game container..." before the line about the volume, and again after it.
+
 ## [2.0.0-beta2] - 2026-10-11
 
 ### Added

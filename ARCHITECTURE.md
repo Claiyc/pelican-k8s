@@ -1475,6 +1475,13 @@ gets no affinity. With more than one node and no match, the game pod is not pinn
 (`AllocationIPNotOnNode`) names the address; the server keeps running. With
 `externalTrafficPolicy: Cluster` every node forwards the NodePort and the game pod is not pinned.
 
+**Annotations.** The operator sets the class's annotations on an exposure Service and records their
+keys in `pelican-k8s.io/managed-annotations`. On later reconciles it changes and removes only those
+keys: a load balancer keeps annotations of its own on the Service (MetalLB's
+`metallb.io/ip-allocated-from-pool`), and removing one makes it write it again, which triggers the
+next reconcile. A Service whose labels, annotations, selector, ports and traffic policy already match
+is not written.
+
 **Shared addresses (LoadBalancer with `Local` and `sharingAnnotation`).** Several servers can use one
 allocation IP on different ports, each with its own Service. The grouping below follows MetalLB, the
 load balancer `provider` supports; a sharing annotation set through `loadBalancer.annotations` instead
@@ -1654,7 +1661,7 @@ enforce the workload shapes:
 | Component | Permissions |
 |---|---|
 | Gateway | Servers namespace: `gameservers` get/list/watch/create/update/patch/delete; `gameservers/status` get/update/patch; `gameservers/finalizers` update; `configmaps`, `secrets` get/list/watch/create/update/patch; `pods` get/list/watch. Release namespace: `secrets` get on the SFTP host key Secret only (`gateway.sftp.hostKeySecret`), and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes` get/list/watch; MetalLB `ipaddresspools` get/list with `gateway.metallb.discoverPools` |
-| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/patch/delete (patch keeps the shared-IP label of §9.3 current) and `pods/resize` update/patch; `secrets` get/list/watch/create/update; `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also `secrets` delete (cert-manager leaves a deleted server's certificate Secret behind) and cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
+| Operator | Servers namespace: `gameservers` (+ `status`, `finalizers`) get/list/watch/update/patch; `statefulsets`, `jobs`, `networkpolicies`, `persistentvolumeclaims`, `services`, `events` full; `pods` get/list/watch/patch/delete (patch keeps the shared-IP label of §9.3 current) and `pods/resize` update/patch; `secrets` get/list/watch/create/update/delete (delete: the agents' certificate Secrets once `tls.enabled` is off again, and the one cert-manager leaves behind for a deleted server); `configmaps` get/list/watch; `volumesnapshots` get/list/watch/create/delete; `leases`. With `tls.enabled` and cert-manager also cert-manager `certificates` get/create/update/delete. Release namespace: `leases`; `events` create/patch; with `tls.enabled` and without cert-manager, `secrets` get/update on the internal CA and gateway certificate Secrets only, and create, which Kubernetes cannot limit by name. Cluster: `gameserverclasses`, `nodes`, `namespaces` get/list/watch |
 | Agent, game, installer ServiceAccounts | none; no ServiceAccount token is mounted in agent pods, game pods or install Jobs |
 
 ### 12.4 NetworkPolicies
