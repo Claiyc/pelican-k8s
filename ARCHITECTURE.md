@@ -1502,7 +1502,9 @@ delivers only to pods on that node. So for such a server the operator:
   Service, load balancer address and port on the node's external bridge, so of a port that one Service
   carries as TCP and UDP it forwards only the protocol listed last under `Local` and drops the other
   (seen on OpenShift 4.22: UDP games worked, a Minecraft server on the address answered no TCP
-  connection). Two Services do not collide. `ExposureReady` waits for both to have the address.
+  connection). Two Services do not collide. `ExposureReady` waits for both to have the same address
+  (`Pending` while one has none, `AddressMismatch` when they differ) and `status.endpoints` is empty
+  until then.
   Without a sharing annotation two Services cannot get one address, so there one Service carries both
   protocols
 - adds a required pod affinity (`kubernetes.io/hostname`) toward the game pods with the same label. The

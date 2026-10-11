@@ -572,16 +572,28 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	if existing.Spec.Type == corev1.ServiceTypeLoadBalancer {
 		ips = ingressAddresses(existing)
 		if len(ips) > 0 && udp != nil {
-			// Both halves of a split exposure need the address.
+			// Both halves of a split exposure need the address, and the same
+			// one: players reach a port by one address whatever the protocol.
 			half := &corev1.Service{}
 			if err := r.Get(s.ctx, udpKey, half); err != nil {
 				return err
 			}
-			if len(ingressAddresses(half)) == 0 {
+			other := ingressAddresses(half)
+			if len(other) > 0 && !sameAddresses(ips, other) {
+				s.gs.Status.Endpoints = nil
+				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, reasonAddressMismatch,
+					fmt.Sprintf("the TCP Service has %s and the UDP Service %s; the load balancer must give both the same address (check its sharing annotation)",
+						strings.Join(ips, ", "), strings.Join(other, ", ")))
+				s.requeue = requeueFast
+				return nil
+			}
+			if len(other) == 0 {
 				ips = nil
 			}
 		}
 		if len(ips) == 0 {
+			// Nothing is published while an address is missing.
+			s.gs.Status.Endpoints = nil
 			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "Pending", pendingMessage(s))
 			s.requeue = requeueFast
 			return nil
@@ -594,6 +606,30 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	}
 	r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
 	return nil
+}
+
+// reasonAddressMismatch marks a split exposure whose two Services were given
+// different addresses.
+const reasonAddressMismatch = "AddressMismatch"
+
+// sameAddresses reports whether two Services have the same set of addresses.
+func sameAddresses(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		seen[v]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // ingressAddresses returns the addresses a load balancer gave a Service.
