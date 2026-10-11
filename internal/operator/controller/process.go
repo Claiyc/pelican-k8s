@@ -140,10 +140,39 @@ func (r *GameServerReconciler) reconcileProcess(s *scope) error {
 					return err
 				}
 			}
+			if gs.Spec.Power.Kill {
+				if err := r.killGamePod(s); err != nil {
+					return err
+				}
+			}
 			gs.Status.Power.ObservedGeneration = gs.Spec.Power.Generation
 		}
 	}
 	return r.reconcileInstall(s)
+}
+
+// killGracePeriod is the grace period of a game pod that goes with a kill.
+const killGracePeriod int64 = 1
+
+// killGamePod deletes the game pod of a killed server with almost no grace
+// period. The kill ends the process, but Wings may start it again at once: a
+// restart that was waiting for the process to stop goes on to its start. That
+// start lands in a pod the operator is already removing, whose shim then
+// stops the process with the egg's stop command for the whole grace period,
+// which a server that is still starting may ignore. A kill means the process
+// goes now, so its pod does too.
+func (r *GameServerReconciler) killGamePod(s *scope) error {
+	if s.pod == nil {
+		return nil
+	}
+	grace := killGracePeriod
+	if err := r.Delete(s.ctx, s.pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	r.event(s, corev1.EventTypeNormal, "Killed", "deleted game pod %s with the kill", s.pod.Name)
+	s.pod = nil
+	s.requeue = requeueFast
+	return nil
 }
 
 func (r *GameServerReconciler) power(s *scope, action string) error {

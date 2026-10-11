@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A kill sent while a restart was waiting for the process to stop did not stop the server: it stayed at `stopping` until a second kill or the end of the game pod's grace period (11 minutes by default). Wings lets the kill pass and the waiting restart then starts the process again; that start landed in a game pod the operator was already removing, whose shim stopped it with the egg's stop command, which a server that is still starting may ignore. A kill now deletes the game pod with a grace period of one second.
+
 ## [2.0.0-beta3] - 2026-10-11
 
 ### Changed

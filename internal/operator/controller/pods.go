@@ -369,6 +369,10 @@ func (r *GameServerReconciler) gameReplicas(s *scope) (int32, error) {
 		// recreating it.
 		return 0, nil
 	}
+	if s.gs.Spec.Power.Kill && s.gs.Spec.Power.Generation != s.gs.Status.Power.ObservedGeneration {
+		// A kill takes the pod with it (killGamePod); it is not recreated.
+		return 0, nil
+	}
 	if s.transportChanged {
 		// The agent cannot be asked; the shim stops the process when the pod
 		// goes (ARCHITECTURE.md 12.6).
