@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0-beta4] - 2026-10-11
+
 ### Added
 - Chart value `extraClasses`: more GameServerClasses, keyed by name, each `defaultClass.spec` deep-merged with the entry. The chart sets `images`, `agentConfigMap`, the ServiceAccounts and `agentPriorityClassName` on them as on the default class, so they follow every upgrade; a class created by hand has to have its `images` copied after each one. Example: `burst: {resources: {memoryRequestPercentOfLimit: 30}}`, a class for mostly idle servers that reserves 30% of each server's memory limit.
 
@@ -16,6 +18,15 @@ All notable changes to this project are documented here. The format follows
 - An install Job that timed out, was deleted or was evicted was reported as a finished install, by default a successful one: the shim wrote the killed script's exit code (143), and the installer took it as the result. Recent Kubernetes versions mark such a Job failed only after its pod has ended, so asking the gateway first did not help. The shim now writes no exit code when its pod is terminated and exits non-zero, so the Job fails and the installer reports the failure (or drops the result of a superseded generation). An exit code is also the result only once the gateway confirms that the generation is current and its Job did not fail, and the installer keeps waiting while the gateway does not answer.
 - A Reinstall deleted the previous generation's install Job even when it had already finished, so a failed Job's logs did not stay for their hour. Only an in-flight Job is deleted now.
 - A shim connection that a newer one replaced could still be handed to the agent once, in the moment between its close and its read loop ending; the agent's first call on it then failed. The listener now marks a connection as replaced before it closes it, and never hands out a marked one. This also made `TestAcceptSkipsDeadConnections` fail now and then.
+
+### What's Changed
+* operator: one exposure Service per protocol on a shared LoadBalancer address by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/117
+* operator: delete the game pod with a kill by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/116
+* agent: end a superseded install, so a Reinstall during an install works by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/118
+* chart: extraClasses — more GameServerClasses from the default class by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/121
+* shim: offer a newer connection only once the replaced one has ended by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/119
+* shim, operator: report a terminated install Job as failed by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/122
+* docs: a class switch that changes only resources resizes the running pod in place by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/123
 
 ## [2.0.0-beta3] - 2026-10-11
 
@@ -208,7 +219,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta4...HEAD
+[2.0.0-beta4]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...v2.0.0-beta4
 [2.0.0-beta3]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...v2.0.0-beta3
 [2.0.0-beta2]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...v2.0.0-beta2
 [2.0.0-beta1]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0-beta1
