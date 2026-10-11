@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0-beta1] - 2026-10-11
+
 ### Added
 - Incoming server transfers: the Panel's Transfer action moves a server from a Docker Wings node to the cluster. The gateway creates the server without an install, its agent receives the files, and the result is reported to the Panel; a failed transfer removes the copy and its volume, whatever the class `deletionPolicy`. Transfers away from the cluster still answer `501`.
 
@@ -33,6 +35,25 @@ All notable changes to this project are documented here. The format follows
 - Open consoles survive an agent pod replacement: the gateway holds the browser's websocket for up to `gateway.agentWait` (default `120s`), moves it to the new agent and asks the Panel for a fresh token. File-manager and other HTTP calls wait up to 10 s for the new agent.
 - `tls.enabled` (default `false`) encrypts the traffic between the gateway, the operator, the agents and the shims with TLS 1.3 from an internal CA the operator keeps in Secret `<release>-ca` (#76). The gateway and the operator present client certificates to agents in addition to the agent token, the agent's remote API calls verify the gateway, and the shim verifies its agent. The operator issues and renews the certificates (`gs-<uuid>-tls`, `<release>-gateway-tls`); the components reload them without a restart. `tls.ca.rotation.enabled` (default `false`) replaces the internal CA automatically before it expires, without restarts, and `tls.certManager.enabled` (default `false`) issues every certificate through cert-manager instead (a configured issuer or a chart-created self-signed CA). Agents accept only the gateway's and the operator's client certificates.
 - The *Placement* workflow (`hack/e2e-placement.sh`, `test/placement`) runs the placement scenarios on a kind cluster with three workers.
+
+### What's Changed
+* chart: run gateway and operator highly available by default by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/77
+* charts: add values.schema.json to both charts by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/79
+* ci: cancel superseded PR runs and skip PR image builds by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/84
+* ci: release as a pre-release when the release PR is labelled prerelease by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/96
+* v2: run every server as an agent pod and a game pod (2.0) by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/85
+* ci: keep the docs on the last release during a pre-release and open the release PR after it by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/97
+* operator: let servers share a MetalLB address under externalTrafficPolicy Local by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/98
+* shim: bound unauthenticated connections to the agent's shim port by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/101
+* operator: keep 1.x servers in their power state across the 2.0 upgrade by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/99
+* security: let shared clusters stop agent pods from preempting other pods by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/102
+* docs: list the HA chart defaults and the values schema in the changelog by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/100
+* Accept incoming server transfers from other Wings nodes by @jadrian2006 in https://github.com/Claiyc/pelican-k8s/pull/104
+* operator: delete a failed transfer's copy with its volume by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/105
+* gateway: ask for the console token after the agent's boot second by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/106
+
+### New Contributors
+* @jadrian2006 made their first contribution in https://github.com/Claiyc/pelican-k8s/pull/104
 
 ## [1.1.0] - 2026-10-06
 
@@ -140,7 +161,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...HEAD
+[2.0.0-beta1]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0-beta1
 [1.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.0...v1.0.1
