@@ -380,8 +380,9 @@ clients where the protocol allows it:
 
 - **Websockets:** an open console's connection stays open for up to `gateway.agentWait` (default
   120 s). Frames from the browser are dropped meanwhile, except `set state`, which the gateway
-  handles itself (§5.5). Once the new agent is available the gateway dials its websocket and sends
-  the browser `token expiring`. The Panel UI answers that event with a fresh `auth` frame, which the
+  handles itself (§5.5). Once the new agent is available the gateway dials its websocket and, at the
+  start of the next whole second, sends the browser `token expiring` (a token's `iat` is in whole
+  seconds, so one issued in the second the agent booted would fail the boot cutoff). The Panel UI answers that event with a fresh `auth` frame, which the
   gateway verifies, re-signs and forwards like any other, so the session passes the new agent's boot
   cutoff. Console history after the switch comes from the console log on the volume (§6.4). When the
   wait runs out, the browser gets `daemon error` and close code 1013. A websocket opened during the

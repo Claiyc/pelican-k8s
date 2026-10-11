@@ -691,6 +691,7 @@ func TestConsoleHeldAcrossAgentReplacement(t *testing.T) {
 	}
 
 	// The new pod has a new address; the test dialer reaches the same fake agent.
+	booted := time.Now()
 	e.createAgentPod("pod-2", "127.0.0.2")
 	e.waitAgent()
 	e.dialedMu.Lock()
@@ -701,6 +702,10 @@ func TestConsoleHeldAcrossAgentReplacement(t *testing.T) {
 	}
 	if m := readMsg(t, conn); m.Event != "token expiring" {
 		t.Fatalf("browser got %+v, want token expiring", m)
+	}
+	// A token issued now has an iat (whole seconds) the new agent accepts.
+	if iat := time.Now().Truncate(time.Second); !iat.After(booted) {
+		t.Fatalf("token expiring came at %s, in the second the new agent booted (%s)", time.Now().Format(time.StampMilli), booted.Format(time.StampMilli))
 	}
 	send(t, conn, "auth", token(t, nodeToken, validClaims("*")))
 	var m Message

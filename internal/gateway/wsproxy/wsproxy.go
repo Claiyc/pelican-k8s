@@ -280,7 +280,10 @@ func (s *session) agentReplaced(ctx context.Context, clientDone <-chan struct{})
 // reattach waits up to the configured agentWait for the new agent and
 // dials it. The browser is then asked for a fresh token ("token expiring"),
 // which the new agent needs: its boot cutoff rejects tokens issued before it
-// started. When the wait runs out the browser gets "daemon error" and 1013.
+// started. The cutoff is exact but a token's iat is in whole seconds, so a
+// token issued in the second the agent booted is rejected too; the request
+// waits for the next second. When the wait runs out the browser gets
+// "daemon error" and 1013.
 func (s *session) reattach(ctx context.Context, clientDone <-chan struct{}) bool {
 	deadline := time.NewTimer(s.p.agentWait())
 	defer deadline.Stop()
@@ -307,6 +310,13 @@ func (s *session) reattach(ctx context.Context, clientDone <-chan struct{}) bool
 				continue
 			}
 			s.attach(conn, t)
+			select {
+			case <-clientDone:
+				return false
+			case <-ctx.Done():
+				return false
+			case <-time.After(time.Until(time.Now().Truncate(time.Second).Add(time.Second))):
+			}
 			_ = s.writeClient(Message{Event: "token expiring"})
 			return true
 		}
