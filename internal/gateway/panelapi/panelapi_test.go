@@ -23,6 +23,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -80,7 +81,14 @@ func newFixture(t *testing.T) *fixture {
 			corev1.ResourceEphemeralStorage: resource.MustParse("100Gi"),
 		}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(cls, node).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(cls, node).
+		// The fake ignores the context; the API server does not.
+		WithInterceptorFuncs(interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.Delete(ctx, obj, opts...)
+		}}).Build()
 	st := store.New(c, ns, "default")
 
 	fp := fakepanel.New(nodeID, nodeToken)
@@ -830,9 +838,11 @@ func TestIncomingTransferRejections(t *testing.T) {
 }
 
 func TestIncomingTransferWithoutAgentRemovesOnlyItsOwnServer(t *testing.T) {
-	old := TransferAgentWait
-	TransferAgentWait = 50 * time.Millisecond
-	t.Cleanup(func() { TransferAgentWait = old })
+	// The wait for the agent outlasts a cluster step's deadline, as the real
+	// 3 minutes outlast the 60 seconds: the removal must not run out of time.
+	oldWait, oldCall := TransferAgentWait, TransferCallTimeout
+	TransferAgentWait, TransferCallTimeout = 400*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { TransferAgentWait, TransferCallTimeout = oldWait, oldCall })
 	tok := signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(time.Minute)))
 	ctx := context.Background()
 

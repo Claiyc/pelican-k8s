@@ -155,6 +155,10 @@ func (h *Handler) unsupported(w http.ResponseWriter, r *http.Request) {
 // the server it creates: a new volume and pod, not a replacement.
 var TransferAgentWait = 3 * time.Minute
 
+// TransferCallTimeout bounds each cluster and Panel step of an incoming
+// transfer (creating its server, removing it again).
+var TransferCallTimeout = 60 * time.Second
+
 // transfers receives a server another node pushes here (a Panel transfer).
 // The Panel signs the push with this node's token and names the server in the
 // subject. The server is created without an install and the request, re-signed
@@ -177,7 +181,7 @@ func (h *Handler) transfers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Forbidden.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), TransferCallTimeout)
 	defer cancel()
 	created, err := h.Sync.AdoptForTransfer(ctx, uuid)
 	if err != nil {
@@ -197,23 +201,26 @@ func (h *Handler) transfers(w http.ResponseWriter, r *http.Request) {
 	h.Log.Info("incoming transfer", "uuid", uuid)
 	// No agent, no transfer: the source reports the failure to the Panel itself
 	// and no result will reach the remote API, so remove what this push created.
-	giveUp := func() {
+	giveUp := func(ctx context.Context) {
 		if !created {
 			return
 		}
+		// Its own deadline: the wait for the agent can outlast the adoption's.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TransferCallTimeout)
+		defer cancel()
 		if err := h.Sync.FinishTransfer(ctx, uuid, false); err != nil {
 			h.Log.Warn("cannot remove the server of an abandoned transfer", "uuid", uuid, "error", err)
 		}
 	}
 	t, err := h.Agents.WaitFor(r.Context(), uuid, TransferAgentWait)
 	if err != nil {
-		giveUp()
+		giveUp(r.Context())
 		h.agentUnavailable(w, err)
 		return
 	}
 	resigned, err := jwtx.Resign(raw, []byte(t.Token))
 	if err != nil {
-		giveUp()
+		giveUp(r.Context())
 		writeError(w, 500, err.Error())
 		return
 	}
