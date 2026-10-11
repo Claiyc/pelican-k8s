@@ -256,7 +256,7 @@ jobs:
         run: |
           helm lint charts/pelican-k8s --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token
           helm template t charts/pelican-k8s --kube-version 1.35.0 --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token > /dev/null
-          helm template t charts/pelican-k8s --kube-version 1.35.0 --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token --set openshift.enabled=true --set gateway.route.enabled=true --set gateway.route.host=wings.example.com > /dev/null
+          helm template t charts/pelican-k8s --kube-version 1.35.0 --set gateway.panelURL=https://panel.example.com --set gateway.nodeTokenID=id --set gateway.nodeToken=token --set openshift.enabled=true --set gateway.route.enabled=true --set gateway.route.host=wings.example.com --set extraClasses.burst.resources.memoryRequestPercentOfLimit=30 > /dev/null
       - name: Lint pelican-panel
         run: |
           helm lint charts/pelican-panel

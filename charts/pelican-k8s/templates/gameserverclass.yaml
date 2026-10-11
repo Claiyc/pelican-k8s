@@ -1,22 +1,11 @@
 {{- if .Values.defaultClass.create }}
-{{- $spec := deepCopy .Values.defaultClass.spec }}
-{{- $_ := set $spec "images" (dict "shim" (include "pelican-k8s.image" (dict "root" . "name" "shim")) "agent" (include "pelican-k8s.image" (dict "root" . "name" "agent")) "pullPolicy" .Values.image.pullPolicy) }}
-{{- $_ = set $spec "agentConfigMap" "pelican-agent-config" }}
-{{- $_ = set $spec "serviceAccountName" "pelican-game" }}
-{{- $_ = set $spec "agentServiceAccountName" "pelican-agent" }}
-{{- $_ = set $spec "agentPriorityClassName" .Values.agentPriorityClass.name }}
-{{- if .Values.openshift.enabled }}
-{{- $_ = set $spec.security "useNamespaceUIDRange" true }}
-{{- $_ = set $spec.install "disableSeccomp" true }}
+{{ include "pelican-k8s.gameServerClass" (dict "root" . "name" .Values.defaultClass.name "spec" (deepCopy .Values.defaultClass.spec)) }}
 {{- end }}
-{{- if not $spec.failover.forceDeleteAfter }}
-{{- $_ = unset $spec.failover "forceDeleteAfter" }}
+{{- /* Extra classes: the default class's spec with the entry merged over it (maps merge; lists and scalars replace). */}}
+{{- range $name, $override := .Values.extraClasses }}
+{{- if eq $name $.Values.defaultClass.name }}
+{{- fail (printf "extraClasses.%s: this is defaultClass.name, the class of every GameServer that names none" $name) }}
 {{- end }}
-apiVersion: pelican-k8s.io/v1alpha1
-kind: GameServerClass
-metadata:
-  name: {{ .Values.defaultClass.name }}
-  labels: {{- include "pelican-k8s.labels" . | nindent 4 }}
-spec:
-{{ toYaml $spec | indent 2 }}
+---
+{{ include "pelican-k8s.gameServerClass" (dict "root" $ "name" $name "spec" (mergeOverwrite (deepCopy $.Values.defaultClass.spec) (deepCopy (default (dict) $override)))) }}
 {{- end }}

@@ -596,6 +596,13 @@
         }
       }
     },
+    "extraClasses": {
+      "description": "More GameServerClasses, keyed by name. Each is defaultClass.spec deep-merged with the entry (maps merge; lists and scalars replace), with the fields the chart sets on the default class (images, agentConfigMap, the ServiceAccounts, agentPriorityClassName). See docs/classes.md.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/definitions/dnsSubdomain"},
+      "additionalProperties": {"$ref": "#/definitions/gameServerClassSpec"},
+      "default": {}
+    },
     "admissionPolicies": {
       "description": "ValidatingAdmissionPolicies enforcing the restricted shape of game and agent pods and the volume allow-list of install Jobs.",
       "type": "object",
@@ -895,7 +902,7 @@
       }
     },
     "gameServerClassSpec": {
-      "description": "Spec of the default GameServerClass (GameServerClassSpec in api/v1alpha1). images, agentConfigMap, serviceAccountName, agentServiceAccountName and agentPriorityClassName are filled in by the chart and cannot be set here; agentPriorityClassName comes from agentPriorityClass.name.",
+      "description": "Spec of a GameServerClass the chart renders: defaultClass.spec, and each extraClasses entry before it is merged over defaultClass.spec (GameServerClassSpec in api/v1alpha1). images, agentConfigMap, serviceAccountName, agentServiceAccountName and agentPriorityClassName are filled in by the chart and cannot be set here; agentPriorityClassName comes from agentPriorityClass.name.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

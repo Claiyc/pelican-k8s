@@ -228,14 +228,36 @@ with a clear message otherwise.
 
 ## Multiple classes
 
-Create more classes (`kubectl apply`) and point servers at them by editing
-`spec.className` on the `GameServer` (the gateway only sets it on creation).
-Typical uses: a class per storage tier, a `HostPort` class for a few fixed
-ports, or a class with `snapshotSchedule` for production servers.
+Point servers at another class by editing `spec.className` on the `GameServer`
+(the gateway only sets it on creation). Typical uses: a class per storage tier,
+a `HostPort` class for a few fixed ports, a class with `snapshotSchedule` for
+production servers, or a class that reserves less memory for servers that are
+mostly idle.
 
-The chart fills `images`, `agentConfigMap`, the ServiceAccounts and
-`agentPriorityClassName` into the default class only (these fields cannot be
-set under `defaultClass.spec`). A class you create yourself has no `images`
+The chart creates more classes from `extraClasses` in the values, keyed by
+name. Each is the default class with some fields changed: `defaultClass.spec`
+deep-merged with the entry, where maps merge and lists and scalars (`false` and
+`0` included) replace. The chart sets `images`, `agentConfigMap`, the
+ServiceAccounts and `agentPriorityClassName` on these as on the default class,
+so they follow every upgrade and every change to `defaultClass.spec`:
+
+```yaml
+extraClasses:
+  burst:        # mostly idle servers: reserve 30% of the memory limit
+    resources:
+      memoryRequestPercentOfLimit: 30
+```
+
+A server in `burst` keeps its Panel memory limit, so it can grow to it when
+players arrive, but the scheduler only counts 30% of it: an over-full node then
+evicts rather than throttles (memory is incompressible). A server changes class
+like any class change: a running one gets its new game pod once the process is
+offline.
+
+A class can also be created by hand (`kubectl apply`). The chart fills
+`images`, `agentConfigMap`, the ServiceAccounts and `agentPriorityClassName`
+into the classes it renders only (these fields cannot be set under
+`defaultClass.spec` or `extraClasses`). A class you create yourself has no `images`
 and no `entrypointOverrides`: copy both from the default class
 (`kubectl get gameserverclass default -o yaml`), and update `images` after
 every chart upgrade. Set `agentPriorityClassName` when
