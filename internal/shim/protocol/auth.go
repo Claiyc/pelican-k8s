@@ -223,6 +223,12 @@ func (l *Listener) authenticate(conn net.Conn) {
 	l.mu.Lock()
 	prev := l.current
 	l.current = c
+	if prev != nil {
+		// Marked before it is closed and before the newer one is offered:
+		// Accept skips a marked connection, so it never hands out one that a
+		// newer one replaced, however the two handshakes interleave.
+		prev.superseded.Store(true)
+	}
 	l.mu.Unlock()
 	if prev != nil {
 		_ = prev.Close()
@@ -239,9 +245,12 @@ func (l *Listener) Accept(ctx context.Context) (*Client, error) {
 	for {
 		select {
 		case c := <-l.ready:
+			if c.superseded.Load() {
+				continue // replaced before it was picked up
+			}
 			select {
 			case <-c.Done():
-				continue // replaced or dropped before it was picked up
+				continue // dropped before it was picked up
 			default:
 				return c, nil
 			}

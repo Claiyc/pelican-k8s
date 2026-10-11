@@ -29,6 +29,11 @@ type Client struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	err       error
+
+	// superseded is set by a Listener the moment a newer connection takes
+	// this one's place, before it closes this one. Done only closes once the
+	// read loop has seen the close, a moment later.
+	superseded atomic.Bool
 }
 
 // NewClient wraps an established connection.
