@@ -148,7 +148,9 @@ type ExposureSpec struct {
 	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
 	LoadBalancer          LoadBalancerSpec                    `json:"loadBalancer,omitempty"`
 	// ExternalIPs are the addresses advertised to the Panel through /api/system/ips.
-	// Empty means node addresses (NodePort, HostPort) or the observed LoadBalancer ingress IPs.
+	// Only the default class's list is used, when the gateway has none
+	// configured; empty falls back to the MetalLB pool addresses (when
+	// discovered), then to the node addresses.
 	ExternalIPs []string `json:"externalIPs,omitempty"`
 }
 

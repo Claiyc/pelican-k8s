@@ -9,7 +9,7 @@ make generate         # deepcopy + CRDs after editing api/v1alpha1 (commit the o
 make images           # docker build of the four images (build/*.Dockerfile)
 ```
 
-Go 1.27 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
+Go 1.27.2 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
 CI builds and pushes both architectures on pushes to master; on a pull
 request it builds the images for `linux/amd64` only (for the Trivy scan) and
 cross-compiles the binaries for `linux/arm64`. A new push to a pull request
@@ -20,7 +20,7 @@ cancels the CI, Contract and CodeQL runs still going for the previous one.
 | Suite | Command | Needs |
 |---|---|---|
 | Unit | `go test ./...` | nothing. Covers the shim (supervisor, protocol, cgroup parsing, prepare/probe/install-run), the shim environment against a live supervisor, the Job installer, object rendering and resource mapping, the reconciler (fake client, fake agent) and the gateway (fake Panel, fake agent, fake cluster) |
-| Fuzz | `go test -run '^$' -fuzz FuzzDecode ./internal/shim/protocol` (likewise `FuzzWrite` in `internal/shim/ringbuf`, `FuzzVerify` in `internal/gateway/jwtx`) | nothing. The seed corpora also run as ordinary tests under `go test ./...`; CI fuzzes each target for 40s. A crasher lands in the package's `testdata/fuzz/` — commit it as a regression case with the fix |
+| Fuzz | `go test -run '^$' -fuzz FuzzDecode ./internal/shim/protocol` (likewise `FuzzHandshake` in the same package, `FuzzWrite` in `internal/shim/ringbuf`, `FuzzVerify` in `internal/gateway/jwtx`) | nothing. The seed corpora also run as ordinary tests under `go test ./...`; CI fuzzes each target for 40s. A crasher lands in the package's `testdata/fuzz/` — commit it as a regression case with the fix |
 | Docs | `go test ./test/docs/` | nothing. Fails when a documented `helm install --version` or an example's `targetRevision` names a version the tree does not release, so bumping a chart to a release has to bump the docs in the same change. While `charts/pelican-k8s` is at a pre-release, the docs stay on the last release, the newest `CHANGELOG.md` section without a suffix |
 | Supply chain | `go test ./test/supplychain/` | nothing. Asserts every action is SHA-pinned with a version comment, every base image digest-pinned, and that no workflow grants a write token above the job that needs it |
 | Upstream | `go test ./test/upstream/` | the pinned Wings module. Diffs Wings' route table, remote client calls and `ProcessEnvironment` against what the gateway and agent handle |
@@ -74,16 +74,22 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | `internal/shim/protocol` | JSON-lines protocol, token handshake, the agent's listener and client |
 | `internal/shim/cgroup` | cgroup v2 and `/proc/net/dev` sampling |
 | `internal/shim/prepare` | PVC layout, entrypoint probe, install-run |
+| `internal/shim/ringbuf` | the console history buffer |
 | `internal/agent/app` | Wings boot sequence without Docker |
 | `internal/agent/shimenv` | `environment.ProcessEnvironment` over the shim |
 | `internal/agent/installer` | Job-backed `server.Installer` |
+| `internal/agent/routes` | agent-only HTTP routes next to Wings' router (probes, `prestop`, `shim`, `activity`, `exit-state`, the incoming-transfer target) |
+| `internal/agent/gatewayclient` | the agent's calls to the gateway's install coordination |
 | `internal/operator/render` | pure object builders (agent and game StatefulSets, Services, NetworkPolicies, Jobs) and resource mapping |
-| `internal/operator/controller` | reconciler, game pod lifecycle and placement, install state machine, finalizer, snapshots |
+| `internal/operator/controller` | reconciler, game pod lifecycle and placement (shared LoadBalancer addresses included), install state machine, 1.x migration, finalizer, snapshots |
+| `internal/operator/agentclient`, `imageresolve`, `names`, `settings` | the agent's Wings API client, egg image entrypoint and digest lookup, object names, parsing the Panel's settings |
 | `internal/operator/certs` | the internal CA and the certificate Secrets the operator issues from it, or the agent Certificates with cert-manager |
 | `internal/pki` | certificate issuing, reloading key pairs and CA bundles, the dialer that reaches an agent pod by its certificate name |
 | `internal/gateway/panelapi` | Wings API towards the Panel and browsers |
 | `internal/gateway/remoteapi` | Panel remote API towards agents |
-| `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync |
+| `internal/gateway/serversync` | Panel → spec, agent configuration assembly, resync, incoming transfers |
+| `internal/gateway/agents`, `store`, `panel` | resolving and proxying to agents, the cluster cache and the gateway's writes, the Panel remote API client |
+| `internal/gateway/metallb` | the addresses MetalLB hands out, offered in the Panel's allocation form |
 | `internal/gateway/crashwatch` | sets `desired: Stopped` for a server whose process crashed and stayed offline (ARCHITECTURE.md 8.3) |
 | `internal/gateway/wsproxy`, `sftprelay`, `jwtx` | websocket relay, SFTP relay, JWT re-signing |
 | `test/placement`, `hack/e2e-placement.sh`, `hack/kind-placement.yaml` | the placement suite on kind (Tests above; `Placement` workflow) |
@@ -95,7 +101,7 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 |---|---|---|
 | Go modules, GitHub Actions, base images | Dependabot weekly PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
 | Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
-| Pelican Panel | The same workflow compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
+| Pelican Panel | The same workflow runs `hack/check-panel-contract.sh` against the latest Panel image (diffing it with `docs/wings-panel-contract.md`), compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go, the `security-and-quality` suite) on pushes, PRs and weekly. golangci-lint in CI in two stages (`make lint`): the whole tree must pass the linters in the Makefile's `LINT_GATE`, and code changed since the base branch must pass every linter in `.golangci.yml`. Every finding of every linter on the existing code is uploaded as SARIF and fails nothing (`make lint-all` lists the same locally) | Security → Code scanning, CI job *golangci-lint* |
@@ -181,8 +187,8 @@ Mark the release PR ready and merge it. Nothing else is manual.
   fine-grained PAT or GitHub App token with *Contents* and *Pull requests*
   write access to this repository. Either way the workflow runs `test/docs` on
   the prepared tree before pushing it, and the repository setting *Allow
-  GitHub Actions to create and approve pull requests* must be on. CI, CodeQL
-  and Contract skip the release PR while it is a draft; marking it ready
+  GitHub Actions to create and approve pull requests* must be on. CI, CodeQL,
+  Contract and Placement skip the release PR while it is a draft; marking it ready
   starts them.
 - **By hand.** `hack/release-prep.sh [X.Y.Z]` prepares the same change locally
   (`gh` must be logged in for the notes). Pushing a `vX.Y.Z` tag releases

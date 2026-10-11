@@ -121,11 +121,11 @@ Set in the class (`defaultClass.spec.exposure.mode`):
 | Mode | Use when | Panel allocations |
 |---|---|---|
 | `LoadBalancer` (default) | any cluster with a LB implementation (cloud, MetalLB, kube-vip) | IP = LB pool IP, any port. `loadBalancer.ipAnnotation` pins the IP (e.g. `metallb.io/loadBalancerIPs`), `sharingAnnotation` lets servers share one IP. `loadBalancer.provider: metallb` fills both in |
-| `NodePort` | no load balancer available and the game's ports are negotiable | IP = a node's InternalIP or ExternalIP; the operator runs the pod on that node. Ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
-| `HostPort` | no load balancer available and the game's ports matter | IP = a node's InternalIP or ExternalIP, any port; the operator runs the pod on that node. Needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
+| `NodePort` | no load balancer available and the game's ports are negotiable | IP = a node's InternalIP or ExternalIP; under the default `externalTrafficPolicy: Local` the operator runs the game pod on that node. Ports **must be in the NodePort range** (30000–32767 by default), so a game's default port usually cannot be used |
+| `HostPort` | no load balancer available and the game's ports matter | IP = a node's InternalIP or ExternalIP, any port; the operator runs the game pod on that node. Needs `serversNamespace.podSecurityLevel=privileged` and, on OpenShift, an SCC allowing host ports. Ports are node-global, so two servers cannot share one |
 
 `/api/system/ips` (the Panel's allocation IP dropdown) returns
-`gateway.externalIPs`, else the class `exposure.externalIPs`, else the
+`gateway.externalIPs`, else the default class's `exposure.externalIPs`, else the
 discovered MetalLB pool addresses (see below), else node addresses.
 
 ### MetalLB
@@ -211,7 +211,10 @@ generated NetworkPolicies allow both.
 
 ## 6. Uninstall
 
-`helm uninstall` removes the gateway, operator and policies but keeps the
+`helm uninstall` removes the gateway, operator and policies, and also the
+default `GameServerClass`, the PriorityClass `pelican-agent`, the agent
+ConfigMap and the server ServiceAccounts, so running pods keep running but no
+new pod can be created until the chart is installed again. It keeps the
 servers namespace, the CRDs and every `GameServer` (and therefore the volumes).
 Delete the servers in the Panel first if you want the data gone; the class
 `storage.deletionPolicy` decides whether volumes are deleted, retained or
@@ -258,7 +261,8 @@ application controller restarts.
 The Argo CD controller needs, besides namespace admin in the servers and system
 namespaces, cluster-scoped permissions for the CRDs, `GameServerClass`,
 `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` objects,
-the PriorityClass `pelican-agent` (`agentPriorityClass`), ClusterRoles and,
+the PriorityClass `pelican-agent` (`agentPriorityClass`), ClusterRoles and
+ClusterRoleBindings and,
 because the chart's Roles and ClusterRoles grant them, `pods/resize`,
 `volumesnapshots`, `leases`, `nodes`, `namespaces` and, with
 `gateway.metallb.discoverPools`, MetalLB `ipaddresspools`. With

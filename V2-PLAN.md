@@ -1,16 +1,13 @@
 # pelican-k8s v2 plan
 
-**Temporary document.** [ARCHITECTURE.md](ARCHITECTURE.md) and the other docs describe the
-split-pod design as the system is meant to work. The code still implements the single-pod design
-of 1.x. This file lists the work that closes the gap. Delete it when Part 2 has shipped.
-
-All of this lands on the long-lived branch `v2`: pull requests for the steps below target `v2`, not
-`master`. `master` keeps the 1.x code and docs and takes fixes for 1.x; merge it into `v2`
-regularly. `v2` merges into `master` when Part 1 is complete, as release 2.0.0.
+**Temporary document.** This file lists the work that moved pelican-k8s from the single-pod design
+of 1.x to the split-pod design that [ARCHITECTURE.md](ARCHITECTURE.md) and the other docs describe.
+Part 1 steps 1 to 6 and Part 2 are on `master` (released as 2.0.0-beta1); Part 1 step 7, the nightly
+block-storage suite, is still open.
 
 ## 1. What changes
 
-| | 1.x (code today) | v2 (documented) |
+| | 1.x | v2 |
 |---|---|---|
 | Pods per server | one pod `gs-<uuid>-0`: agent as native sidecar, game container | agent pod `gs-<uuid>-agent-0` (always), game pod `gs-<uuid>-0` (only while on) |
 | Stopped server | pod stays, game container idle, full requests reserved, `1/2` Ready | no game pod; only the agent's requests |
@@ -131,7 +128,7 @@ is where later scheduling rules get their tests.
 
 - **Workflow** *Placement* (`.github/workflows/placement.yaml`, `hack/e2e-placement.sh`): on pull
   requests that touch `internal/operator`, `internal/agent`, `internal/shim`, `api` or
-  `charts/pelican-k8s`, on pushes to `master` and `v2`, and nightly.
+  `charts/pelican-k8s`, on pushes to `master`, and nightly.
 - **Cluster:** kind with one control-plane node and three workers, the same node image as the
   *Contract* workflow.
 - **Storage:** a StorageClass whose volumes are not bound to a node. kind's default local-path
@@ -191,8 +188,8 @@ The same scenarios on real nodes with real block storage, so no release depends 
 
 ## 4. Part 2: seamless agent replacement (follow-up)
 
-Until this ships, an agent pod replacement drops that server's consoles and file-manager calls, and
-the Panel UI reconnects by itself. ARCHITECTURE.md §5.9 describes the behaviour after Part 2.
+Without it, an agent pod replacement would drop that server's consoles and file-manager calls, and
+the Panel UI would reconnect by itself. ARCHITECTURE.md §5.9 describes the behaviour with Part 2.
 
 - `internal/gateway/wsproxy`: keep the browser side open when the agent side ends because the agent
   pod is terminating or gone; drop client frames except `set state`; redial the new agent; send
