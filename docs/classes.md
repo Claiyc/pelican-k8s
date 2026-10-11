@@ -255,8 +255,9 @@ server between classes that differ only in how the game container's CPU and
 memory are computed, like `burst` and the default class, resizes its game pod
 in place (`ResizePending` while the node can't fit it yet). A change that
 removes a limit (`unlimitedCpuPercent: 0` for a server without a Panel CPU
-limit), a different `tmpSizeMiB` or `agent.*`, or any other difference gives it
-a new pod once the process is offline.
+limit), a different `tmpSizeMiB` or `agent.*`, or any other difference in the
+pods gives it a new pod once the process is offline. A difference that doesn't
+reach the pods, like `snapshotSchedule`, applies without one.
 
 A class can also be created by hand (`kubectl apply`). The chart fills
 `images`, `agentConfigMap`, the ServiceAccounts and `agentPriorityClassName`
