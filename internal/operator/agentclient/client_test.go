@@ -110,6 +110,7 @@ func TestCommands(t *testing.T) {
 		{"reinstall", func(c *Client) error { return c.Install(ctx, "u", true) }, "POST", "/api/servers/u/reinstall", nil},
 		{"delete", func(c *Client) error { return c.Delete(ctx, "u") }, "DELETE", "/api/servers/u", nil},
 		{"exit", func(c *Client) error { return c.ExitState(ctx, 137, true) }, "POST", "/internal/v1/exit-state", map[string]any{"code": float64(137), "oomKilled": true}},
+		{"notice", func(c *Client) error { return c.Notice(ctx, "Creating the game pod...") }, "POST", "/internal/v1/notice", map[string]any{"message": "Creating the game pod..."}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

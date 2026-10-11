@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -74,6 +75,21 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 			if e, ok := reg.Get(s.ID()); ok {
 				e.InjectExit(body.Code, body.OOMKilled)
 			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	// Called by the operator while a start waits for the game pod: the shim is
+	// not connected yet, so the agent has nothing of its own to print.
+	mux.HandleFunc("POST /internal/v1/notice", authorized(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil || body.Message == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		for _, s := range m.All() {
+			s.PublishConsoleOutputFromDaemon(body.Message)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))

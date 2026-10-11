@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - Servers can share one LoadBalancer address under `externalTrafficPolicy: Local` (class `exposure.loadBalancer.sharingAnnotation`, e.g. MetalLB's `metallb.io/allow-shared-ip`). Their Services select the game pods by a shared-address label and target server-specific named ports, and their game pods run on one node, where the load balancer announces the address. A running server found on another node is stopped and its game pod recreated there (`RecreatePending`, reasons `SharedIPNodeMismatch` and `SharedIPPortsOutdated`).
+- A start prints what it waits for on the console while the game pod is not up: the pod being created, a node that fits it, the volume, the image. The Panel shows `offline` until the process starts, and the console used to stay empty for that time.
+
+### Changed
+- Switching `tls.enabled` restarts every running server instead of waiting for it to be offline: the operator stops it through its game pod and starts it again in new pods (`RecreatePending`, reason `TransportChanged`).
+
+### Fixed
+- Switching `tls.enabled` on an installation with servers left every server in `Error`, with the file manager and the console unreachable, until its agent pod was deleted by hand. The operator and the gateway spoke the new setting to agent pods still on the old one, and the operator waited for an answer from them before replacing them. It now replaces the pods of the old setting without asking.
+- A reconcile that kept failing ran several times a second: it stamped `AgentReady` anew each time, and that status write triggered the next one. Conditions keep their transition time while their status does not change, so a failing reconcile backs off.
+- `status.process` could stay `running`, and the phase `Running`, for a server without a game pod, when its agent pod was replaced while the process went. The operator records `offline` for a server without a game pod.
+- With `tls.enabled: false` the certificate Secrets `gs-<uuid>-tls` of an earlier `tls.enabled: true` stayed. The operator deletes them once no pod mounts them.
+- The gateway printed a controller-runtime stack trace (`log.SetLogger(...) was never called`) half a minute after it started.
 
 ## [2.0.0-beta1] - 2026-10-11
 

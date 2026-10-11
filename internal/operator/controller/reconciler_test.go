@@ -55,6 +55,8 @@ type fakeAgent struct {
 	shimErr     error
 	// busy lists the agent's in-flight work.
 	busy []string
+	// notices are the console lines the operator asked for.
+	notices []string
 }
 
 func (f *fakeAgent) record(s string) {
@@ -100,6 +102,19 @@ func (f *fakeAgent) Activity(context.Context) (*agentclient.Activity, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return &agentclient.Activity{Busy: len(f.busy) > 0, Reasons: f.busy}, nil
+}
+
+// Notice keeps console notices apart from calls, which tests compare whole.
+func (f *fakeAgent) Notice(_ context.Context, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notices = append(f.notices, message)
+	return nil
+}
+func (f *fakeAgent) Notices() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.notices...)
 }
 func (f *fakeAgent) Calls() []string {
 	f.mu.Lock()

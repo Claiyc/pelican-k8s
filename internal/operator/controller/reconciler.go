@@ -49,6 +49,7 @@ type AgentAPI interface {
 	ExitState(ctx context.Context, code int32, oomKilled bool) error
 	Shim(ctx context.Context) (*agentclient.Shim, error)
 	Activity(ctx context.Context) (*agentclient.Activity, error)
+	Notice(ctx context.Context, message string) error
 }
 
 // Resolver resolves image digests and entrypoints.
@@ -131,9 +132,16 @@ type scope struct {
 	// shim is the agent's view of the shim connection, when asked.
 	shim *agentclient.Shim
 	// work is the agent's in-flight work (ARCHITECTURE.md 7.7).
-	work    []string
-	now     metav1.Time
-	requeue time.Duration
+	work []string
+	// transportChanged is set when the agent pod was rendered for the other
+	// tls setting: it cannot be called, so it is replaced without being asked
+	// (ARCHITECTURE.md 12.6).
+	transportChanged bool
+	// gameAbsent records that the server had no game pod when the reconcile
+	// read its pods.
+	gameAbsent bool
+	now        metav1.Time
+	requeue    time.Duration
 	// sharedIPElsewhere is the node the game pods sharing the server's
 	// address gather on when its own game pod runs on another one.
 	sharedIPElsewhere string
@@ -169,6 +177,7 @@ func (r *GameServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Error(err, "reconcile failed")
 		r.setCondition(s, v1alpha1.ConditionAgentReady, metav1.ConditionFalse, "Error", truncate(err.Error()))
 	}
+	keepTransitionTimes(s.orig.Status.Conditions, s.gs.Status.Conditions)
 	s.gs.Status.ObservedGeneration = s.gs.Generation
 	s.gs.Status.Phase = computePhase(s)
 	if uerr := r.updateStatus(s); uerr != nil {
@@ -220,6 +229,10 @@ func (r *GameServerReconciler) reconcile(s *scope) error {
 		return err
 	}
 	if err := r.reconcilePods(s); err != nil {
+		return err
+	}
+	r.settleProcess(s)
+	if err := r.dropUnusedTLSSecret(s); err != nil {
 		return err
 	}
 	if err := r.reconcileProcess(s); err != nil {
@@ -384,6 +397,29 @@ func (r *GameServerReconciler) ensureCertificate(s *scope, leaf certs.Leaf) erro
 	}
 	existing.Object["spec"] = desired.Object["spec"]
 	return r.Update(s.ctx, existing)
+}
+
+// dropUnusedTLSSecret deletes the agent's certificate Secret once tls is off
+// and no pod of the server mounts it any more. Only a Secret the GameServer
+// owns goes: one cert-manager wrote belongs to its Certificate.
+func (r *GameServerReconciler) dropUnusedTLSSecret(s *scope) error {
+	if r.tls() {
+		return nil
+	}
+	uuid := s.in.UUID()
+	for _, pod := range []*corev1.Pod{s.agentPod, s.pod} {
+		if pod != nil && render.PodTLS(pod, uuid) {
+			return nil
+		}
+	}
+	sec := &corev1.Secret{}
+	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.TLSSecret(uuid)}, sec); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(sec, s.gs) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(s.ctx, sec))
 }
 
 func (r *GameServerReconciler) ensureSecret(s *scope, name string, build func() *corev1.Secret) error {
@@ -797,6 +833,19 @@ func (r *GameServerReconciler) setCondition(s *scope, t string, status metav1.Co
 	// wall time: conditions whose age drives behaviour (see pendingMessage)
 	// must move with the same clock the rest of the reconcile uses.
 	meta.SetStatusCondition(&s.gs.Status.Conditions, metav1.Condition{Type: t, Status: status, Reason: reason, Message: msg, ObservedGeneration: s.gs.Generation, LastTransitionTime: s.now})
+}
+
+// keepTransitionTimes gives every condition whose status is the one it had
+// before the reconcile its previous transition time back. A reconcile that
+// sets a condition and then its opposite (AgentReady, then an error) would
+// otherwise stamp it anew every time, and each such status write triggers the
+// next reconcile at once.
+func keepTransitionTimes(before, after []metav1.Condition) {
+	for i := range after {
+		if old := meta.FindStatusCondition(before, after[i].Type); old != nil && old.Status == after[i].Status {
+			after[i].LastTransitionTime = old.LastTransitionTime
+		}
+	}
 }
 
 func (r *GameServerReconciler) event(s *scope, typ, reason, format string, args ...any) {

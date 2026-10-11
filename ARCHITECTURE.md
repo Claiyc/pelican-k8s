@@ -476,6 +476,7 @@ the agent's own routes and serves both on `:8080`:
 | `GET /internal/v1/activity` | operator (agent token) | `{busy, reasons}`: in-flight file requests (uploads, downloads, compress, decompress), remote pulls, restore, install and an incoming transfer; backups count through `status.backups.pending` (§7.7) |
 | `POST /api/transfers` | gateway (the Panel's transfer JWT, re-signed with the agent token) | Registers this server as the incoming transfer's target and marks it transferring, then hands the request to Wings (§8.10) |
 | `POST /internal/v1/exit-state {code, oomKilled}` | operator (agent token) | Inject the exit of a game container that terminated, e.g. after an OOM kill (§6.4) |
+| `POST /internal/v1/notice {message}` | operator (agent token) | Print a daemon line on the console: what a start waits for while there is no shim to print anything (§7.6) |
 
 The agent also listens on `:8082` for the shim (§6.4).
 
@@ -756,7 +757,7 @@ status:
     - type: InstallPrepared      # agent holds the install lock for spec.install.generation
     - type: Installed            # True once a generation finished; reason Succeeded or Failed
     - type: ResizePending        # in-place resize of the game pod deferred, infeasible or needing a recreate
-    - type: RecreatePending      # pod recreate waiting for the process to be offline: TemplateChanged, AgentTemplateChanged, RestartRequested, ResizeNeedsRecreate, SharedIPNodeMismatch, SharedIPPortsOutdated (§9.3)
+    - type: RecreatePending      # pod recreate waiting for the process to be offline: TemplateChanged, AgentTemplateChanged, RestartRequested, ResizeNeedsRecreate, SharedIPNodeMismatch, SharedIPPortsOutdated (§9.3); TransportChanged: pods of the other tls setting being replaced without waiting (§12.6)
     - type: NodeLost             # a pod Terminating on a NotReady node (with failover.forceDeleteAfter, §14)
     - type: DiskShrinkRefused    # Panel disk_space below the PVC size
     - type: Orphaned             # set by the gateway when the Panel no longer lists the server (§13)
@@ -1046,6 +1047,9 @@ agents never open the volume at once.
 | Agent pod template change (agent image, class agent resources, …) | `RecreatePending`; the agent pod is deleted when the process is `offline` and the agent has no in-flight work (§7.7) |
 | `power.restartRequest` bump | Once the process is offline, delete the game pod, and the agent pod once the agent has no in-flight work (§7.7) |
 | Game container terminated (`lastState.terminated`) | `POST /internal/v1/exit-state` with the exit code and `OOMKilled` (§6.4) |
+| Agent pod rendered for the other `tls.enabled` setting | Replace both pods without asking the agent (§12.6) |
+| No game pod and `status.process.state` not `offline` | Write `offline`: the gateway records what the agent posts, and an agent that started without a game pod posts nothing |
+| `GamePodReady` moves to `NoPod`, `Unschedulable`, `WaitingForVolume` or `Starting` during a start | `POST /internal/v1/notice` with what the start waits for, once per step. Until the shim runs the process the agent reports `offline` and has nothing to print |
 | A pod `Terminating` on a `NotReady` node, `failover.forceDeleteAfter` set | `NodeLost`; force-delete the agent pod and the game pod once the deletion is older than that duration (§14) |
 | CR deleted | Finalizer (§8.8) |
 
@@ -1757,10 +1761,19 @@ and the agent is SSH and needs none of it.
   not apply: when cert-manager renews the issuing CA with a new key, leaves issued before carry the old
   `ca.crt` until they renew, so a CA that rotates needs its bundle distributed separately (for example
   with trust-manager) or a lifetime longer than the cluster's.
-- **Switching it.** Turning `tls.enabled` on or off changes both pod templates, so every agent pod is
-  recreated and running game pods follow through `RecreatePending` (§7.6); the gateway restarts with
-  the chart. The gateway's pod waits for its certificate Secret, which the operator writes when it
-  starts.
+- **Switching it.** Turning `tls.enabled` on or off restarts every server that runs. The gateway and
+  the operator restart with the chart and speak the new setting at once, so neither can call an agent
+  pod of the old one, and such an agent cannot reach the gateway: nothing tells whether its process is
+  offline or it has in-flight work. The operator therefore does not wait for either. It tells the pods
+  of the old setting by the certificate Secret they mount or do not mount, sets `RecreatePending`
+  (reason `TransportChanged`), and deletes the game pod first, whose shim stops the process with the
+  egg's stop configuration while its agent is still there. Once no game pod of the old setting is
+  left it deletes the agent pod. A server with `desired: Running` gets both pods again and is
+  started; a stopped one only gets its agent pod. In-flight work of the old agent (a backup, an
+  install, a transfer) is lost. With `tls.enabled: false` the operator deletes each `gs-<uuid>-tls`
+  Secret it wrote once no pod mounts it; `<release>-ca` and `<release>-gateway-tls` stay, so turning
+  TLS on again keeps the CA. The gateway's pod waits for its certificate Secret, which the operator
+  writes when it starts, or cert-manager with `tls.certManager.enabled`.
 
 ---
 

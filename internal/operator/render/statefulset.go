@@ -259,6 +259,19 @@ func AgentPodTemplate(in *Input) corev1.PodTemplateSpec {
 	return podTemplate(in, ComponentAgent, spec)
 }
 
+// PodTLS reports whether an agent or game pod of server uuid was rendered
+// with TLS: both mount the agent's certificate Secret then, and neither does
+// without.
+func PodTLS(pod *corev1.Pod, uuid string) bool {
+	secret := names.TLSSecret(uuid)
+	for _, v := range pod.Spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == secret {
+			return true
+		}
+	}
+	return false
+}
+
 // AgentInstance names one run of the agent: the agent pod's UID and the
 // ID of its agent container. Work the agent runs in the background
 // (backups, restores) ends with the instance. Empty without a pod.
