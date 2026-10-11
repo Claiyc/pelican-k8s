@@ -305,8 +305,10 @@ func TestRedirectsStayOnTheOrigin(t *testing.T) {
 			_, _ = w.Write([]byte("ok"))
 		case "/api/remote/away":
 			http.Redirect(w, r, other.URL+"/steal", http.StatusTemporaryRedirect)
+		case "/api/remote/loop":
+			http.Redirect(w, r, "/api/remote/loop", http.StatusTemporaryRedirect)
 		default:
-			http.Redirect(w, r, r.URL.Path, http.StatusTemporaryRedirect)
+			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
