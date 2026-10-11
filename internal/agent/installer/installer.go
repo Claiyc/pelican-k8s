@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -37,13 +38,53 @@ type Installer struct {
 	Root string
 	// LogDir is Wings' log directory; install/<uuid>.log is written there.
 	LogDir string
-	// PollInterval is how often the gateway is asked whether the Job failed.
+	// PollInterval is how often the gateway is asked whether the Job failed or
+	// the generation was superseded.
 	PollInterval time.Duration
 	Logger       *slog.Logger
+
+	// superseded holds the servers whose last run ended because a newer
+	// generation replaced it; Client drops that run's result.
+	superseded sync.Map
 }
 
 // ErrInstallFailed marks a failed installation.
 var ErrInstallFailed = errors.New("installer: installation failed")
+
+// ErrInstallSuperseded marks an installation a newer generation replaced. The
+// operator has deleted its Job; the newer generation reports the result.
+var ErrInstallSuperseded = errors.New("installer: installation superseded by a newer one")
+
+// Client wraps the client Wings reports through so that the result of a
+// superseded run never reaches the gateway: it would be recorded against the
+// newer generation and shown in the Panel as a failed install. Wings reports
+// once after every Run (Server.install calls SyncInstallState right after the
+// installer), so the mark Run leaves is always consumed by that report. A new
+// Run must not clear it: Wings releases the install lock before it reports, so
+// the next install can start before the old report has been dropped.
+func (i *Installer) Client(c remote.Client) remote.Client {
+	return reportFilter{Client: c, i: i}
+}
+
+type reportFilter struct {
+	remote.Client
+	i *Installer
+}
+
+// ReportPending reports whether a superseded run of the server has not
+// reported yet. Until it has, a new install must not start: its own report
+// could otherwise come first and be dropped in place of the old one.
+func (i *Installer) ReportPending(uuid string) bool {
+	_, ok := i.superseded.Load(uuid)
+	return ok
+}
+
+func (f reportFilter) SetInstallationStatus(ctx context.Context, uuid string, data remote.InstallStatusRequest) error {
+	if _, ok := f.i.superseded.LoadAndDelete(uuid); ok {
+		return nil
+	}
+	return f.Client.SetInstallationStatus(ctx, uuid, data)
+}
 
 // Run implements server.Installer. It is called with the install lock held.
 func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) error {
@@ -71,7 +112,7 @@ func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) err
 	defer stopTail()
 	go i.tail(tailCtx, outputLog, s.Sink(system.InstallSink))
 
-	exitCode, failedByOperator, err := i.waitForCompletion(ctx, s.ID(), gen, exitFile)
+	exitCode, result, err := i.waitForCompletion(ctx, s.ID(), gen, exitFile)
 	if err != nil {
 		return err
 	}
@@ -84,7 +125,12 @@ func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) err
 	}
 
 	switch {
-	case failedByOperator:
+	case result == "Superseded":
+		log.Info("install generation superseded", "generation", gen)
+		s.Events().Publish(server.DaemonMessageEvent, "Installation replaced by a newer one.")
+		i.superseded.Store(s.ID(), struct{}{})
+		return ErrInstallSuperseded
+	case result != "":
 		s.Events().Publish(server.DaemonMessageEvent, "Installation job failed.")
 		return fmt.Errorf("%w: job failed or timed out", ErrInstallFailed)
 	case prep.StrictExitCode && exitCode != 0:
@@ -95,24 +141,43 @@ func (i *Installer) Run(s *server.Server, script *remote.InstallationScript) err
 	return nil
 }
 
-// waitForCompletion returns when exit-code appears or the gateway reports the
-// Job as failed. The returned bool is true when the operator failed the install.
-func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int64, exitFile string) (int, bool, error) {
+// waitForCompletion returns when exit-code appears, or when the gateway reports
+// the Job as failed or the generation as superseded: then the returned result
+// is that report, otherwise it is empty. An exit code of a superseded
+// generation or a failed Job counts as that report.
+func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int64, exitFile string) (int, string, error) {
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	poll := time.NewTicker(i.PollInterval)
 	defer poll.Stop()
+	checkFailed := false
 	for {
 		if b, err := os.ReadFile(exitFile); err == nil {
 			code, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err != nil {
-				return 0, false, fmt.Errorf("installer: parse exit code %q: %w", b, err)
+				return 0, "", fmt.Errorf("installer: parse exit code %q: %w", b, err)
 			}
-			return code, false, nil
+			// The shim writes an exit code also when its Job is deleted or
+			// times out: the script was killed. The code is the result only
+			// once the gateway confirms that this generation is current and
+			// its Job did not fail; until the gateway answers, the file is
+			// read again on the next tick.
+			st, err := i.Gateway.GetInstallState(ctx, uuid, gen)
+			switch {
+			case err != nil:
+				if !checkFailed {
+					i.logger().Warn("install state check failed, retrying", "error", err)
+				}
+				checkFailed = true
+			case st.Result == "Failed" || st.Result == "Superseded":
+				return code, st.Result, nil
+			default:
+				return code, "", nil
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return 0, false, ctx.Err()
+			return 0, "", ctx.Err()
 		case <-t.C:
 		case <-poll.C:
 			st, err := i.Gateway.GetInstallState(ctx, uuid, gen)
@@ -120,8 +185,8 @@ func (i *Installer) waitForCompletion(ctx context.Context, uuid string, gen int6
 				i.logger().Warn("install state poll failed", "error", err)
 				continue
 			}
-			if st.Result == "Failed" {
-				return 0, true, nil
+			if st.Result == "Failed" || st.Result == "Superseded" {
+				return 0, st.Result, nil
 			}
 		}
 	}
