@@ -22,12 +22,6 @@ import (
 // reconcileProcess drives the agent: fresh-pod start, power generations,
 // configuration sync and installs (ARCHITECTURE.md 7.6 "Process").
 func (r *GameServerReconciler) reconcileProcess(s *scope) error {
-	// A kill takes the game pod first, before anything that can fail or has
-	// to wait: an agent that cannot be reached, a shim that is not attached,
-	// a power call that errors. The agent is told afterwards where it can be.
-	if err := r.killPendingGamePod(s); err != nil {
-		return err
-	}
 	if s.agent == nil {
 		return r.reconcileInstall(s)
 	}
@@ -161,9 +155,9 @@ func killPending(gs *v1alpha1.GameServer) bool {
 	return p.Desired == v1alpha1.PowerStopped && p.Kill && p.Generation != gs.Status.Power.ObservedGeneration
 }
 
-// killPendingGamePod deletes the game pod if a kill is pending. It runs
-// before every path that handles the power generation: the pod must not be
-// left to the StatefulSet, which deletes it with the whole grace period.
+// killPendingGamePod deletes the game pod if a kill is pending. The
+// reconcile runs it right after it read the pods: the pod must not be left to
+// the StatefulSet, which deletes it with the whole grace period.
 func (r *GameServerReconciler) killPendingGamePod(s *scope) error {
 	if !killPending(s.gs) {
 		return nil

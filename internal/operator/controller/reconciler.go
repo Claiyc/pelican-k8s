@@ -222,6 +222,13 @@ func (r *GameServerReconciler) reconcile(s *scope) error {
 	if err := r.loadPods(s); err != nil {
 		return err
 	}
+	// A kill takes the game pod as soon as the pods are known, before
+	// anything that can fail or has to wait: the image lookup, the agent's
+	// token, an agent that cannot be reached, a shim that is not attached, a
+	// power call that errors. The agent is told afterwards where it can be.
+	if err := r.killPendingGamePod(s); err != nil {
+		return err
+	}
 	if err := r.resolveImage(s); err != nil {
 		return err
 	}

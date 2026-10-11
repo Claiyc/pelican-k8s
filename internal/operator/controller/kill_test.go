@@ -155,6 +155,41 @@ func TestKillWithAFailingAgentDeletesTheGamePod(t *testing.T) {
 	}
 }
 
+// Nor does a failure before the agent is even reached: its token Secret
+// cannot be read.
+func TestKillBeforeTheAgentIsSetUpDeletesTheGamePod(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	boom := errors.New("boom")
+	armed := false
+	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			// Only the read of the token for the agent client, after the pods
+			// were loaded; the Secret is also read earlier to ensure it exists.
+			if _, ok := obj.(*corev1.Pod); ok && key.Name == names.AgentPod(uuid) {
+				armed = true
+			}
+			if _, ok := obj.(*corev1.Secret); ok && armed && key.Name == names.AgentSecret(uuid) {
+				return boom
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+	})
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if h.pod() != nil {
+		t.Fatal("the game pod stays when the agent cannot be set up")
+	}
+}
+
 // A pod that cannot be deleted fails the reconcile, so the kill is tried
 // again instead of being recorded as done.
 func TestKillThatCannotDeleteThePodIsRetried(t *testing.T) {
