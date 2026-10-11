@@ -329,4 +329,4 @@ Panel at its `gateway.panelURL`, which must be reachable from the gateway pod.
 The gateway sends SFTP passwords and the node token to that URL, so it logs a
 warning at startup when the URL is plain `http://`; use `https://` unless the
 Panel runs in the same cluster. It follows a Panel redirect only to the same
-host, on the same scheme or from `http` to `https`.
+host, and each hop keeps its scheme or goes from `http` to `https`.

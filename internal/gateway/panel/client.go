@@ -38,16 +38,17 @@ func New(panelURL, tokenID, token, userAgent string) *Client {
 }
 
 // sameOrigin follows a redirect only to the host of the original request,
-// on the same scheme or from http up to https. A 307 or 308 replays the
-// body, and the body of an SFTP credential check carries the user's password.
+// and each hop keeps its scheme or goes from http up to https (never back
+// down). A 307 or 308 replays the body, and the body of an SFTP credential
+// check carries the user's password.
 func sameOrigin(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("panel: stopped after 10 redirects")
 	}
-	first := via[0].URL
-	upgrade := first.Scheme == "http" && req.URL.Scheme == "https"
-	if req.URL.Host != first.Host || (req.URL.Scheme != first.Scheme && !upgrade) {
-		return fmt.Errorf("panel: refusing redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	first, previous := via[0].URL, via[len(via)-1].URL
+	upgrade := previous.Scheme == "http" && req.URL.Scheme == "https"
+	if req.URL.Host != first.Host || (req.URL.Scheme != previous.Scheme && !upgrade) {
+		return fmt.Errorf("panel: refusing redirect from %s://%s to %s://%s", previous.Scheme, previous.Host, req.URL.Scheme, req.URL.Host)
 	}
 	return nil
 }

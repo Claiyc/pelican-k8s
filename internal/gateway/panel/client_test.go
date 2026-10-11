@@ -338,17 +338,23 @@ func TestSameOriginSchemes(t *testing.T) {
 		return r
 	}
 	for _, tc := range []struct {
-		from, to string
-		ok       bool
+		via []string
+		to  string
+		ok  bool
 	}{
-		{"http://panel.example.com/a", "https://panel.example.com/a", true},
-		{"https://panel.example.com/a", "http://panel.example.com/a", false},
-		{"https://panel.example.com/a", "https://other.example.com/a", false},
-		{"https://panel.example.com/a", "https://panel.example.com:8443/a", false},
+		{[]string{"http://panel.example.com/a"}, "https://panel.example.com/a", true},
+		{[]string{"https://panel.example.com/a"}, "http://panel.example.com/a", false},
+		{[]string{"https://panel.example.com/a"}, "https://other.example.com/a", false},
+		{[]string{"https://panel.example.com/a"}, "https://panel.example.com:8443/a", false},
+		{[]string{"http://panel.example.com/a", "https://panel.example.com/b"}, "https://panel.example.com/c", true},
+		{[]string{"http://panel.example.com/a", "https://panel.example.com/b"}, "http://panel.example.com/c", false},
 	} {
-		err := sameOrigin(req(tc.to), []*http.Request{req(tc.from)})
-		if (err == nil) != tc.ok {
-			t.Errorf("%s -> %s: err = %v, want ok %v", tc.from, tc.to, err, tc.ok)
+		var via []*http.Request
+		for _, v := range tc.via {
+			via = append(via, req(v))
+		}
+		if err := sameOrigin(req(tc.to), via); (err == nil) != tc.ok {
+			t.Errorf("%v -> %s: err = %v, want ok %v", tc.via, tc.to, err, tc.ok)
 		}
 	}
 }
