@@ -29,6 +29,14 @@ func New(base, token string, transport http.RoundTripper) *Client {
 // ErrConflict is returned for HTTP 409 (e.g. reinstall during a power action).
 var ErrConflict = errors.New("agent: conflict")
 
+// ErrInstallLocked is the 409 of an install request while an install of the
+// server holds the agent's install lock. It matches ErrConflict too.
+var ErrInstallLocked = fmt.Errorf("%w: install lock held", ErrConflict)
+
+// installLockedHeader is routes.InstallLockedHeader; the operator does not
+// import the agent's packages.
+const installLockedHeader = "X-Pelican-K8s-Install-Locked"
+
 // ErrUnavailable is returned when the agent cannot be reached.
 var ErrUnavailable = errors.New("agent: unavailable")
 
@@ -157,6 +165,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusConflict {
+		if res.Header.Get(installLockedHeader) == "true" {
+			return ErrInstallLocked
+		}
 		return ErrConflict
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {

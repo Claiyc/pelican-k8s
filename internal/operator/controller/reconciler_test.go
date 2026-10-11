@@ -556,6 +556,57 @@ func TestInstallFlow(t *testing.T) {
 	}
 }
 
+// TestInstallConflictRetriesThenAdopts covers an agent whose install lock is
+// held: a 409 is retried, and once the run holding the lock has prepared this
+// very generation it is adopted instead of asked again, so its Job is created.
+// A power action's 409 is never adopted.
+func TestInstallConflictRetriesThenAdopts(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Install = v1alpha1.InstallSpec{Generation: 2, Reinstall: true, ScriptConfigMap: names.InstallConfigMap(uuid, 2)}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: names.InstallConfigMap(uuid, 2), Namespace: ns}, Data: map[string]string{"install.sh": "x"}}
+	h := newHarness(t, gs, newClass(), cm)
+	h.reconcile(2)
+	h.createPod(true)
+	h.agent.err = agentclient.ErrInstallLocked
+	h.reconcile(2)
+	st := h.gs().Status.Install
+	if st.RequestedGeneration != 0 {
+		t.Fatalf("a refused request must not be recorded: %+v", st)
+	}
+	if c := meta.FindStatusCondition(h.gs().Status.Conditions, v1alpha1.ConditionInstallPrepared); c == nil || c.Reason != "PowerActionRunning" {
+		t.Fatalf("InstallPrepared %+v", c)
+	}
+	var job batchv1.Job
+	if h.get(&job, names.InstallJob(uuid, 2)) {
+		t.Fatal("no job while the agent refuses")
+	}
+	// An earlier generation still holds the lock: still refused, still retried.
+	h.patchStatus(func(gs *v1alpha1.GameServer) { gs.Status.Install.PreparedGeneration = 1 })
+	before := len(h.agent.Calls())
+	h.reconcile(1)
+	if len(h.agent.Calls()) != before+1 || h.gs().Status.Install.RequestedGeneration != 0 {
+		t.Fatalf("expected one more refused request, calls %v status %+v", h.agent.Calls(), h.gs().Status.Install)
+	}
+	// Generation 2 was prepared, but the 409 is a power action's: no run is
+	// known to hold the lock, so it is retried, not adopted.
+	h.patchStatus(func(gs *v1alpha1.GameServer) { gs.Status.Install.PreparedGeneration = 2 })
+	h.agent.err = agentclient.ErrConflict
+	h.reconcile(1)
+	if st := h.gs().Status.Install; st.RequestedGeneration != 0 || h.get(&job, names.InstallJob(uuid, 2)) {
+		t.Fatalf("a power action's 409 was adopted: %+v", st)
+	}
+	// The install lock's 409 with generation 2 prepared: adopted, Job created.
+	h.agent.err = agentclient.ErrInstallLocked
+	h.reconcile(2)
+	st = h.gs().Status.Install
+	if st.RequestedGeneration != 2 || st.Result != v1alpha1.InstallRunning || st.RequestedAt == nil {
+		t.Fatalf("not adopted: %+v", st)
+	}
+	if !h.get(&job, names.InstallJob(uuid, 2)) {
+		t.Fatal("job not created for the adopted run")
+	}
+}
+
 func TestInstallJobFailureAndTimeout(t *testing.T) {
 	gs := newGS()
 	gs.Spec.Install = v1alpha1.InstallSpec{Generation: 1, ScriptConfigMap: names.InstallConfigMap(uuid, 1)}

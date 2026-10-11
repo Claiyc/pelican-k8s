@@ -120,7 +120,7 @@ func Run(ctx context.Context, o Options) error {
 	var manager *server.Manager
 	for attempt := 1; ; attempt++ {
 		var err error
-		manager, err = server.NewManager(ctx, client, server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst))
+		manager, err = server.NewManager(ctx, inst.Client(client), server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst))
 		if err == nil {
 			break
 		}
@@ -165,7 +165,7 @@ func Run(ctx context.Context, o Options) error {
 	engine := router.Configure(manager, client)
 	srv := &http.Server{
 		Addr:              cfg.Api.Host + ":" + strconv.Itoa(cfg.Api.Port),
-		Handler:           routes.Handler(engine, manager, registry),
+		Handler:           routes.Handler(engine, manager, registry, inst.ReportPending),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	certs.secureHTTP(srv)
