@@ -46,6 +46,15 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 		}
 		snapshotClass = cls.Spec.Storage.VolumeSnapshotClassName
 	}
+	// A GameServer still marked for an incoming transfer is a copy the transfer
+	// left behind: the server stays on its old node. Its volume holds partial
+	// data that a retried transfer would otherwise find again, so it is deleted
+	// whatever the class says. The agent is not asked to delete the server: its
+	// Wings drops it on a failed transfer, and the volume goes either way.
+	_, transferCopy := gs.Annotations[v1alpha1.AnnotationTransferIn]
+	if transferCopy {
+		policy = v1alpha1.DeletionDelete
+	}
 
 	// 1. Stop or destroy through the agent while its pod still exists.
 	agentPod, err := r.getPod(s, names.AgentPod(uuid))
@@ -56,7 +65,7 @@ func (r *GameServerReconciler) finalize(s *scope) (ctrl.Result, error) {
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if agentPod != nil && agentPod.DeletionTimestamp.IsZero() {
+	if agentPod != nil && agentPod.DeletionTimestamp.IsZero() && !transferCopy {
 		if ready, ip := agentReady(agentPod); ready {
 			sec := &corev1.Secret{}
 			if err := r.Get(s.ctx, types.NamespacedName{Namespace: gs.Namespace, Name: names.AgentSecret(uuid)}, sec); err == nil {

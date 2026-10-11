@@ -1326,6 +1326,8 @@ in-flight work.
    - `Retain`: `POST /power {kill}` on the agent; the PVC is kept, labelled `pelican-k8s.io/orphaned-at`.
    - `SnapshotThenDelete`: `POST /power {kill}`, a VolumeSnapshot `gs-<uuid>-final`, wait for
      `readyToUse`, then delete the PVC.
+   - A CR still marked `pelican-k8s.io/transfer-in` is a copy an incoming transfer left behind (§8.10):
+     its PVC is deleted under every policy and the agent is not called.
    - Under every policy both StatefulSets, the Services, NetworkPolicies and install Jobs are deleted,
      as is a pod of the 1.x layout (§ "From 1.x to 2.0" in docs/operations.md), which has no StatefulSet
      left to take it down. The finalizer waits for both pods to go before handling the PVC.
@@ -1389,6 +1391,8 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    the old node and serves the old node's allocation until it succeeds). Once the Panel lists it on this
    node, Resync finishes the transfer; a mark the Panel still does not list after 24 hours belongs to a
    push that ended without a result (the agent pod restarted, the source went away) and is deleted.
+6. Whichever path deletes a marked CR, its volume goes with it whatever the class `deletionPolicy`
+   (§8.8): the server stays on the old node, and a retried transfer starts on an empty volume.
 
 Proxies between the source Wings and the gateway must allow a long request: the whole upload, after the
 wait for the agent pod. Traefik's default `readTimeout` (60 s) ends larger transfers.
