@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -173,6 +174,12 @@ func (r *GameServerReconciler) killPendingGamePod(s *scope) error {
 // which a server that is still starting may ignore. A kill means the process
 // goes now, so its pod does too.
 func (r *GameServerReconciler) killGamePod(s *scope) error {
+	// The StatefulSet goes to zero first: this runs before the reconcile
+	// writes it, and a step in between may fail, which would leave the
+	// StatefulSet free to create the pod again.
+	if err := r.scaleGameStatefulSetToZero(s); err != nil {
+		return err
+	}
 	if s.pod == nil {
 		return nil
 	}
@@ -184,6 +191,21 @@ func (r *GameServerReconciler) killGamePod(s *scope) error {
 	s.pod = nil
 	s.requeue = requeueFast
 	return nil
+}
+
+// scaleGameStatefulSetToZero sets the replicas of the game StatefulSet to 0,
+// if it exists and asks for any.
+func (r *GameServerReconciler) scaleGameStatefulSetToZero(s *scope) error {
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.StatefulSet(s.in.UUID())}, sts); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if sts.Spec.Replicas != nil && *sts.Spec.Replicas == 0 {
+		return nil
+	}
+	patch := client.MergeFrom(sts.DeepCopy())
+	sts.Spec.Replicas = new(int32)
+	return client.IgnoreNotFound(r.Patch(s.ctx, sts, patch))
 }
 
 func (r *GameServerReconciler) power(s *scope, action string) error {

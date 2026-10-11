@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -187,6 +188,74 @@ func TestKillBeforeTheAgentIsSetUpDeletesTheGamePod(t *testing.T) {
 	}
 	if h.pod() != nil {
 		t.Fatal("the game pod stays when the agent cannot be set up")
+	}
+}
+
+// The StatefulSet is at zero before the pod goes, so a step that fails
+// between the two does not let it create the pod again.
+func TestKillScalesTheStatefulSetDownBeforeItDeletesThePod(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	var replicasAtDelete int32 = -1
+	boom := errors.New("boom")
+	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.Pod); ok && obj.GetName() == names.Pod(uuid) {
+				replicasAtDelete = h.replicas(names.StatefulSet(uuid))
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	// The agent fails after the kill took the pod: the reconcile ends with
+	// an error, and the StatefulSet must not be left asking for a pod.
+	h.agent.getErr = boom
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+	})
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if replicasAtDelete != 0 {
+		t.Fatalf("the pod was deleted with the StatefulSet at %d replicas", replicasAtDelete)
+	}
+	if h.pod() != nil {
+		t.Fatal("the game pod stays")
+	}
+	if got := h.replicas(names.StatefulSet(uuid)); got != 0 {
+		t.Fatalf("the StatefulSet can create the pod again: replicas %d", got)
+	}
+}
+
+// A StatefulSet that cannot be scaled fails the reconcile before the pod is
+// touched.
+func TestKillThatCannotScaleTheStatefulSetIsRetried(t *testing.T) {
+	gs := newGS()
+	gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerRunning, Generation: 1}
+	h := newHarness(t, gs, newClass())
+	h.reconcile(2)
+	h.createPod(true)
+	h.reconcile(2)
+	boom := errors.New("boom")
+	h.r.Client = interceptor.NewClient(h.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*appsv1.StatefulSet); ok && obj.GetName() == names.StatefulSet(uuid) {
+				return boom
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	h.updateGS(func(gs *v1alpha1.GameServer) {
+		gs.Spec.Power = v1alpha1.PowerSpec{Desired: v1alpha1.PowerStopped, Generation: 2, Kill: true}
+	})
+	if _, err := h.reconcileResult(); !errors.Is(err, boom) {
+		t.Fatalf("reconcile error %v", err)
+	}
+	if h.pod() == nil {
+		t.Fatal("the pod went although the StatefulSet would create it again")
 	}
 }
 
