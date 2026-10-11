@@ -139,7 +139,7 @@ func (r *Reader) totalMemory() uint64 {
 }
 
 func readUint(path string) uint64 {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // fixed cgroup files under Reader.Root
 	if err != nil {
 		return 0
 	}
@@ -157,7 +157,7 @@ func readUint(path string) uint64 {
 // readKeyed parses "key value" lines (memory.stat, cpu.stat, memory.events, meminfo).
 func readKeyed(path string) map[string]uint64 {
 	out := map[string]uint64{}
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // fixed cgroup and /proc files under Reader.Root
 	if err != nil {
 		return out
 	}

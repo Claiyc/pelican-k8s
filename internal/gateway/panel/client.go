@@ -181,7 +181,7 @@ func (c *Client) SetTransferStatus(ctx context.Context, uuid string, successful 
 
 // ValidateSftpCredentials asks the Panel to authenticate an SFTP login.
 func (c *Client) ValidateSftpCredentials(ctx context.Context, req remote.SftpAuthRequest) (*remote.SftpAuthResponse, error) {
-	b, err := json.Marshal(req)
+	b, err := json.Marshal(req) //nolint:gosec // the SFTP password goes to the Panel's /sftp/auth for verification (Wings contract) and is never logged
 	if err != nil {
 		return nil, err
 	}

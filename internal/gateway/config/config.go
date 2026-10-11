@@ -113,7 +113,7 @@ func FromEnv() (*Config, error) {
 	// Tokens may be supplied through files (mounted Secrets).
 	if c.NodeToken == "" {
 		if p := os.Getenv("PELICAN_GW_TOKEN_FILE"); p != "" {
-			b, err := os.ReadFile(p)
+			b, err := os.ReadFile(p) //nolint:gosec // PELICAN_GW_TOKEN_FILE, a mounted Secret set by whoever deploys the gateway
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +122,7 @@ func FromEnv() (*Config, error) {
 	}
 	if c.NodeTokenID == "" {
 		if p := os.Getenv("PELICAN_GW_TOKEN_ID_FILE"); p != "" {
-			b, err := os.ReadFile(p)
+			b, err := os.ReadFile(p) //nolint:gosec // PELICAN_GW_TOKEN_ID_FILE, a mounted Secret set by whoever deploys the gateway
 			if err != nil {
 				return nil, err
 			}

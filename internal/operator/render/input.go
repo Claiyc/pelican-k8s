@@ -27,7 +27,7 @@ const (
 	GatewayPort    = 8081
 	ShimPort       = 8082
 	ArgvFile       = "/pelican/etc/argv"
-	PasswdFile     = "/pelican/etc/passwd"
+	PasswdFile     = "/pelican/etc/passwd" //nolint:gosec // a file path, not a credential
 	GroupFile      = "/pelican/etc/group"
 	ContainerHome  = "/home/container"
 	AgentRoot      = "/var/lib/pelican"

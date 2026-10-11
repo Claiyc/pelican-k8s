@@ -597,7 +597,7 @@ func (h *Handler) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(res)
+	_, _ = w.Write(res) //nolint:gosec // relays the Panel's JSON to the agent's HTTP client as application/json, no browser renders it
 }
 
 // sftpAuth answers from the relay's session records; never forwarded.

@@ -48,10 +48,10 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 	if r.Stdout == nil {
 		r.Stdout = os.Stdout
 	}
-	if err := os.MkdirAll(filepath.Dir(r.LogFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(r.LogFile), 0o755); err != nil { //nolint:gosec // the agent (game UID) reads what a root install script writes here; normally exists 0700 already
 		return 0, err
 	}
-	logf, err := os.OpenFile(r.LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	logf, err := os.OpenFile(r.LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644) //nolint:gosec // a root install container writes it and the agent (game UID) reads it; console output inside a 0700 directory
 	if err != nil {
 		return 0, err
 	}
@@ -64,7 +64,7 @@ func (r InstallRun) Run(ctx context.Context) (int, error) {
 	}()
 	_ = os.Remove(r.ExitFile)
 
-	cmd := exec.Command(r.Argv[0], r.Argv[1:]...)
+	cmd := exec.Command(r.Argv[0], r.Argv[1:]...) //nolint:gosec // running the egg's install script is the product, as in Wings
 	cmd.Dir = r.Dir
 	cmd.Env = os.Environ()
 	ptmx, err := pty.Start(cmd)
@@ -148,11 +148,11 @@ func chownRecursive(dir string, uid, gid int) error {
 }
 
 func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // the agent (game UID) reads a root-written exit code here; normally exists 0700 already
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil { //nolint:gosec // the agent (game UID) reads a root-written exit code; inside a 0700 directory
 		return err
 	}
 	return os.Rename(tmp, path)
