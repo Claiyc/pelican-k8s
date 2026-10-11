@@ -340,7 +340,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `POST /activity` | Forward rows whose `server` is the caller; drop the rest. A `422` from the Panel drops the batch |
 | `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls, §8.7); a result post removes the entry; unknown backups get `404` |
 | `POST /sftp/auth` | Verify the SFTP session credential (§5.6) and answer with the Panel response sealed in it when it is for the caller's server; never forwarded |
-| `POST /servers/{uuid}/transfer/{success,failure}` | Forward to the Panel, then finish the incoming transfer (§8.10); a forwarding error is answered `502` |
+| `POST /servers/{uuid}/transfer/{success,failure}` | Forward to the Panel, then finish the incoming transfer (§8.10): a failure always deletes the transfer's CR, a success the Panel refuses is settled by its server list; a Panel `4xx` is passed through, an unreachable Panel is answered `502` |
 | anything else | `404`, logged as a warning |
 
 The gateway answers `container/status` and the install result with `204` whether or not forwarding them
@@ -1369,15 +1369,26 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    new node while the transfer is open, but with the old node's allocation, so the CR gets none: nothing
    is exposed until the transfer succeeds.
 2. The request waits for the new agent pod (up to 3 minutes: a new volume and pod), is re-signed with
-   the agent token and proxied with its body. The source's upload is held while it waits.
+   the agent token and proxied with its body. The source's upload is held while it waits. If no agent
+   comes up (or the client goes away meanwhile), no result will ever be reported, so the gateway deletes
+   the CR it created for this push; one reused from an earlier attempt is left for the next retry.
 3. The agent registers its own server as the transfer target, so Wings extracts into it instead of
    building a second server from the Panel. Wings checks the archive checksum and reports
    `transfer/success` or `transfer/failure` through the remote API. While the transfer runs, the agent
    reports it as in-flight work, so it is not moved.
-4. The gateway forwards the result to the Panel. On success the Panel moves the server to this node and
-   its new allocation, and deletes it on the old node; the gateway drops the mark and syncs the
-   configuration. On failure the server stays on the old node and the gateway deletes the marked CR.
-   A success the Panel did not accept leaves the CR marked; the transfer stays open on the Panel.
+4. The gateway forwards the result to the Panel (60 s: the Panel deletes the server on the old node
+   before it answers). On success the Panel moves the server to this node and its new allocation; the
+   gateway drops the mark and syncs the configuration. On failure the server stays on the old node and
+   the gateway deletes the marked CR. A success the Panel refuses (4xx, e.g. `409` once the transfer is
+   closed) is settled by the Panel's server list: listed on this node, the Panel already moved it and
+   only its answer was lost, so the transfer is finished; not listed, the copy made here is deleted and
+   the refusal is passed to Wings. A success the Panel could not be asked about (unreachable, 5xx)
+   leaves the CR marked, and Wings in the agent keeps the server in its transferring state (no power
+   actions; reported as in-flight work) until the agent pod is replaced.
+5. Resync (§13) never marks a CR in transfer `Orphaned` and never syncs it (the Panel lists the server on
+   the old node and serves the old node's allocation until it succeeds). Once the Panel lists it on this
+   node, Resync finishes the transfer; a mark the Panel still does not list after 24 hours belongs to a
+   push that ended without a result (the agent pod restarted, the source went away) and is deleted.
 
 Proxies between the source Wings and the gateway must allow a long request: the whole upload, after the
 wait for the agent pod. Traefik's default `readTimeout` (60 s) ends larger transfers.
@@ -1753,7 +1764,8 @@ and the agent is SSH and needs none of it.
 - it lists the node's servers via `GET /api/remote/servers` and fetches each server's configuration
 - a Panel server without a CR gets one (with its env Secret, `power.desired: Stopped`, no install)
 - a CR the Panel no longer lists gets `Orphaned=True` (`NotOnPanel`) and is never deleted
-  automatically; the condition clears when the server reappears
+  automatically; the condition clears when the server reappears. A CR marked for an incoming transfer
+  is the exception: Resync leaves it alone, finishes it or deletes it (§8.10)
 - a `panelRevision` mismatch updates `spec.panel`. The revision covers the settings without
   `environment`, so a change of egg variable values alone reaches the `gs-<uuid>-env` Secret on the next start, restart or
   Panel sync

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	googleuuid "github.com/google/uuid"
 	"github.com/pelican/wings/system"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -163,7 +164,7 @@ func (h *Handler) transfers(w http.ResponseWriter, r *http.Request) {
 	auth := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
 	if len(auth) != 2 || auth[0] != "Bearer" {
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeError(w, http.StatusUnauthorized, "The required authorization heads were not present in the request.")
+		writeError(w, http.StatusUnauthorized, "The required authorization headers were not present in the request.")
 		return
 	}
 	claims, raw, err := jwtx.Verify([]byte(auth[1]), []byte(h.Cfg.NodeToken))
@@ -172,32 +173,47 @@ func (h *Handler) transfers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uuid := claims.Subject
-	if len(uuid) != 36 || !strings.Contains(" "+claims.Scope+" ", " transfer ") {
+	if _, err := googleuuid.Parse(uuid); err != nil || len(uuid) != 36 || !strings.Contains(" "+claims.Scope+" ", " transfer ") {
 		writeError(w, http.StatusForbidden, "Forbidden.")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancel()
-	if err := h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
-		h.Log.Error("incoming transfer refused", "uuid", uuid, "error", err)
+	created, err := h.Sync.AdoptForTransfer(ctx, uuid)
+	if err != nil {
 		switch {
 		case errors.Is(err, serversync.ErrTransferConflict):
+			h.Log.Warn("incoming transfer refused", "uuid", uuid, "error", err)
 			writeError(w, http.StatusConflict, err.Error())
 		case panel.IsNotFound(err):
+			h.Log.Warn("incoming transfer refused", "uuid", uuid, "error", err)
 			writeError(w, http.StatusNotFound, "The requested resource does not exist on this instance.")
 		default:
+			h.Log.Error("incoming transfer failed", "uuid", uuid, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
 		}
 		return
 	}
 	h.Log.Info("incoming transfer", "uuid", uuid)
+	// No agent, no transfer: the source reports the failure to the Panel itself
+	// and no result will reach the remote API, so remove what this push created.
+	giveUp := func() {
+		if !created {
+			return
+		}
+		if err := h.Sync.FinishTransfer(ctx, uuid, false); err != nil {
+			h.Log.Warn("cannot remove the server of an abandoned transfer", "uuid", uuid, "error", err)
+		}
+	}
 	t, err := h.Agents.WaitFor(r.Context(), uuid, TransferAgentWait)
 	if err != nil {
+		giveUp()
 		h.agentUnavailable(w, err)
 		return
 	}
 	resigned, err := jwtx.Resign(raw, []byte(t.Token))
 	if err != nil {
+		giveUp()
 		writeError(w, 500, err.Error())
 		return
 	}

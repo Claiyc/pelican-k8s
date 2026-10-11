@@ -233,7 +233,7 @@ func TestUnmatchedRoute(t *testing.T) {
 func (f *fixture) withTransfer() {
 	f.t.Helper()
 	ctx := context.Background()
-	if err := f.h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
+	if _, err := f.h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
 		f.t.Fatal(err)
 	}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: names.AgentSecret(uuid), Namespace: ns,
@@ -287,6 +287,32 @@ func TestTransferFailure(t *testing.T) {
 	}
 	if !g.st.Exists(context.Background(), uuid) {
 		t.Fatal("an ordinary server was removed")
+	}
+}
+
+func TestTransferSuccessRefusedByThePanel(t *testing.T) {
+	ctx := context.Background()
+	// Listed on this node: the Panel moved it and only its answer was lost.
+	f := newFixture(t, options{})
+	f.withTransfer()
+	f.fp.TransferStatus = 409
+	if code, body := f.do("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 204 {
+		t.Fatalf("%d %s", code, body)
+	}
+	if _, ok := f.gs().Annotations[v1alpha1.AnnotationTransferIn]; ok {
+		t.Fatal("a transfer the Panel completed must be finished")
+	}
+
+	// Not listed: the transfer is over without this node; the 409 reaches Wings.
+	g := newFixture(t, options{})
+	g.withTransfer()
+	g.fp.TransferStatus = 409
+	g.fp.Get(uuid).Unlisted = true
+	if code, _ := g.do("POST", "/api/remote/servers/"+uuid+"/transfer/success", "", bearer); code != 409 {
+		t.Fatalf("code = %d, want the Panel's 409", code)
+	}
+	if g.st.Exists(ctx, uuid) {
+		t.Fatal("the copy of a transfer the Panel closed elsewhere must be removed")
 	}
 }
 

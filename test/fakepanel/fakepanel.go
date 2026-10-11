@@ -6,6 +6,7 @@ package fakepanel
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,9 @@ type Server struct {
 	InstallGeneration int64
 	InstallResult     string
 	StrictExitCode    bool
+	// Unlisted servers are served by GET /servers/{uuid} but missing from the
+	// node's list, like a server the Panel is transferring to this node.
+	Unlisted bool
 }
 
 // InstallScript mirrors the Panel's install payload.
@@ -52,6 +56,8 @@ type Panel struct {
 	// BackupUploadParts, when set, answers GET /backups/{uuid}.
 	BackupUploadParts func(uuid string, size int64) map[string]any
 	StateChanges      []map[string]string
+	// TransferStatus answers transfer/success|failure posts (0 = 204).
+	TransferStatus int
 }
 
 // New returns an empty fake panel accepting tokenID.token.
@@ -126,6 +132,9 @@ func (p *Panel) Handler() http.Handler {
 			p.mu.Lock()
 			data := make([]map[string]any, 0, len(p.Servers))
 			for _, s := range p.Servers {
+				if s.Unlisted {
+					continue
+				}
 				payload := p.serverPayload(s)
 				if s.ListSettings != nil {
 					payload["settings"] = s.ListSettings
@@ -239,6 +248,13 @@ func (p *Panel) server(w http.ResponseWriter, r *http.Request, uuid string, rest
 		p.mu.Unlock()
 		writeJSON(w, 200, out)
 	case len(rest) == 2 && rest[0] == "transfer":
+		p.mu.Lock()
+		status := p.TransferStatus
+		p.mu.Unlock()
+		if status != 0 {
+			writeJSON(w, status, map[string]any{"errors": []map[string]string{{"code": "ConflictHttpException", "status": strconv.Itoa(status), "detail": "Server is not being transferred."}}})
+			return
+		}
 		w.WriteHeader(204)
 	default:
 		writeJSON(w, 404, map[string]any{"errors": []map[string]string{{"code": "NotFoundHttpException", "status": "404", "detail": "not found"}}})

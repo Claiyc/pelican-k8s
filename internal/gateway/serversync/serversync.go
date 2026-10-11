@@ -118,43 +118,70 @@ func (s *Syncer) Adopt(ctx context.Context, uuid string, cfg *panel.ServerConfig
 // exists here and was not created for a transfer.
 var ErrTransferConflict = errors.New("the server already exists on this node")
 
+// TransferStaleAfter is how long a GameServer created for an incoming transfer
+// may stay marked while the Panel does not list it on this node before Resync
+// removes it: its push ended without a result report (the agent pod restarted,
+// the source went away), and nothing else would ever clean it up.
+var TransferStaleAfter = 24 * time.Hour
+
 // AdoptForTransfer creates the GameServer of a server another node is pushing
 // here (a Panel transfer) without an install: the agent receives the files.
 // It is marked with AnnotationTransferIn so FinishTransfer can keep or remove
 // it. A server that already runs here is refused; one left by an earlier
-// attempt at the same transfer is reused.
-func (s *Syncer) AdoptForTransfer(ctx context.Context, uuid string) error {
-	gs, err := s.Store.Get(ctx, uuid)
-	switch {
-	case err == nil:
-		if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok {
-			return ErrTransferConflict
-		}
-		if gs.DeletionTimestamp != nil {
-			return fmt.Errorf("%w: an earlier attempt is still being removed", ErrTransferConflict)
-		}
-		return nil
-	case !apierrors.IsNotFound(err):
-		return err
+// attempt at the same transfer is reused. created reports whether this call
+// created it, so a caller that gives up removes only its own.
+func (s *Syncer) AdoptForTransfer(ctx context.Context, uuid string) (created bool, err error) {
+	if gs, err := s.Store.Get(ctx, uuid); err == nil {
+		return false, reusableForTransfer(gs)
+	} else if !apierrors.IsNotFound(err) {
+		return false, err
 	}
 	cfg, err := s.Panel.GetServerConfiguration(ctx, uuid)
 	if err != nil {
-		return fmt.Errorf("fetch configuration: %w", err)
+		return false, fmt.Errorf("fetch configuration: %w", err)
 	}
 	// Until the transfer succeeds the Panel serves the old node's allocation,
 	// which is not this node's to expose; FinishTransfer syncs the new one.
 	if cfg.Settings, err = withoutAllocations(cfg.Settings); err != nil {
-		return err
+		return false, err
 	}
 	gs, envData, err := s.build(uuid, cfg)
 	if err != nil {
-		return err
+		return false, err
 	}
 	gs.Annotations[v1alpha1.AnnotationTransferIn] = time.Now().UTC().Format(time.RFC3339)
 	if err := s.Store.Client.Create(ctx, gs); err != nil {
-		return err
+		if !apierrors.IsAlreadyExists(err) {
+			return false, err
+		}
+		// Another gateway replica created it for the same push.
+		existing, err := s.Store.Get(ctx, uuid)
+		if err != nil {
+			return false, err
+		}
+		return false, reusableForTransfer(existing)
 	}
-	return s.writeEnvSecret(ctx, gs, envData)
+	if err := s.writeEnvSecret(ctx, gs, envData); err != nil {
+		// A marked server without its env Secret would be reused by a retried
+		// push as if it were complete: remove it so the retry starts over.
+		if derr := s.Delete(ctx, uuid); derr != nil {
+			return false, errors.Join(err, fmt.Errorf("remove the incomplete server: %w", derr))
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// reusableForTransfer accepts an existing GameServer for an incoming transfer
+// only when an earlier attempt at the same transfer created it.
+func reusableForTransfer(gs *v1alpha1.GameServer) error {
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok {
+		return ErrTransferConflict
+	}
+	if gs.DeletionTimestamp != nil {
+		return fmt.Errorf("%w: an earlier attempt is still being removed", ErrTransferConflict)
+	}
+	return nil
 }
 
 // withoutAllocations returns settings with the allocations the Panel sends
@@ -488,6 +515,10 @@ func (s *Syncer) Resync(ctx context.Context) error {
 		gs := &existing[i]
 		uuid := gs.Spec.Panel.UUID
 		seen[uuid] = true
+		if mark, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; ok {
+			s.resyncTransfer(ctx, uuid, mark, panelSet[uuid])
+			continue
+		}
 		if !panelSet[uuid] {
 			_ = s.Store.SetCondition(ctx, uuid, metav1.Condition{Type: v1alpha1.ConditionOrphaned, Status: metav1.ConditionTrue, Reason: "NotOnPanel", Message: "the Panel no longer lists this server on this node; it is never deleted automatically"})
 			continue
@@ -526,6 +557,30 @@ func (s *Syncer) Resync(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// resyncTransfer handles a GameServer still marked for an incoming transfer.
+// While the transfer runs the Panel lists the server on the old node and
+// serves the old node's allocation, so it is neither Orphaned nor synced.
+// Listed here, the Panel has moved it and only the result report was lost:
+// finish it. Unlisted for longer than TransferStaleAfter, its push ended
+// without a report: remove it.
+func (s *Syncer) resyncTransfer(ctx context.Context, uuid, mark string, listed bool) {
+	if listed {
+		s.Log.Info("resync: the Panel lists a server still marked for an incoming transfer; finishing it", "uuid", uuid)
+		if err := s.FinishTransfer(ctx, uuid, true); err != nil {
+			s.Log.Warn("resync: finishing the transfer failed", "uuid", uuid, "error", err)
+		}
+		return
+	}
+	started, err := time.Parse(time.RFC3339, mark)
+	if err != nil || time.Since(started) < TransferStaleAfter {
+		return
+	}
+	s.Log.Warn("resync: removing an incoming transfer that never reported a result", "uuid", uuid, "started", mark)
+	if err := s.Delete(ctx, uuid); err != nil {
+		s.Log.Warn("resync: removing the transfer failed", "uuid", uuid, "error", err)
+	}
 }
 
 // compactJSON normalises raw JSON so revisions are stable; invalid input is

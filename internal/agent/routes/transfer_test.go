@@ -170,8 +170,26 @@ func TestIncomingTransferIsActivity(t *testing.T) {
 		reasons = decode(t, f.do("GET", "/internal/v1/activity", "Bearer "+apiToken, ""))["reasons"]
 		w.WriteHeader(http.StatusOK)
 	}
-	f.do("POST", "/api/transfers", "", "")
+	f.handler.ServeHTTP(httptest.NewRecorder(), transferRequest(t, "transfer", map[string]string{"a": "b"}, ""))
 	if rs, _ := reasons.([]any); len(rs) != 1 || rs[0] != "transfer" {
 		t.Fatalf("a transfer in flight must keep the agent from moving: %v", reasons)
+	}
+}
+
+func TestIncomingTransferRegistersOnlyAnAuthorizedTarget(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
+	f.wings = func(w http.ResponseWriter, r *http.Request) {
+		if transfer.Incoming().Get(serverID) != nil || f.srv.IsTransferring() {
+			t.Errorf("%s: nothing may be registered before Wings accepts the token", r.Header.Get("X-Case"))
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}
+	cases := map[string]*http.Request{
+		"no token":    httptest.NewRequest(http.MethodPost, "/api/transfers", nil),
+		"wrong scope": transferRequest(t, "websocket", map[string]string{"a": "b"}, ""),
+	}
+	for name, req := range cases {
+		req.Header.Set("X-Case", name)
+		f.handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
 }

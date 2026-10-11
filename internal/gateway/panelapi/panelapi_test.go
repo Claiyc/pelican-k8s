@@ -804,6 +804,7 @@ func TestIncomingTransferRejections(t *testing.T) {
 		{"wrong scope", signToken(t, nodeToken, transferClaims(uuid, "websocket", exp)), 403},
 		{"no subject", signToken(t, nodeToken, transferClaims("", "transfer", exp)), 403},
 		{"unknown to the panel", signToken(t, nodeToken, transferClaims(otherUUID, "transfer", exp)), 404},
+		{"not a uuid", signToken(t, nodeToken, transferClaims("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz", "transfer", exp)), 403},
 		{"no agent", signToken(t, nodeToken, transferClaims(uuid, "transfer", exp)), 503},
 	}
 	for _, tt := range tests {
@@ -825,6 +826,34 @@ func TestIncomingTransferRejections(t *testing.T) {
 	}
 	if len(g.calls()) != 0 {
 		t.Fatalf("the agent must not be called: %+v", g.calls())
+	}
+}
+
+func TestIncomingTransferWithoutAgentRemovesOnlyItsOwnServer(t *testing.T) {
+	old := TransferAgentWait
+	TransferAgentWait = 50 * time.Millisecond
+	t.Cleanup(func() { TransferAgentWait = old })
+	tok := signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(time.Minute)))
+	ctx := context.Background()
+
+	f := newFixture(t)
+	if code, _, _ := f.do("POST", "/api/transfers", "x", tok); code != 503 {
+		t.Fatalf("code = %d", code)
+	}
+	if f.st.Exists(ctx, uuid) {
+		t.Fatal("a push that never reached an agent must remove the server it created")
+	}
+
+	// A server left by an earlier attempt is not this push's to remove.
+	g := newFixture(t)
+	if _, err := g.h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := g.do("POST", "/api/transfers", "x", tok); code != 503 {
+		t.Fatalf("code = %d", code)
+	}
+	if !g.st.Exists(ctx, uuid) {
+		t.Fatal("an earlier attempt's server must be kept for the next retry")
 	}
 }
 

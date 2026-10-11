@@ -231,25 +231,48 @@ func (h *Handler) installResult(w http.ResponseWriter, r *http.Request) {
 }
 
 // transferResult forwards the result of an incoming transfer to the Panel,
-// then keeps or removes the server (serversync.FinishTransfer). A success the
-// Panel did not accept leaves the server as it is: the Panel still has the
-// transfer open. A failure removes it either way, the Panel keeps the server
-// on its old node.
+// then keeps or removes the server (serversync.FinishTransfer). A failure
+// removes it either way: the Panel keeps the server on its old node. A success
+// the Panel refuses (4xx, e.g. 409 once the transfer is closed) is settled by
+// the Panel's own list: listed on this node, the Panel moved it and only its
+// answer was lost, so it is finished; not listed, the transfer is over and the
+// copy made here is removed. A success the Panel could not be asked about
+// (unreachable, 5xx) leaves the server marked for Resync to settle.
 func (h *Handler) transferResult(successful bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uuid := caller(r)
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+		// The Panel deletes the server on the old node before it answers.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 		defer cancel()
 		err := h.Panel.SetTransferStatus(ctx, uuid, successful)
+		var refused *panel.Error
+		if errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500 && successful {
+			listed, lerr := h.panelLists(ctx, uuid)
+			switch {
+			case lerr != nil:
+				h.Log.Warn("cannot check the Panel's server list", "uuid", uuid, "error", lerr)
+			case listed:
+				h.Log.Info("the Panel refused the transfer result but lists the server on this node; finishing", "uuid", uuid, "status", refused.Status)
+				err = nil
+			default:
+				h.Log.Warn("the Panel refused the transfer result and keeps the server elsewhere; removing the copy", "uuid", uuid, "status", refused.Status)
+				successful = false
+			}
+		}
 		if err != nil {
 			h.Log.Warn("forwarding transfer result to panel failed", "uuid", uuid, "successful", successful, "error", err)
 		}
 		if err == nil || !successful {
-			if err := h.Sync.FinishTransfer(ctx, uuid, successful); err != nil {
-				h.Log.Warn("finishing incoming transfer failed", "uuid", uuid, "successful", successful, "error", err)
+			if ferr := h.Sync.FinishTransfer(ctx, uuid, successful); ferr != nil {
+				h.Log.Warn("finishing incoming transfer failed", "uuid", uuid, "successful", successful, "error", ferr)
 			}
 		}
 		if err != nil {
+			if refused != nil && refused.Status >= 400 && refused.Status < 500 {
+				// Passed through: Wings retries only 5xx answers.
+				writeErr(w, refused.Status, "PanelError", refused.Body)
+				return
+			}
 			// Wings deletes the received files when a failure cannot be reported.
 			writeErr(w, http.StatusBadGateway, "BadGateway", err.Error())
 			return
@@ -257,6 +280,20 @@ func (h *Handler) transferResult(successful bool) http.HandlerFunc {
 		h.Log.Info("incoming transfer finished", "uuid", uuid, "successful", successful)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// panelLists reports whether the Panel lists the server on this node.
+func (h *Handler) panelLists(ctx context.Context, uuid string) (bool, error) {
+	servers, err := h.Panel.ListServers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, s := range servers {
+		if s.Uuid == uuid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // containerStatus records the observed state and derives the intentional stop
