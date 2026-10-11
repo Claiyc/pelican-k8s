@@ -49,10 +49,11 @@ block-storage suite, is still open.
 
 ## 3. Part 1: split pods (main)
 
-The steps are ordered so that each one can merge to `v2` on its own and leave the branch working.
+Steps 1 to 6 and the release notes are done; step 7 is open. The steps were ordered so that each one
+could merge on its own and leave the branch working.
 Steps 1 and 2 change nothing visible; step 3 is the breaking change.
 
-### Step 1: shim protocol over TCP, inside the single pod
+### Step 1: shim protocol over TCP, inside the single pod (done)
 
 - `internal/shim/protocol`: TCP listener and dialer next to the unix ones; mutual HMAC challenge;
   the shim's pod UID in the handshake; bump `Version`.
@@ -61,7 +62,7 @@ Steps 1 and 2 change nothing visible; step 3 is the breaking change.
 - Tests: protocol unit and fuzz tests on the new handshake; `shimenv` tests against a live
   supervisor over TCP; the spike.
 
-### Step 2: the shim stops and reports readiness by itself
+### Step 2: the shim stops and reports readiness by itself (done)
 
 - Protocol: `stop` in `start`, `configure{stop}`, `state{value}`, the `terminating` event.
 - `internal/shim/supervisor`: on SIGTERM run the stop configuration, wait until 20 s before the
@@ -74,7 +75,7 @@ Steps 1 and 2 change nothing visible; step 3 is the breaking change.
 - Remove the game container's `preStop` hook; `/pelican/run` becomes read-write in the game
   container.
 
-### Step 3: two pods, the game pod always present
+### Step 3: two pods, the game pod always present (done)
 
 The layout changes, the lifecycle does not yet: the game StatefulSet stays at 1 replica and the
 game pod has a required pod affinity to the agent pod.
@@ -97,7 +98,7 @@ game pod has a required pod affinity to the agent pod.
 - Upgrade from 1.x: the operator deletes every pod of the old layout (a `gs-<uuid>-0` with an
   `agent` container) as soon as it runs; no compatibility code.
 
-### Step 4: a game pod per run
+### Step 4: a game pod per run (done)
 
 - Game StatefulSet replicas follow `spec.power.desired` and `status.process.state` (§7.6).
 - Start: render the template (digest resolved now), scale to 1, wait for the shim, issue `start`.
@@ -109,7 +110,7 @@ game pod has a required pod affinity to the agent pod.
 - Tests: reconciler tests for every row of the §7.6 tables; e2e start, stop, console stop,
   suspension, reinstall, crash restart, OOM.
 
-### Step 5: placement
+### Step 5: placement (done)
 
 - Game pod: preferred pod affinity; required while the agent has in-flight work
   (`/internal/v1/activity`, `status.backups.pending`, install in progress, `sftpActiveAt`).
@@ -120,7 +121,7 @@ game pod has a required pod affinity to the agent pod.
   full node, lost agent pod, lost game pod, drain.
 - Live suite: step 6.
 
-### Step 6: live placement suite
+### Step 6: live placement suite (done)
 
 Reconciler tests prove the operator decides correctly; they cannot show that the scheduler, the
 StatefulSet controller and kubelet then do what the design assumes. A live suite covers that and
@@ -160,7 +161,7 @@ is where later scheduling rules get their tests.
   that is still attached elsewhere (`GamePodReady=False`, `WaitingForVolume`) or how long a move
   takes. Step 7 covers that.
 
-### Step 7: nightly block-storage suite
+### Step 7: nightly block-storage suite (open)
 
 The same scenarios on real nodes with real block storage, so no release depends on a manual run.
 
@@ -180,13 +181,13 @@ The same scenarios on real nodes with real block storage, so no release depends 
   (time, disk, flakiness), the fallback is the same job against three short-lived cloud VMs,
   which needs cloud credentials.
 
-### Release
+### Release (done)
 
 - `CHANGELOG.md`: breaking changes (pod names and containers in `kubectl` commands, class fields,
   NetworkPolicy names, local backups lost on agent moves).
 - Upgrade notes in `docs/operations.md` for 1.x → 2.0.
 
-## 4. Part 2: seamless agent replacement (follow-up)
+## 4. Part 2: seamless agent replacement (done)
 
 Without it, an agent pod replacement would drop that server's consoles and file-manager calls, and
 the Panel UI would reconnect by itself. ARCHITECTURE.md §5.9 describes the behaviour with Part 2.
