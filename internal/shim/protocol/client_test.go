@@ -487,3 +487,81 @@ func TestAcceptSkipsDeadConnections(t *testing.T) {
 	}
 	first.Close()
 }
+
+// Three connections in a row: only the last one is handed out, whatever the
+// state of the read loops of the two it replaced.
+func TestAcceptSkipsEveryReplacedConnection(t *testing.T) {
+	ln := listen(t, "secret")
+	token := []byte("secret")
+	var conns []net.Conn
+	var last *Decoder
+	for i, pod := range []string{"pod-1", "pod-2", "pod-3"} {
+		conn, err := net.Dial("tcp", ln.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		conns = append(conns, conn)
+		dec, err := Answer(conn, NewEncoder(conn), token, pod, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = dec
+		// Each handshake finishes in its own goroutine: wait for it, so the
+		// connections replace each other in this order.
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			ln.mu.Lock()
+			n := len(ln.ready)
+			ln.mu.Unlock()
+			if n == i+1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("ready queue length = %d, want %d", n, i+1)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	go func() {
+		var m Message
+		if last.Decode(&m) != nil {
+			return
+		}
+		_ = NewEncoder(conns[2]).Encode(&Message{Type: TypeReply, ID: m.ID, OK: true, Status: &Status{PID: 9}})
+	}()
+	c, err := accept(t, ln, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PodUID() != "pod-3" {
+		t.Fatalf("Accept returned the connection of %s", c.PodUID())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if st, err := c.Status(ctx); err != nil || st.PID != 9 {
+		t.Fatalf("status %+v, err %v", st, err)
+	}
+}
+
+// A connection is marked when it is replaced, not when its read loop ends:
+// Accept skips it although it is not done.
+func TestAcceptSkipsAMarkedConnectionThatIsNotDone(t *testing.T) {
+	ln := listen(t, "secret")
+	server, peer := net.Pipe()
+	defer peer.Close()
+	stale := NewClient(server)
+	defer stale.Close()
+	stale.superseded.Store(true)
+	select {
+	case <-stale.Done():
+		t.Fatal("the connection is done")
+	default:
+	}
+	ln.ready <- stale
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if c, err := ln.Accept(ctx); err == nil {
+		t.Fatalf("Accept returned a replaced connection of %q", c.PodUID())
+	}
+}
