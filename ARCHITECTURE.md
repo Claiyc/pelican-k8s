@@ -1497,6 +1497,16 @@ delivers only to pods on that node. So for such a server the operator:
   `u<port>-<uuid prefix>`, the first 8 characters of the server UUID), which the game container declares;
   each port therefore reaches only its own server's pod, even while another server's pod that gave the
   port up still runs
+- writes two exposure Services with that selector and the same address and sharing key: `gs-<uuid>`
+  with the ports as TCP and `gs-<uuid>-udp` with them as UDP. OVN-Kubernetes keeps one flow per
+  Service, load balancer address and port on the node's external bridge, so of a port that one Service
+  carries as TCP and UDP it forwards only the protocol listed last under `Local` and drops the other
+  (seen on OpenShift 4.22: UDP games worked, a Minecraft server on the address answered no TCP
+  connection). Two Services do not collide. `ExposureReady` waits for both to have the same address
+  (`Pending` while one has none, `AddressMismatch` when they differ) and `status.endpoints` is empty
+  until then.
+  Without a sharing annotation two Services cannot get one address, so there one Service carries both
+  protocols
 - adds a required pod affinity (`kubernetes.io/hostname`) toward the game pods with the same label. The
   first one runs wherever the scheduler puts it and the others follow; a game pod that does not fit on
   that node stays `Pending` (`GamePodReady=False`, `Unschedulable`). The agent pods follow their game

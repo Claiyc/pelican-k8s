@@ -525,12 +525,26 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	}
 	exposure := render.ExposureService(s.in)
 	key := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureService(s.in.UUID())}
+	udp := render.ExposureServiceUDP(s.in)
+	udpKey := types.NamespacedName{Namespace: s.gs.Namespace, Name: names.ExposureServiceUDP(s.in.UUID())}
+	// A split exposure that goes back to one Service loses its UDP half
+	// first, because a load balancer does not give one address to two
+	// Services that both carry a port as UDP. From then on nothing is
+	// published until this reconcile, or a later one, has seen the Service
+	// that is left: every return below that does not set the endpoints leaves
+	// them empty.
+	if udp == nil {
+		merged, err := r.deleteService(s, udpKey)
+		if merged {
+			s.gs.Status.Endpoints = nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 	if exposure == nil {
-		existing := &corev1.Service{}
-		if err := r.Get(s.ctx, key, existing); err == nil {
-			if err := r.Delete(s.ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
+		if _, err := r.deleteService(s, key); err != nil {
+			return err
 		}
 		s.gs.Status.Endpoints = nil
 		if s.class.Spec.Exposure.Mode == v1alpha1.ExposureHostPort && s.settings.HasAllocation() {
@@ -561,21 +575,47 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 		r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
 		return err
 	}
+	if udp != nil {
+		// After the TCP Service, which gives up the ports as UDP: the load
+		// balancer refuses the address to a second Service while the first
+		// still carries them.
+		if err := r.applyService(s, udp); err != nil {
+			// The ports are not served as UDP until this Service exists.
+			s.gs.Status.Endpoints = nil
+			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "ServiceError", truncate(err.Error()))
+			return err
+		}
+	}
 	existing := &corev1.Service{}
 	if err := r.Get(s.ctx, key, existing); err != nil {
 		return err
 	}
 	ips := s.class.Spec.Exposure.ExternalIPs
 	if existing.Spec.Type == corev1.ServiceTypeLoadBalancer {
-		ips = nil
-		for _, ing := range existing.Status.LoadBalancer.Ingress {
-			if ing.IP != "" {
-				ips = append(ips, ing.IP)
-			} else if ing.Hostname != "" {
-				ips = append(ips, ing.Hostname)
+		ips = ingressAddresses(existing)
+		if len(ips) > 0 && udp != nil {
+			// Both halves of a split exposure need the address, and the same
+			// one: players reach a port by one address whatever the protocol.
+			half := &corev1.Service{}
+			if err := r.Get(s.ctx, udpKey, half); err != nil {
+				return err
+			}
+			other := ingressAddresses(half)
+			if len(other) > 0 && !sameAddresses(ips, other) {
+				s.gs.Status.Endpoints = nil
+				r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, reasonAddressMismatch,
+					fmt.Sprintf("the TCP Service has %s and the UDP Service %s; the load balancer must give both the same address (check its sharing annotation)",
+						strings.Join(ips, ", "), strings.Join(other, ", ")))
+				s.requeue = requeueFast
+				return nil
+			}
+			if len(other) == 0 {
+				ips = nil
 			}
 		}
 		if len(ips) == 0 {
+			// Nothing is published while an address is missing.
+			s.gs.Status.Endpoints = nil
 			r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionFalse, "Pending", pendingMessage(s))
 			s.requeue = requeueFast
 			return nil
@@ -588,6 +628,56 @@ func (r *GameServerReconciler) ensureServices(s *scope) error {
 	}
 	r.setCondition(s, v1alpha1.ConditionExposureReady, metav1.ConditionTrue, "Ready", "")
 	return nil
+}
+
+// reasonAddressMismatch marks a split exposure whose two Services were given
+// different addresses.
+const reasonAddressMismatch = "AddressMismatch"
+
+// sameAddresses reports whether two Services have the same set of addresses.
+func sameAddresses(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		seen[v]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ingressAddresses returns the addresses a load balancer gave a Service.
+func ingressAddresses(svc *corev1.Service) []string {
+	var out []string
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			out = append(out, ing.IP)
+		} else if ing.Hostname != "" {
+			out = append(out, ing.Hostname)
+		}
+	}
+	return out
+}
+
+// deleteService deletes a Service that may not exist and reports whether
+// there was one.
+func (r *GameServerReconciler) deleteService(s *scope, key types.NamespacedName) (bool, error) {
+	existing := &corev1.Service{}
+	if err := r.Get(s.ctx, key, existing); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	if err := r.Delete(s.ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
 }
 
 // defaultNodePortLow and defaultNodePortHigh are Kubernetes' default

@@ -32,3 +32,11 @@
 Tested on OpenShift 4.22 (Kubernetes 1.35, OVN-Kubernetes, Longhorn, CoreDNS on
 5353) as a single node with `NodePort` exposure. Other distributions should
 work; report issues with the distribution and CNI.
+
+OVN-Kubernetes forwards only one protocol of a port that a LoadBalancer
+Service carries as TCP and UDP under `externalTrafficPolicy: Local`: the one
+listed last, which for a pelican-k8s Service is UDP, so TCP connections to the
+address get no answer. With a sharing annotation (`loadBalancer.provider:
+metallb`, or `sharingAnnotation`) the operator writes one Service per protocol
+and both work. Without one, use `externalTrafficPolicy: Cluster` on such a
+cluster, or `NodePort` exposure.

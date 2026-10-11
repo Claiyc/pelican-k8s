@@ -16,6 +16,7 @@ func TestNames(t *testing.T) {
 		{AgentStatefulSet(u), "gs-" + u + "-agent"},
 		{AgentPod(u), "gs-" + u + "-agent-0"},
 		{ExposureService(u), "gs-" + u},
+		{ExposureServiceUDP(u), "gs-" + u + "-udp"},
 		{AgentService(u), "gs-" + u + "-agent"},
 		{NetworkPolicy(u), "gs-" + u},
 		{AgentNetworkPolicy(u), "gs-" + u + "-agent"},
