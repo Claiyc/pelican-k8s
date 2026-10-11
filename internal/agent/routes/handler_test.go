@@ -347,6 +347,30 @@ func TestActivityRoute(t *testing.T) {
 	}
 }
 
+func TestInstallRefusedWhileAnEarlierInstallHoldsTheLock(t *testing.T) {
+	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
+	for _, path := range []string{"/api/servers/" + serverID + "/install", "/api/servers/" + serverID + "/reinstall"} {
+		if rec := f.do("POST", path, "Bearer "+apiToken, ""); rec.Code != http.StatusTeapot {
+			t.Fatalf("%s while idle must reach wings, got %d", path, rec.Code)
+		}
+		f.srv.SetInstalling(true)
+		rec := f.do("POST", path, "Bearer "+apiToken, "")
+		if rec.Code != http.StatusConflict || !strings.Contains(decode(t, rec)["error"].(string), "still holds the install lock") {
+			t.Fatalf("%s while installing: %d %s", path, rec.Code, rec.Body.String())
+		}
+		// Without the agent's token Wings answers, as before.
+		if rec := f.do("POST", path, "Bearer nope", ""); rec.Code != http.StatusTeapot {
+			t.Fatalf("%s with a wrong token must reach wings, got %d", path, rec.Code)
+		}
+		f.srv.SetInstalling(false)
+	}
+	// Another server's id, or one this agent does not run, goes to Wings.
+	f.srv.SetInstalling(true)
+	if rec := f.do("POST", "/api/servers/00000000-0000-0000-0000-000000000000/reinstall", "Bearer "+apiToken, ""); rec.Code != http.StatusTeapot {
+		t.Fatalf("unknown server must reach wings, got %d", rec.Code)
+	}
+}
+
 func TestIsFileRequest(t *testing.T) {
 	for path, want := range map[string]bool{
 		"/download/file":                      true,

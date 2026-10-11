@@ -1172,8 +1172,9 @@ generation (not a reinstall).
    fetches the install payload, creates ConfigMap `gs-<uuid>-install-<gen+1>` and patches
    `spec.install` (`startOnInstall: false`).
 2. **Operator calls the agent:** `POST /api/servers/:s/install` or `/reinstall`. Wings answers `202` and
-   runs the installer asynchronously; `/reinstall` answers `409` while a power action is running, which
-   the operator retries.
+   runs the installer asynchronously; `/reinstall` answers `409` while a power action is running, and
+   both answer `409` while an earlier generation still holds the install lock, which the operator
+   retries.
 3. **Agent prepares** (`internal/agent/installer`, behind the installer hook, §6.3): for a reinstall
    Wings stops the process first (`WaitForStop(10s, terminate)`), which sets `desired: Stopped` and
    removes the game pod (§7.6); Wings takes the install lock, cancels
@@ -1204,6 +1205,14 @@ generation (not a reinstall).
    is `true` unless `strictExitCode` is set and the exit code is non-zero, or the Job failed.
 6. **Cleanup.** The operator records `status.install.observedGeneration` once the agent's result and the
    Job are final. Successful Jobs are deleted; failed ones stay for an hour for their logs.
+7. **Superseded.** A new generation while one is in flight (a second Reinstall) supersedes it: the
+   operator deletes the older Job, and the gateway answers the older generation's poll with `Superseded`.
+   The installer then ends that run within one poll, drops its result (it would otherwise be recorded
+   against the new generation and reach the Panel as a failed install) and Wings releases the install
+   lock; the new generation's `/install` or `/reinstall` is retried until then. A run that took the lock
+   before the new generation but prepared after it already waits for the new generation's Job: on a
+   `409` with `preparedGeneration` equal to the new generation the operator adopts it instead of asking
+   again (`InstallAdopted`).
 
 ### 8.3 Start, stop and console
 

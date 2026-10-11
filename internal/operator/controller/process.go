@@ -262,11 +262,18 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 			return nil
 		}
 		err := s.agent.Install(s.ctx, s.in.UUID(), gs.Spec.Install.Reinstall)
-		if errors.Is(err, agentclient.ErrConflict) {
-			r.setCondition(s, v1alpha1.ConditionInstallPrepared, metav1.ConditionFalse, "PowerActionRunning", "agent is busy with a power action; retrying")
+		// The run holding the agent's install lock may already be this
+		// generation's: it took the lock before a second Reinstall and
+		// prepared after it (the gateway prepares the current generation), or
+		// the status write after an earlier request was lost. It waits for
+		// this generation's Job, so it is adopted instead of asked again.
+		adopted := errors.Is(err, agentclient.ErrConflict) && st.PreparedGeneration == gen
+		switch {
+		case adopted:
+		case errors.Is(err, agentclient.ErrConflict):
+			r.setCondition(s, v1alpha1.ConditionInstallPrepared, metav1.ConditionFalse, "PowerActionRunning", "agent is busy with a power action or an earlier install; retrying")
 			return nil
-		}
-		if err != nil {
+		case err != nil:
 			return fmt.Errorf("request install: %w", err)
 		}
 		st.RequestedGeneration = gen
@@ -274,7 +281,11 @@ func (r *GameServerReconciler) reconcileInstall(s *scope) error {
 		st.Result = v1alpha1.InstallRunning
 		st.FinishedAt = nil
 		st.JobName = ""
-		r.event(s, corev1.EventTypeNormal, "InstallRequested", "asked the agent to prepare install generation %d", gen)
+		if adopted {
+			r.event(s, corev1.EventTypeNormal, "InstallAdopted", "the agent's running install already prepared generation %d", gen)
+		} else {
+			r.event(s, corev1.EventTypeNormal, "InstallRequested", "asked the agent to prepare install generation %d", gen)
+		}
 		r.setCondition(s, v1alpha1.ConditionInstallPrepared, metav1.ConditionFalse, "Requested", "waiting for the agent to hold the install lock")
 		return nil
 	}

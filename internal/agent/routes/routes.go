@@ -95,6 +95,9 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry) http.
 	}))
 	// A Panel transfer pushes the server's files here, through the gateway.
 	mux.Handle("POST /api/transfers", incomingTransfer(wings, m))
+	// Called by the operator for a new install generation.
+	mux.Handle("POST /api/servers/{server}/install", installGuard(wings, m))
+	mux.Handle("POST /api/servers/{server}/reinstall", installGuard(wings, m))
 	mux.Handle("/", act.Track(wings))
 	return mux
 }
@@ -117,6 +120,21 @@ func incomingTransfer(wings http.Handler, m *server.Manager) http.Handler {
 			transfer.Incoming().Remove(registered)
 			registered.Server.SetTransferring(false)
 		}
+	})
+}
+
+// installGuard answers 409 while an earlier install still holds Wings' install
+// lock, which the operator retries: Wings would fail the new install at once
+// and report it as failed. A superseded run lets go of the lock within one
+// poll of the gateway (section 8.2). Requests without the agent's token go to
+// Wings, which rejects them, so the lock state is told only to the operator.
+func installGuard(wings http.Handler, m *server.Manager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s, ok := m.Get(r.PathValue("server")); ok && s.IsInstalling() && hasAgentToken(r) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "An earlier installation of this server still holds the install lock."})
+			return
+		}
+		wings.ServeHTTP(w, r)
 	})
 }
 
@@ -144,13 +162,18 @@ func transferTarget(r *http.Request, m *server.Manager) *server.Server {
 // calls to Wings are guarded.
 func authorized(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(auth), []byte(config.Get().Token.Token)) != 1 {
+		if !hasAgentToken(r) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "You are not authorized to access this endpoint."})
 			return
 		}
 		h(w, r)
 	}
+}
+
+// hasAgentToken reports whether r carries the agent's own Wings token.
+func hasAgentToken(r *http.Request) bool {
+	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return subtle.ConstantTimeCompare([]byte(auth), []byte(config.Get().Token.Token)) == 1
 }
 
 // Activity counts in-flight file requests: uploads, downloads, compress,
