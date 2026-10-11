@@ -326,3 +326,7 @@ the gateway; [install.md](install.md) covers creating it in the Panel and
 installing the backend. The node's `token_id` and `token` are encrypted with
 `APP_KEY`, so `APP_KEY` must stay stable (section 4). The gateway calls the
 Panel at its `gateway.panelURL`, which must be reachable from the gateway pod.
+The gateway sends SFTP passwords and the node token to that URL, so it logs a
+warning at startup when the URL is plain `http://`; use `https://` unless the
+Panel runs in the same cluster. It follows a Panel redirect only to the same
+host, on the same scheme or from `http` to `https`.

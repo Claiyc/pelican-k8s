@@ -33,8 +33,23 @@ func New(panelURL, tokenID, token, userAgent string) *Client {
 		tokenID:   tokenID,
 		token:     token,
 		userAgent: userAgent,
-		http:      &http.Client{Timeout: 30 * time.Second},
+		http:      &http.Client{Timeout: 30 * time.Second, CheckRedirect: sameOrigin},
 	}
+}
+
+// sameOrigin follows a redirect only to the host of the original request,
+// on the same scheme or from http up to https. A 307 or 308 replays the
+// body, and the body of an SFTP credential check carries the user's password.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("panel: stopped after 10 redirects")
+	}
+	first := via[0].URL
+	upgrade := first.Scheme == "http" && req.URL.Scheme == "https"
+	if req.URL.Host != first.Host || (req.URL.Scheme != first.Scheme && !upgrade) {
+		return fmt.Errorf("panel: refusing redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // Error is a non-2xx Panel response.

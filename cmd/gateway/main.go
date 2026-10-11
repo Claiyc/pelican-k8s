@@ -44,6 +44,9 @@ func main() {
 	app.SetRestConfig(rc)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	logger.Info("pelican-k8s gateway starting", "version", version.Version, "panel", cfg.PanelURL, "namespace", cfg.ServersNamespace)
+	if cfg.PlainHTTPPanel() {
+		logger.Warn("the panel URL is plain http: SFTP passwords and the node token reach the Panel unencrypted; use https unless the Panel runs in the same cluster", "panel", cfg.PanelURL)
+	}
 	g, err := app.New(ctx, cfg, rc, logger)
 	if err != nil {
 		cancel()

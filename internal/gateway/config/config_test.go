@@ -202,3 +202,15 @@ func TestUserAgent(t *testing.T) {
 		t.Errorf("UserAgent = %q, want %q", got, want)
 	}
 }
+
+func TestPlainHTTPPanel(t *testing.T) {
+	for url, want := range map[string]bool{
+		"http://pelican-panel.pelican.svc": true,
+		"HTTP://panel.example.com":         true,
+		"https://panel.example.com":        false,
+	} {
+		if got := (&Config{PanelURL: url}).PlainHTTPPanel(); got != want {
+			t.Errorf("PlainHTTPPanel(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
