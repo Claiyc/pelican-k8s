@@ -147,15 +147,21 @@ func (r *Resolver) Resolve(ctx context.Context, uuid string) (*Target, error) {
 // replaced, starting) it retries for up to HTTPWait before returning
 // ErrUnavailable.
 func (r *Resolver) Wait(ctx context.Context, uuid string) (*Target, error) {
+	return r.WaitFor(ctx, uuid, r.HTTPWait)
+}
+
+// WaitFor is Wait with its own limit, for an agent that is still being
+// created rather than replaced.
+func (r *Resolver) WaitFor(ctx context.Context, uuid string, limit time.Duration) (*Target, error) {
 	t, err := r.Resolve(ctx, uuid)
-	if !errors.Is(err, ErrUnavailable) || r.HTTPWait <= 0 {
+	if !errors.Is(err, ErrUnavailable) || limit <= 0 {
 		return t, err
 	}
 	poll := r.Poll
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
-	deadline := time.NewTimer(r.HTTPWait)
+	deadline := time.NewTimer(limit)
 	defer deadline.Stop()
 	tick := time.NewTicker(poll)
 	defer tick.Stop()

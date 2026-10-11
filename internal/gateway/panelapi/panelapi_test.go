@@ -23,6 +23,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/Claiyc/pelican-k8s/api/v1alpha1"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
@@ -80,7 +81,14 @@ func newFixture(t *testing.T) *fixture {
 			corev1.ResourceEphemeralStorage: resource.MustParse("100Gi"),
 		}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(cls, node).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.GameServer{}).WithObjects(cls, node).
+		// The fake ignores the context; the API server does not.
+		WithInterceptorFuncs(interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.Delete(ctx, obj, opts...)
+		}}).Build()
 	st := store.New(c, ns, "default")
 
 	fp := fakepanel.New(nodeID, nodeToken)
@@ -279,10 +287,6 @@ func TestStaticEndpoints(t *testing.T) {
 func TestUnsupportedTransfers(t *testing.T) {
 	f := newFixture(t)
 	f.create()
-	// The Panel-signed transfer endpoint has no node token.
-	if code, _, _ := f.do("POST", "/api/transfers", "", ""); code != 501 {
-		t.Fatalf("POST /api/transfers = %d", code)
-	}
 	for _, c := range [][2]string{
 		{"DELETE", "/api/transfers/" + uuid},
 		{"POST", "/api/servers/" + uuid + "/transfer"},
@@ -750,6 +754,116 @@ func fileClaims(scope string, exp time.Time) map[string]any {
 	return map[string]any{
 		"iat": time.Now().Unix(), "exp": exp.Unix(), "jti": "j", "server_uuid": uuid,
 		"user_uuid": "u", "scope": scope, "unique_id": "one", "file_path": "/x.txt",
+	}
+}
+
+func transferClaims(subject, scope string, exp time.Time) map[string]any {
+	return map[string]any{"iat": time.Now().Unix(), "exp": exp.Unix(), "jti": "j", "sub": subject, "scope": scope}
+}
+
+func TestIncomingTransfer(t *testing.T) {
+	f := newFixture(t)
+	f.addPod()
+	tok := signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(time.Minute)))
+
+	code, body, _ := f.do("POST", "/api/transfers", "the archive", tok)
+	if code != 200 || body != "agent says /api/transfers" {
+		t.Fatalf("%d %s", code, body)
+	}
+	gs := f.gs()
+	if _, ok := gs.Annotations[v1alpha1.AnnotationTransferIn]; !ok || gs.Spec.Install.Generation != 0 {
+		t.Fatalf("the server must be created for the transfer, without an install: %v %+v", gs.Annotations, gs.Spec.Install)
+	}
+	last := f.calls()[len(f.calls())-1]
+	if last.method != "POST" || last.uri != "/api/transfers" || last.body != "the archive" {
+		t.Fatalf("agent call = %+v", last)
+	}
+	agentToken, ok := strings.CutPrefix(last.auth, "Bearer ")
+	if !ok || agentToken == tok {
+		t.Fatalf("the agent must get a re-signed token: %q", last.auth)
+	}
+	claims, _, err := jwtx.Verify([]byte(agentToken), []byte(agentTok))
+	if err != nil || claims.Subject != uuid || claims.Scope != "transfer" {
+		t.Fatalf("the agent token must verify with the agent key: %+v %v", claims, err)
+	}
+
+	// The source retries a push with the same server.
+	if code, _, _ := f.do("POST", "/api/transfers", "again", tok); code != 200 {
+		t.Fatalf("retry = %d", code)
+	}
+}
+
+func TestIncomingTransferRejections(t *testing.T) {
+	f := newFixture(t)
+	old := TransferAgentWait
+	TransferAgentWait = 50 * time.Millisecond
+	t.Cleanup(func() { TransferAgentWait = old })
+	exp := time.Now().Add(time.Minute)
+
+	tests := []struct {
+		name  string
+		token string
+		code  int
+	}{
+		{"no token", "", 401},
+		{"garbage", "garbage", 403},
+		{"other key", signToken(t, "other", transferClaims(uuid, "transfer", exp)), 403},
+		{"expired", signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(-time.Minute))), 403},
+		{"wrong scope", signToken(t, nodeToken, transferClaims(uuid, "websocket", exp)), 403},
+		{"no subject", signToken(t, nodeToken, transferClaims("", "transfer", exp)), 403},
+		{"unknown to the panel", signToken(t, nodeToken, transferClaims(otherUUID, "transfer", exp)), 404},
+		{"not a uuid", signToken(t, nodeToken, transferClaims("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz", "transfer", exp)), 403},
+		{"no agent", signToken(t, nodeToken, transferClaims(uuid, "transfer", exp)), 503},
+	}
+	for _, tt := range tests {
+		if code, body, _ := f.do("POST", "/api/transfers", "x", tt.token); code != tt.code {
+			t.Errorf("%s: %d %s, want %d", tt.name, code, body, tt.code)
+		}
+	}
+	if f.st.Exists(context.Background(), otherUUID) {
+		t.Fatal("a server the Panel does not know must not be created")
+	}
+
+	// A server that already runs here is never overwritten.
+	g := newFixture(t)
+	g.create()
+	g.addPod()
+	code, body, _ := g.do("POST", "/api/transfers", "x", signToken(t, nodeToken, transferClaims(uuid, "transfer", exp)))
+	if code != 409 {
+		t.Fatalf("existing server: %d %s", code, body)
+	}
+	if len(g.calls()) != 0 {
+		t.Fatalf("the agent must not be called: %+v", g.calls())
+	}
+}
+
+func TestIncomingTransferWithoutAgentRemovesOnlyItsOwnServer(t *testing.T) {
+	// The wait for the agent outlasts a cluster step's deadline, as the real
+	// 3 minutes outlast the 60 seconds: the removal must not run out of time.
+	oldWait, oldCall := TransferAgentWait, TransferCallTimeout
+	TransferAgentWait, TransferCallTimeout = 400*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { TransferAgentWait, TransferCallTimeout = oldWait, oldCall })
+	tok := signToken(t, nodeToken, transferClaims(uuid, "transfer", time.Now().Add(time.Minute)))
+	ctx := context.Background()
+
+	f := newFixture(t)
+	if code, _, _ := f.do("POST", "/api/transfers", "x", tok); code != 503 {
+		t.Fatalf("code = %d", code)
+	}
+	if f.st.Exists(ctx, uuid) {
+		t.Fatal("a push that never reached an agent must remove the server it created")
+	}
+
+	// A server left by an earlier attempt is not this push's to remove.
+	g := newFixture(t)
+	if _, err := g.h.Sync.AdoptForTransfer(ctx, uuid); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := g.do("POST", "/api/transfers", "x", tok); code != 503 {
+		t.Fatalf("code = %d", code)
+	}
+	if !g.st.Exists(ctx, uuid) {
+		t.Fatal("an earlier attempt's server must be kept for the next retry")
 	}
 }
 

@@ -12,6 +12,7 @@ require (
 	github.com/gbrlsnchs/jwt/v3 v3.0.1
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-containerregistry v0.22.1
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/pelican/wings v1.0.0-beta9
 	github.com/pkg/sftp v1.13.11
@@ -99,7 +100,6 @@ require (
 	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect

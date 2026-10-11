@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	googleuuid "github.com/google/uuid"
 	"github.com/pelican/wings/system"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/Claiyc/pelican-k8s/internal/gateway/agents"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/config"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/jwtx"
+	"github.com/Claiyc/pelican-k8s/internal/gateway/panel"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/serversync"
 	"github.com/Claiyc/pelican-k8s/internal/gateway/store"
 	"github.com/Claiyc/pelican-k8s/internal/operator/settings"
@@ -60,7 +62,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /download/file", h.signedProxy("file-download"))
 	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload"))
 	mux.HandleFunc("GET /api/servers/{server}/ws", h.websocket)
-	mux.HandleFunc("POST /api/transfers", h.unsupported)
+	mux.HandleFunc("POST /api/transfers", h.transfers)
 
 	auth := h.requireNodeToken
 	mux.HandleFunc("POST /api/update", auth(h.update))
@@ -146,7 +148,85 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 }
 
 func (h *Handler) unsupported(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "Server transfers are not supported by pelican-k8s in this version.")
+	writeError(w, http.StatusNotImplemented, "This transfer operation is not supported by pelican-k8s in this version; only receiving a server is.")
+}
+
+// TransferAgentWait is how long an incoming transfer waits for the agent of
+// the server it creates: a new volume and pod, not a replacement.
+var TransferAgentWait = 3 * time.Minute
+
+// TransferCallTimeout bounds each cluster and Panel step of an incoming
+// transfer (creating its server, removing it again).
+var TransferCallTimeout = 60 * time.Second
+
+// transfers receives a server another node pushes here (a Panel transfer).
+// The Panel signs the push with this node's token and names the server in the
+// subject. The server is created without an install and the request, re-signed
+// for its agent, is proxied there: the agent's Wings extracts the archive and
+// reports the result through the remote API (remoteapi.transferResult).
+func (h *Handler) transfers(w http.ResponseWriter, r *http.Request) {
+	auth := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(auth) != 2 || auth[0] != "Bearer" {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeError(w, http.StatusUnauthorized, "The required authorization headers were not present in the request.")
+		return
+	}
+	claims, raw, err := jwtx.Verify([]byte(auth[1]), []byte(h.Cfg.NodeToken))
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	uuid := claims.Subject
+	if _, err := googleuuid.Parse(uuid); err != nil || len(uuid) != 36 || !strings.Contains(" "+claims.Scope+" ", " transfer ") {
+		writeError(w, http.StatusForbidden, "Forbidden.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), TransferCallTimeout)
+	defer cancel()
+	created, err := h.Sync.AdoptForTransfer(ctx, uuid)
+	if err != nil {
+		switch {
+		case errors.Is(err, serversync.ErrTransferConflict):
+			h.Log.Warn("incoming transfer refused", "uuid", uuid, "error", err)
+			writeError(w, http.StatusConflict, err.Error())
+		case panel.IsNotFound(err):
+			h.Log.Warn("incoming transfer refused", "uuid", uuid, "error", err)
+			writeError(w, http.StatusNotFound, "The requested resource does not exist on this instance.")
+		default:
+			h.Log.Error("incoming transfer failed", "uuid", uuid, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
+		}
+		return
+	}
+	h.Log.Info("incoming transfer", "uuid", uuid)
+	// No agent, no transfer: the source reports the failure to the Panel itself
+	// and no result will reach the remote API, so remove what this push created.
+	giveUp := func(ctx context.Context) {
+		if !created {
+			return
+		}
+		// Its own deadline: the wait for the agent can outlast the adoption's.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TransferCallTimeout)
+		defer cancel()
+		if err := h.Sync.FinishTransfer(ctx, uuid, false); err != nil {
+			h.Log.Warn("cannot remove the server of an abandoned transfer", "uuid", uuid, "error", err)
+		}
+	}
+	t, err := h.Agents.WaitFor(r.Context(), uuid, TransferAgentWait)
+	if err != nil {
+		giveUp(r.Context())
+		h.agentUnavailable(w, err)
+		return
+	}
+	resigned, err := jwtx.Resign(raw, []byte(t.Token))
+	if err != nil {
+		giveUp(r.Context())
+		writeError(w, 500, err.Error())
+		return
+	}
+	h.Agents.Proxy(w, r, t, func(out *http.Request) {
+		out.Header.Set("Authorization", "Bearer "+string(resigned))
+	})
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
