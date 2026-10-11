@@ -59,7 +59,8 @@ type env struct {
 	agentClient chan string
 
 	dialedMu sync.Mutex
-	dialed   []string // agent addresses the proxy dialed
+	dialed   []string    // agent addresses the proxy dialed
+	dialedAt []time.Time // when it dialed them
 }
 
 type opts struct {
@@ -163,6 +164,7 @@ func newEnv(t *testing.T, o opts) *env {
 		netDial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			e.dialedMu.Lock()
 			e.dialed = append(e.dialed, addr)
+			e.dialedAt = append(e.dialedAt, time.Now())
 			e.dialedMu.Unlock()
 			if o.agentDown {
 				return nil, errors.New("agent down")
@@ -701,6 +703,14 @@ func TestConsoleHeldAcrossAgentReplacement(t *testing.T) {
 	}
 	if m := readMsg(t, conn); m.Event != "token expiring" {
 		t.Fatalf("browser got %+v, want token expiring", m)
+	}
+	// The new agent booted before it was dialed. A token issued now has an
+	// iat (whole seconds) that is not before that.
+	e.dialedMu.Lock()
+	booted := e.dialedAt[len(e.dialedAt)-1]
+	e.dialedMu.Unlock()
+	if now := time.Now(); now.Truncate(time.Second).Before(booted) {
+		t.Fatalf("token expiring came at %s, in the second the new agent booted (%s)", now.Format(time.StampMilli), booted.Format(time.StampMilli))
 	}
 	send(t, conn, "auth", token(t, nodeToken, validClaims("*")))
 	var m Message

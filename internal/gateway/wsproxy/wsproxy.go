@@ -47,6 +47,9 @@ type Proxy struct {
 	// pollEvery and grace override how often and how long a session looks
 	// for a replaced agent pod (tests).
 	pollEvery, grace time.Duration
+	// now overrides the clock that times the token request after a move
+	// (tests).
+	now func() time.Time
 }
 
 var powerPermissions = map[string]string{
@@ -280,7 +283,10 @@ func (s *session) agentReplaced(ctx context.Context, clientDone <-chan struct{})
 // reattach waits up to the configured agentWait for the new agent and
 // dials it. The browser is then asked for a fresh token ("token expiring"),
 // which the new agent needs: its boot cutoff rejects tokens issued before it
-// started. When the wait runs out the browser gets "daemon error" and 1013.
+// started. The cutoff is exact but a token's iat is in whole seconds, so a
+// token issued in the second the agent booted is rejected too; the request
+// waits for the next second. When the wait runs out the browser gets
+// "daemon error" and 1013.
 func (s *session) reattach(ctx context.Context, clientDone <-chan struct{}) bool {
 	deadline := time.NewTimer(s.p.agentWait())
 	defer deadline.Stop()
@@ -307,10 +313,33 @@ func (s *session) reattach(ctx context.Context, clientDone <-chan struct{}) bool
 				continue
 			}
 			s.attach(conn, t)
-			_ = s.writeClient(Message{Event: "token expiring"})
-			return true
+			return s.askForToken(ctx, clientDone)
 		}
 	}
+}
+
+// askForToken sends the browser "token expiring" at the start of the next
+// whole second and reports whether the browser is still there.
+func (s *session) askForToken(ctx context.Context, clientDone <-chan struct{}) bool {
+	now := s.p.clock()
+	t := time.NewTimer(now.Truncate(time.Second).Add(time.Second).Sub(now))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		_ = s.writeClient(Message{Event: "token expiring"})
+		return true
+	case <-clientDone:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (p *Proxy) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 func (p *Proxy) agentWait() time.Duration {

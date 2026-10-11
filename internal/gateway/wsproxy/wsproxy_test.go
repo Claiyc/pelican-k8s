@@ -208,3 +208,35 @@ func TestPumpClientToAgent(t *testing.T) {
 		t.Fatal("pump did not stop when the browser closed")
 	}
 }
+
+// After a move the browser is asked for a token at the next whole second,
+// unless the browser or the request goes first.
+func TestAskForToken(t *testing.T) {
+	s, browser, _ := newTestSession(t)
+	now := time.Unix(1000, 990*int64(time.Millisecond))
+	s.p.now = func() time.Time { return now }
+	open := make(chan struct{})
+	start := time.Now()
+	if !s.askForToken(context.Background(), open) {
+		t.Fatal("gave up with the browser still there")
+	}
+	if d := time.Since(start); d < 10*time.Millisecond || d > time.Second/2 {
+		t.Fatalf("waited %s at .990, want about 10ms", d)
+	}
+	var m Message
+	if err := browser.ReadJSON(&m); err != nil || m.Event != "token expiring" {
+		t.Fatalf("browser got %+v (%v), want token expiring", m, err)
+	}
+
+	now = time.Unix(1000, 0)
+	gone := make(chan struct{})
+	close(gone)
+	if s.askForToken(context.Background(), gone) {
+		t.Fatal("went on after the browser left")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if s.askForToken(ctx, open) {
+		t.Fatal("went on after the request ended")
+	}
+}
