@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0-beta2] - 2026-10-11
+
 ### Added
 - Servers can share one LoadBalancer address under `externalTrafficPolicy: Local` (class `exposure.loadBalancer.sharingAnnotation`, e.g. MetalLB's `metallb.io/allow-shared-ip`). Their Services select the game pods by a shared-address label and target server-specific named ports, and their game pods run on one node, where the load balancer announces the address. A running server found on another node is stopped and its game pod recreated there (`RecreatePending`, reasons `SharedIPNodeMismatch` and `SharedIPPortsOutdated`).
 - A start prints what it waits for on the console while the game pod is not up: the pod being created, a node that fits it, the volume, the image. The Panel shows `offline` until the process starts, and the console used to stay empty for that time.
@@ -19,6 +21,11 @@ All notable changes to this project are documented here. The format follows
 - `status.process` could stay `running`, and the phase `Running`, for a server without a game pod, when its agent pod was replaced while the process went. The operator records `offline` for a server without a game pod.
 - With `tls.enabled: false` the certificate Secrets `gs-<uuid>-tls` of an earlier `tls.enabled: true` stayed. The operator deletes them once no pod mounts them.
 - The gateway printed a controller-runtime stack trace (`log.SetLogger(...) was never called`) half a minute after it started.
+
+### What's Changed
+* docs: bring the docs up to date with master by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/109
+* gateway: keep a server running across a shared-address move by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/111
+* Fix the findings of the 2.0.0-beta1 live test by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/110
 
 ## [2.0.0-beta1] - 2026-10-11
 
@@ -175,7 +182,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...HEAD
+[2.0.0-beta2]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta1...v2.0.0-beta2
 [2.0.0-beta1]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0-beta1
 [1.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/Claiyc/pelican-k8s/compare/v1.0.1...v1.0.2
