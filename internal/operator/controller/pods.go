@@ -909,14 +909,15 @@ func waitingForVolume(pod *corev1.Pod) bool {
 }
 
 // sandboxReady reports a pod whose sandbox kubelet created: its volumes are
-// mounted and its containers are next.
+// mounted and its containers are next. A kubelet that does not report the
+// condition (its feature gate is off) shows it by the first container status.
 func sandboxReady(pod *corev1.Pod) bool {
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodReadyToStartContainers {
 			return c.Status == corev1.ConditionTrue
 		}
 	}
-	return false
+	return len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses) > 0
 }
 
 // gameContainerRunning reports whether the game container runs now.

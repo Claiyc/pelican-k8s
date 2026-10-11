@@ -180,7 +180,7 @@ instead and waits there if the node is full. See ARCHITECTURE.md §7.7.
 | Field | Default | Meaning |
 |---|---|---|
 | `serviceAccountName` | `pelican-installer` | Job ServiceAccount |
-| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job limits are `max(server, these)` like Wings' `installer_limits`; the CPU value applies only when the server has a CPU limit. Requests do not grow with the server: memory is the server's request, at most `resources.memory`; CPU is `resources.minCpu`. An install then does not wait for a share of the server's limits to be free |
+| `resources.cpu` / `resources.memory` | 1 / 1Gi | Job limits are `max(server, these)` like Wings' `installer_limits`; the CPU value applies only when the server has a CPU limit. Requests do not grow with the server: memory is the server's request, at most `resources.memory` when that is set; CPU is `resources.minCpu`. An install then does not wait for a share of the server's limits to be free |
 | `strictExitCode` | false | Wings ignores script exit codes; `true` fails the install on non-zero |
 | `activeDeadlineSeconds` | 3600 | Job time limit |
 | `prepareTimeoutSeconds` | 600 | How long to wait for the agent to hold the install lock before failing |

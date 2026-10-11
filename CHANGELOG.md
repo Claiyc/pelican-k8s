@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
-- An install Job no longer reserves a share of the server it installs. Its CPU request is the class's `resources.minCpu` (100m) instead of the game container's request, a quarter of the server's CPU limit by default, and its memory request is at most the class's `install.resources.memory` (1Gi). The limits stay `max(server, class)`. An install for a server with a large limit waited for that much free CPU on the node.
+- An install Job no longer reserves a share of the server it installs. Its CPU request is the class's `resources.minCpu` (100m) instead of the game container's request, a quarter of the server's CPU limit by default, and its memory request is at most the class's `install.resources.memory` where the class sets it (the chart's default class: 1Gi); without that value it stays the game container's request. The limits stay `max(server, class)`. An install for a server with a large limit waited for that much free CPU on the node.
 - Lower default requests, from what the components use: gateway and operator 10m CPU and 64Mi memory each (50m and 128Mi before), and the agent pod of every server 10m and 64Mi (class `resources.agent`, 50m and 128Mi before). The memory limits stay at 512Mi. Agent pods are recreated with the new template once their server is offline.
 
 ### Fixed

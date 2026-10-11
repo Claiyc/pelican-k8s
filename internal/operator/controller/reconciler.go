@@ -401,8 +401,8 @@ func (r *GameServerReconciler) ensureCertificate(s *scope, leaf certs.Leaf) erro
 // dropUnusedTLSSecret deletes the agent's certificate Secret once tls is off
 // and no pod of the server mounts it any more. Only a Secret the GameServer
 // owns goes: one cert-manager wrote belongs to its Certificate. It is a
-// cleanup: a failure is logged and tried again at the next reconcile, and
-// never keeps the reconcile from driving the server.
+// cleanup: a failure is reported with an event and tried again at the next
+// reconcile, and never keeps the reconcile from driving the server.
 func (r *GameServerReconciler) dropUnusedTLSSecret(s *scope) {
 	if r.tls() {
 		return
@@ -414,14 +414,18 @@ func (r *GameServerReconciler) dropUnusedTLSSecret(s *scope) {
 		}
 	}
 	sec := &corev1.Secret{}
-	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: names.TLSSecret(uuid)}, sec); err != nil {
+	name := names.TLSSecret(uuid)
+	if err := r.Get(s.ctx, types.NamespacedName{Namespace: s.gs.Namespace, Name: name}, sec); err != nil {
+		if !apierrors.IsNotFound(err) {
+			r.event(s, corev1.EventTypeWarning, "CertificateSecretKept", "cannot read the unused certificate Secret %s: %v", name, err)
+		}
 		return
 	}
 	if !metav1.IsControlledBy(sec, s.gs) {
 		return
 	}
 	if err := r.Delete(s.ctx, sec); err != nil && !apierrors.IsNotFound(err) {
-		log.FromContext(s.ctx).Info("cannot delete the unused certificate Secret", "secret", sec.Name, "error", err.Error())
+		r.event(s, corev1.EventTypeWarning, "CertificateSecretKept", "cannot delete the unused certificate Secret %s: %v", name, err)
 	}
 }
 
@@ -657,6 +661,8 @@ func (r *GameServerReconciler) applyService(s *scope, desired *corev1.Service) e
 		if err := controllerutil.SetControllerReference(s.gs, desired, r.Scheme()); err != nil {
 			return err
 		}
+		// Record the keys from the start, so a later class edit can remove them.
+		desired.Annotations = mergeAnnotations(nil, desired.Annotations)
 		return client.IgnoreAlreadyExists(r.Create(s.ctx, desired))
 	}
 	if err != nil {
@@ -687,8 +693,8 @@ func (r *GameServerReconciler) applyService(s *scope, desired *corev1.Service) e
 }
 
 // servicePatchEmpty reports whether applyService changed nothing it sets.
-// Ports are compared without the node ports the API server assigned, which a
-// rendered Service does not carry.
+// A node port the API server assigned is not a difference: the rendered
+// Service carries a node port only where the class asks for one.
 func servicePatchEmpty(before, after *corev1.Service) bool {
 	if !equality.Semantic.DeepEqual(before.Labels, after.Labels) || !equality.Semantic.DeepEqual(before.Annotations, after.Annotations) ||
 		!equality.Semantic.DeepEqual(before.Spec.Selector, after.Spec.Selector) ||
@@ -697,7 +703,9 @@ func servicePatchEmpty(before, after *corev1.Service) bool {
 		return false
 	}
 	for i, p := range before.Spec.Ports {
-		p.NodePort = after.Spec.Ports[i].NodePort
+		if after.Spec.Ports[i].NodePort == 0 {
+			p.NodePort = 0
+		}
 		if !equality.Semantic.DeepEqual(p, after.Spec.Ports[i]) {
 			return false
 		}

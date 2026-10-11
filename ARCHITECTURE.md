@@ -1591,7 +1591,7 @@ clusters and node-local storage, where the agent does not move.
 | PIDs (`container_pid_limit` 512) | `PidsLimit` | kubelet `podPidsLimit` (node setting) |
 | OOM detection | `OOMKilled` from container inspect | shim `memory.events` and the relayed container status (§6.4) |
 | tmpfs `/tmp` (100 MiB) | tmpfs | `emptyDir{medium: Memory, sizeLimit: tmpSizeMiB}` (counts toward memory) |
-| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; the memory request is the server's, at most class `install.resources.memory`, and the CPU request is class `resources.minCpu` |
+| installer limits | max(server, `installer_limits`) | Install Job: memory limit = max(server, class `install.resources.memory`); CPU limit = max(server, class `install.resources.cpu`) when the server has a CPU limit, else none; the memory request is the server's, at most class `install.resources.memory` when that is set, and the CPU request is class `resources.minCpu` |
 
 The game container's requests and limits exist only while the game pod does: **a stopped server
 requests nothing but its agent.**
@@ -1856,7 +1856,7 @@ node, so set `podDisruptionBudget.enabled: false` on single-node clusters.
   `GameContainerTerminated`; pod: `Recreate`, `Replace`, `Resized`, `AgentRelocating`, `SharedIPMove`, `SharedIPPorts`, `ForceDelete`,
   `LegacyPodDeleted`, `LegacyPowerAdopted`, `ClassNotFound`, `DigestLookupFailed`, `EntrypointLookupFailed`; storage:
   `VolumeExpanded`, `ResizeFailed`, `SnapshotCreated`, `SnapshotFailed`, `InvalidSnapshotSchedule`,
-  `VolumeRetained`; TLS: `CertificateRenewed`; deletion: `AgentDeleteFailed`, `AgentKillFailed`);
+  `VolumeRetained`; TLS: `CertificateRenewed`, `CertificateSecretKept`; deletion: `AgentDeleteFailed`, `AgentKillFailed`);
   conditions (§7.2).
 - **Gateway:** `GET /api/diagnostics` (§5.2) and `GET /healthz`.
 - The gateway and the agent expose no metrics endpoint.

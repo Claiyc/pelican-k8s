@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -44,6 +46,15 @@ func TestUndeletableTLSSecretDoesNotFailTheReconcile(t *testing.T) {
 	}
 	if gs := h.gs(); gs.Status.Phase == v1alpha1.PhaseError {
 		t.Fatalf("phase %s: %s", gs.Status.Phase, h.condReason(v1alpha1.ConditionAgentReady))
+	}
+	reported := false
+	for events := h.r.Recorder.(*record.FakeRecorder).Events; len(events) > 0; {
+		if e := <-events; strings.Contains(e, "CertificateSecretKept") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatal("the refused deletion is not reported with an event")
 	}
 }
 
@@ -99,6 +110,69 @@ func TestServiceKeepsForeignAnnotations(t *testing.T) {
 	}
 	if got := mergeAnnotations(nil, nil); got != nil {
 		t.Fatalf("mergeAnnotations(nil, nil) = %v", got)
+	}
+}
+
+// A Service the operator creates records its keys at once, so a class edit
+// that drops an annotation removes it from the Service.
+func TestCreatedServiceRecordsItsAnnotations(t *testing.T) {
+	const mine = "metallb.io/loadBalancerIPs"
+	h := newHarness(t, newGS(), newClass())
+	s := &scope{ctx: context.Background(), gs: h.gs(), requeue: requeueSlow}
+	render := func(annotations map[string]string) *corev1.Service {
+		return &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "new", Annotations: annotations},
+			Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer, Ports: []corev1.ServicePort{{Name: "tcp-1", Port: 1, Protocol: corev1.ProtocolTCP}}},
+		}
+	}
+	if err := h.r.applyService(s, render(map[string]string{mine: "192.0.2.10"})); err != nil {
+		t.Fatal(err)
+	}
+	var svc corev1.Service
+	h.get(&svc, "new")
+	if svc.Annotations[annotationManaged] != mine || svc.Annotations[mine] != "192.0.2.10" {
+		t.Fatalf("annotations %v", svc.Annotations)
+	}
+	if err := h.r.applyService(s, render(nil)); err != nil {
+		t.Fatal(err)
+	}
+	h.get(&svc, "new")
+	if len(svc.Annotations) != 0 {
+		t.Fatalf("an annotation the class dropped stays: %v", svc.Annotations)
+	}
+}
+
+// A node port the class asks for is compared; one the API server assigned to
+// a Service rendered without is not a difference.
+func TestServicePatchEmptyAndNodePorts(t *testing.T) {
+	svc := func(nodePort int32) *corev1.Service {
+		return &corev1.Service{Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "tcp-1", Port: 1, Protocol: corev1.ProtocolTCP, NodePort: nodePort}}}}
+	}
+	if !servicePatchEmpty(svc(31000), svc(0)) {
+		t.Fatal("an assigned node port counts as a change")
+	}
+	if servicePatchEmpty(svc(31000), svc(32000)) {
+		t.Fatal("a changed node port is not applied")
+	}
+	if !servicePatchEmpty(svc(31000), svc(31000)) {
+		t.Fatal("the same node port counts as a change")
+	}
+}
+
+// Without the kubelet's sandbox condition the first container status shows
+// that the pod was taken up.
+func TestSandboxReadyWithoutTheCondition(t *testing.T) {
+	pod := &corev1.Pod{}
+	if sandboxReady(pod) {
+		t.Fatal("a pod without any status is ready")
+	}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "prepare"}}
+	if !sandboxReady(pod) {
+		t.Fatal("a pod with a container status is not ready")
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReadyToStartContainers, Status: corev1.ConditionFalse}}
+	if sandboxReady(pod) {
+		t.Fatal("the condition does not win over the fallback")
 	}
 }
 
