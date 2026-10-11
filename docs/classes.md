@@ -250,8 +250,10 @@ extraClasses:
 
 A server in `burst` keeps its Panel memory limit, so it can grow to it when
 players arrive, but the scheduler only counts 30% of it: an over-full node then
-evicts rather than throttles (memory is incompressible). A server changes class
-like any class change: a running one gets its new game pod once the process is
+evicts rather than throttles (memory is incompressible). Moving a running
+server between classes that differ only in resources, like `burst` and the
+default class, resizes its game pod in place (`ResizePending` while the node
+has no room); any other difference gives it a new game pod once the process is
 offline.
 
 A class can also be created by hand (`kubectl apply`). The chart fills
