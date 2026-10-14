@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-14
+
+### What's Changed
+* build(deps): bump actions/upload-artifact from 7.0.1 to 7.0.2 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/133
+* build(deps): bump helm/kind-action from 1.15.0 to 1.15.1 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/132
+* build(deps): bump actions/download-artifact from 8.0.1 to 8.0.2 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/131
+* build(deps): bump ossf/scorecard-action from 2.4.4 to 2.5.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/130
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/129
+* build(deps): bump github.com/go-logr/logr from 1.4.3 to 1.4.4 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/128
+* build(deps): bump the golang-x group with 2 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/127
+
 ## [2.0.0] - 2026-10-11
 
 ### What's Changed
@@ -254,7 +265,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0
 [2.0.0-beta4]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...v2.0.0-beta4
 [2.0.0-beta3]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta2...v2.0.0-beta3
