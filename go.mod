@@ -10,7 +10,7 @@ require (
 	github.com/apex/log v1.9.0
 	github.com/creack/pty v1.1.24
 	github.com/gbrlsnchs/jwt/v3 v3.0.1
-	github.com/go-logr/logr v1.4.3
+	github.com/go-logr/logr v1.4.4
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
