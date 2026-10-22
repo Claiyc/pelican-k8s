@@ -149,16 +149,13 @@ Mark the release PR ready and merge it. Nothing else is manual.
   PRs are left out by `.github/release.yml`) and bumps
   `charts/pelican-k8s/Chart.yaml` and the pinned install commands that
   `test/docs` checks.
-- **The version.** A patch release by default. Label a PR `minor` (a new
-  feature) or `major` (a breaking change) and the next release is at least
-  that; the largest label among the PRs merged since the last release wins,
-  and the release PR says which PR decided it. The release PR itself can
-  carry the label too, which is the quickest way to ask for a bigger release.
-  Labelling a PR after it was merged, or the release PR, updates the release
-  PR straight away. Notes written by hand under
-  `## [Unreleased]` are kept above the generated list and can raise it too:
-  `### Added`, `### Changed` or `### Deprecated` make a minor release,
-  `### Removed` or the word `BREAKING` a major one.
+- **The version.** A patch release unless you label the release PR
+  `release:minor` (a new feature) or `release:major` (a breaking change),
+  which updates the release PR straight away. Nothing else decides it: labels
+  on the merged PRs and the notes are not read. The labels are not plain
+  `minor` and `major` because Dependabot puts a label with either name on its
+  own PRs; the `Release PR` workflow deletes those two if they exist. Notes
+  written by hand under `## [Unreleased]` are kept above the generated list.
 - **A pre-release.** Label the release PR `prerelease` and it becomes a
   pre-release of that version, `X.Y.Z-beta1`. Merging it publishes a GitHub
   pre-release that is not marked latest, pushes the images tagged
