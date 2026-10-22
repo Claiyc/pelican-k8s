@@ -9,10 +9,11 @@ Wings node.
 | Repo | Commit | Notes |
 |---|---|---|
 | `github.com/pelican/wings` | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
-| `github.com/pelican/panel` | `6ba5264` (2026-09-14) | Laravel 13 / Filament 5, AGPL-3.0 |
+| `github.com/pelican/panel` | `f64a167` (2026-10-22, `v1.0.0-rc.2`) | Laravel 13 / Filament 5, AGPL-3.0 |
 
-Paths below are relative to the respective repo root. Pelican is still in beta
-(Panel `v1.0.0-beta38`, Wings `v1.0.0-beta29`), so **re-verify this document when bumping versions**.
+Paths below are relative to the respective repo root. Pelican is still at release candidates
+(Panel `v1.0.0-rc.2`; Wings `v1.0.0-rc.1`, which differs from `9fb682f` only in a test), so
+**re-verify this document when bumping versions**.
 
 ---
 
@@ -20,7 +21,7 @@ Paths below are relative to the respective repo root. Pelican is still in beta
 
 ### 1.1 Panel → Wings (node token)
 
-- Laravel macro `Http::daemon` (`app/Providers/AppServiceProvider.php:83-93`):
+- Laravel macro `Http::daemon` (`app/Providers/AppServiceProvider.php:68-78`):
   `baseUrl($node->getConnectionAddress())`, `withToken($node->daemon_token)` →
   `Authorization: Bearer <token>` (token only, no id). TLS verify only in production.
 - `Node::getConnectionAddress()` = `"$scheme://$fqdn:$daemon_connect"` (`app/Models/Node.php:219-222`).
@@ -75,13 +76,13 @@ Paths below are relative to the respective repo root. Pelican is still in beta
   runs `Websockets().CancelAll()` and `Sftp().Cancel(user)`. **If `servers` is empty it cancels sessions
   on all servers but writes no deny entry.**
 - **Legacy JTI denylist** via `POST /api/servers/:s/ws/deny {jtis[]}` (`router_server.go:327-341`).
-  The Panel sends `md5(...)` (`DaemonServerRepository.php:145`) while it signs `jti = sha256(...)`,
+  The Panel sends `md5(...)` (`DaemonServerRepository.php:139`) while it signs `jti = sha256(...)`,
   so this path never matches.
 - **One-time use** for download, upload and backup tokens: `TokenStore` (go-cache, 60 min TTL, keyed by
   `unique_id`; `router/tokens/token_store.go:14-42`).
-- *[inferred, likely Panel bug]* `DaemonServerRepository::deauthorize` posts `['json' => [...]]`
-  (`:156-161`) through the Laravel HTTP client, which wraps the payload, so Wings receives an empty
-  `user`/`servers` and takes the "cancel everything, deny nothing" branch.
+- `DaemonServerRepository::deauthorize` (`:148-154`) posts `{user, servers: [uuid]}` for one server,
+  or `servers: []` for a whole node (`RevokeSftpAccessJob`), which takes the "cancel everything,
+  deny nothing" branch.
 
 ---
 
@@ -115,7 +116,7 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 | GET | `/api/system/utilization` | N | `Node.php:418-422` (`memory_total`, …) |
 | GET | `/api/servers` | N | list |
 | POST | `/api/servers` | N (UUID in body) | `DaemonServerRepository::create {uuid, start_on_completion}` |
-| DELETE | `/api/transfers/:server` | S | — |
+| DELETE | `/api/transfers/:server` | S | `DaemonServerRepository::cancelTransfer` on the destination node; the response is ignored. Wings mounts it without `ServerExists`, so `ExtractServer` panics and it answers 500 |
 | POST | `/api/deauthorize-user` | N | `RevokeSftpAccessJob` |
 
 ### 2.3 Server routes (`/api/servers/:server`, node token + `ServerExists`)
@@ -128,8 +129,10 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 
 Panel timeouts worth noting: compress and decompress 15 min, search 2 min (`DaemonFileRepository`).
 
-*[inferred]* The Panel also calls `POST /api/servers/{uuid}/archive` and `DELETE /api/transfer`, which have
-no matching Wings routes (legacy or broken).
+*[inferred]* The Panel also calls `POST /api/servers/{uuid}/archive`, which has no matching Wings route
+(legacy or broken). Cancelling a transfer (`DaemonServerRepository::cancelTransfer`) calls
+`DELETE /api/servers/{uuid}/transfer` on the source node and `DELETE /api/transfers/{uuid}` on the
+destination, and ignores both responses.
 
 ---
 
@@ -157,8 +160,9 @@ resolves the groups and diffs the result against this table.
 
 *[inferred]* Wings' `SetArchiveStatus` posts `/servers/{uuid}/archive`, which has no Panel route (dead code).
 
-State reads: `Server::retrieveStatus()` caches `GET /api/servers/{uuid}` for 15 s, and a pushed
-`container/status` value wins for up to 1 h (`Server.php:476-486`, `ServerContainersController.php:17-26`).
+State reads: `Server::retrieveStatus()` caches `GET /api/servers/{uuid}` for 15 s (and answers `missing`
+without asking while the node is under maintenance), and a pushed `container/status` value wins for up
+to 1 h (`Server.php:520-532`, `ServerContainersController.php:17-26`).
 
 ---
 
@@ -211,7 +215,7 @@ the Panel pre-expands every other placeholder (`{{server.build.default.port}}`, 
 
 - Username format `^(?i)(.+)\.([a-z0-9]{8})$` → `<panel username>.<uuid_short>` (`sftp/server.go:31`).
   Panel connection string: `sftp://<user>.<uuid_short>@<daemon_sftp_alias ?? fqdn>:<daemon_sftp>`
-  (`app/Models/Server.php:561-563`).
+  (`app/Models/Server.php:612-614`).
 - Auth request `POST /api/remote/sftp/auth` with body
   `{type: password|public_key, username, password|authorized_key, ip, session_id, client_version}`
   (`remote/types.go:75-82`).

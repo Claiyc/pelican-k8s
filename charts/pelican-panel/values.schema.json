@@ -35,7 +35,7 @@
           "type": "string",
           "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
           "default": "",
-          "examples": ["", "v1.0.0-beta38"]
+          "examples": ["", "v1.0.0-rc.2"]
         },
         "pullPolicy": {
           "description": "imagePullPolicy of the Panel container.",

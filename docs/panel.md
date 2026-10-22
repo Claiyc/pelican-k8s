@@ -17,7 +17,7 @@ No separate worker/scheduler Deployment is needed or wanted.
 
 ```
 charts/pelican-panel/
-  Chart.yaml            name pelican-panel, version 0.1.3, appVersion v1.0.0-beta38
+  Chart.yaml            name pelican-panel, version 0.1.4, appVersion v1.0.0-rc.2
   values.yaml           fully commented defaults
   values.schema.json    types, allowed values and defaults of every value, checked by Helm
   README.md             every value documented
@@ -67,10 +67,7 @@ kubectl -n pelican exec deploy/panel-pelican-panel -- \
 
 `database.connection` = `pgsql` | `mysql` | `mariadb` | `sqlite`.
 
-PostgreSQL is supported, including CloudNativePG (section 6). Panel
-`v1.0.0-beta38` cannot create backups on it: its backup endpoint locks a
-`count(*)` with `FOR UPDATE`, which PostgreSQL refuses, and answers 500 before
-the node is asked. MySQL, MariaDB and SQLite are not affected.
+PostgreSQL is supported, including CloudNativePG (section 6).
 
 Every connection detail can come from an existing Secret, which makes a
 CloudNativePG `<cluster>-app` Secret a drop-in (see the worked example in section 6).

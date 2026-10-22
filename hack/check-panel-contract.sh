@@ -5,7 +5,7 @@
 # and runnable locally:
 #
 #   hack/check-panel-contract.sh                                   # latest Panel image
-#   PANEL_IMAGE=ghcr.io/pelican/panel:v1.0.0-beta38 hack/check-panel-contract.sh
+#   PANEL_IMAGE=ghcr.io/pelican/panel:v1.0.0-rc.2 hack/check-panel-contract.sh
 #   PANEL_SRC_DIR=/path/to/panel hack/check-panel-contract.sh      # a checkout, no Docker
 #
 # The route table is parsed rather than grepped: upstream registers the same
