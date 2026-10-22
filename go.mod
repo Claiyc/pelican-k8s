@@ -1,6 +1,6 @@
 module github.com/Claiyc/pelican-k8s
 
-go 1.27.2
+go 1.27.3
 
 replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261006004045-eebd68931975
 

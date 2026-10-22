@@ -9,7 +9,7 @@ make generate         # deepcopy + CRDs after editing api/v1alpha1 (commit the o
 make images           # docker build of the four images (build/*.Dockerfile)
 ```
 
-Go 1.27.2 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
+Go 1.27.3 (`go.mod`). Images are multi-arch (`linux/amd64`, `linux/arm64`).
 CI builds and pushes both architectures on pushes to master; on a pull
 request it builds the images for `linux/amd64` only (for the Trivy scan) and
 cross-compiles the binaries for `linux/arm64`. A new push to a pull request
