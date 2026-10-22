@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-22
+
+### What's Changed
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/135
+* charts/pelican-panel: deploy Pelican Panel v1.0.0-rc.2 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/137
+* ci: decide minor and major releases only by labels on the release PR by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/138
+
 ## [2.1.0] - 2026-10-14
 
 ### What's Changed
@@ -265,7 +272,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0
 [2.0.0-beta4]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0-beta3...v2.0.0-beta4
