@@ -25,12 +25,16 @@ permissions:
   contents: read
 
 # Label events the job ignores (any label but the version labels, such as
-# this workflow adding "release" to its own PR) get a group of their own, so
-# they cannot cancel a run that is updating the release PR.
+# this workflow adding "release" to its own PR, or any label on another PR)
+# get a group of their own, so they cannot cancel a run that is updating the
+# release PR. The condition is the job's own, below.
 concurrency:
   group: >-
     ${{ (github.event_name != 'pull_request_target' ||
-         contains(fromJSON('["release:major", "release:minor", "prerelease"]'), github.event.label.name))
+         (github.event.pull_request.base.ref == github.event.repository.default_branch &&
+          contains(fromJSON('["release:major", "release:minor", "prerelease"]'), github.event.label.name) &&
+          github.event.pull_request.head.ref == 'release/next' &&
+          github.event.pull_request.head.repo.full_name == github.repository))
         && 'release-pr' || format('release-pr-ignored-{0}', github.run_id) }}
   cancel-in-progress: true
 
