@@ -9,11 +9,11 @@
 #   hack/release-prep.sh 1.2.0    # an explicit version
 #   hack/release-prep.sh 1.2.0-beta1
 #
-# The next version is a patch release unless a PR merged since the last
-# release carries the label "minor" or "major", or the hand-written notes
-# under [Unreleased] ask for more: "### Added", "### Changed" or
-# "### Deprecated" make a minor release, "### Removed" or the word BREAKING a
-# major one. The largest of these wins; the reason is printed as "bump: ...".
+# The next version is a patch release unless the open release PR carries the
+# label "release:minor" or "release:major", which the maintainer sets by hand:
+# nothing else raises it, neither labels on the merged PRs nor the notes. The
+# labels are not plain "minor" and "major" because Dependabot puts a label
+# with either name on its own PRs. The reason is printed as "bump: ...".
 #
 # The label "prerelease" on the open release PR makes it a pre-release of
 # that version, X.Y.Z-beta1, which the Release workflow publishes as a GitHub
@@ -60,8 +60,8 @@ fi
 repo() { gh repo view --json nameWithOwner --jq .nameWithOwner; }
 unreleased=$(awk '/^## \[Unreleased\]/ {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md)
 next=${1:-} reason=
-# The open release PR (the release-pr workflow's branch) can ask for a bigger
-# release or a pre-release; it is the quickest way to ask for either.
+# The open release PR (the release-pr workflow's branch) decides whether the
+# release is a bigger one or a pre-release.
 release_pr_labels=$(gh pr list --head "${RELEASE_BRANCH:-release/next}" --state open \
   --json labels,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .labels[].name')
 # X.Y.Z of X.Y.Z-betaN; the same as $current for a release.
@@ -71,41 +71,14 @@ if [[ -z "$next" && $current != "$core" ]]; then
   # bump; or by the next pre-release of it while the label stays (below).
   next=$core reason="the release v$current was a pre-release of"
 elif [[ -z "$next" ]]; then
-  # The largest bump any reason asks for: 0 patch, 1 minor, 2 major.
-  bump=0 why="no major or minor label on the PRs merged since v$current"
-  raise() { if [[ "$1" -gt "$bump" ]]; then bump=$1 why=$2; fi; }
-  # Reads label names, one per line; $1 says whose labels they are.
-  raise_by_label() {
-    local label
-    while IFS= read -r label; do
-      case $label in
-        major) raise 2 "$1 is labelled major" ;;
-        minor) raise 1 "$1 is labelled minor" ;;
-      esac
-    done
-  }
-  # A major or minor label on any PR merged since the last release. The PR
-  # number is the last "(#N)" of a squash merge's subject, or "#N" of a merge
-  # commit's "Merge pull request #N".
-  r=$(repo)
-  for pr in $(printf '%s\n' "$merged_since_current" |
-    sed -nE -e 's/^Merge pull request #([0-9]+).*/\1/p' -e 's/.*\(#([0-9]+)\)$/\1/p' | sort -un); do
-    raise_by_label "#$pr" < <(gh api "repos/$r/issues/$pr" --jq '.labels[].name')
-  done
-  raise_by_label "the release PR" <<<"$release_pr_labels"
-  # Hand-written notes under [Unreleased] can raise it too.
-  if grep -qE '^### Removed|BREAKING' <<<"$unreleased"; then
-    raise 2 "CHANGELOG.md [Unreleased] has a ### Removed heading or says BREAKING"
-  elif grep -qE '^### (Added|Changed|Deprecated)' <<<"$unreleased"; then
-    raise 1 "CHANGELOG.md [Unreleased] has an ### Added, ### Changed or ### Deprecated heading"
-  fi
   IFS=. read -r major minor patch <<<"$current"
-  case $bump in
-    2) next="$((major + 1)).0.0" level=major ;;
-    1) next="$major.$((minor + 1)).0" level=minor ;;
-    *) next="$major.$minor.$((patch + 1))" level=patch ;;
-  esac
-  reason="$level release, because $why"
+  if grep -qx release:major <<<"$release_pr_labels"; then
+    next="$((major + 1)).0.0" reason="major release, because the release PR is labelled release:major"
+  elif grep -qx release:minor <<<"$release_pr_labels"; then
+    next="$major.$((minor + 1)).0" reason="minor release, because the release PR is labelled release:minor"
+  else
+    next="$major.$minor.$((patch + 1))" reason="patch release, because the release PR has no release:minor or release:major label"
+  fi
 fi
 if [[ -n "$reason" ]]; then
   # The prerelease label makes it X.Y.Z-beta1, or after X.Y.Z-betaN the next
