@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-26
+
+### What's Changed
+* build(deps): bump docker/login-action from 4.6.0 to 4.7.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/141
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/140
+* build(deps): bump github.com/pkg/sftp from 1.13.11 to 1.13.12 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/139
+* agent: write exit-code atomically in the installer tests by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/143
+
 ## [2.2.0] - 2026-10-22
 
 ### What's Changed
@@ -272,7 +280,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Claiyc/pelican-k8s/compare/v1.1.0...v2.0.0
