@@ -114,8 +114,7 @@ func runInstall(t *testing.T, gw *fakeGateway, exitCode string, failAfter time.D
 			gw.mu.Unlock()
 			return
 		}
-		os.WriteFile(filepath.Join(dir, "exit-code.tmp"), []byte(exitCode+"\n"), 0o644)
-		os.Rename(filepath.Join(dir, "exit-code.tmp"), filepath.Join(dir, "exit-code"))
+		writeExitCode(dir, exitCode)
 	}()
 
 	err := inst.Run(s, &remote.InstallationScript{ContainerImage: "ghcr.io/pelican-eggs/installers:debian", Entrypoint: "bash", Script: "#!/bin/bash\n"})
@@ -289,7 +288,7 @@ func TestSupersededResultNeverReachesTheGateway(t *testing.T) {
 	gw.mu.Unlock()
 	go func() {
 		waitDir()
-		os.WriteFile(filepath.Join(dir, "exit-code"), []byte("0\n"), 0o644)
+		writeExitCode(dir, "0")
 	}()
 	if err := s.Install(); err != nil {
 		t.Fatal(err)
@@ -316,7 +315,7 @@ func TestKilledJobOfASupersededGenerationIsNoResult(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		os.WriteFile(filepath.Join(dir, "exit-code"), []byte("143\n"), 0o644)
+		writeExitCode(dir, "143")
 	}()
 	done := make(chan error, 1)
 	go func() { done <- inst.Run(s, &remote.InstallationScript{Entrypoint: "bash", Script: "#!/bin/bash\n"}) }()
@@ -331,6 +330,14 @@ func TestKilledJobOfASupersededGenerationIsNoResult(t *testing.T) {
 	if _, ok := inst.superseded.Load(s.ID()); !ok {
 		t.Fatal("the killed run's result must be marked for dropping")
 	}
+}
+
+// writeExitCode writes exit-code the way the shim does, atomically: the
+// installer must never read it half written.
+func writeExitCode(dir, code string) {
+	tmp := filepath.Join(dir, "exit-code.tmp")
+	os.WriteFile(tmp, []byte(code+"\n"), 0o644)
+	os.Rename(tmp, filepath.Join(dir, "exit-code"))
 }
 
 // runWithExitCode runs an install whose Job left exitCode, with no poll in
@@ -348,7 +355,7 @@ func runWithExitCode(t *testing.T, gw *fakeGateway, exitCode string) (*Installer
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		os.WriteFile(filepath.Join(dir, "exit-code"), []byte(exitCode+"\n"), 0o644)
+		writeExitCode(dir, exitCode)
 	}()
 	done := make(chan error, 1)
 	go func() { done <- inst.Run(s, &remote.InstallationScript{Entrypoint: "bash", Script: "#!/bin/bash\n"}) }()
