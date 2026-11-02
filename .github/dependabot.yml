@@ -3,7 +3,7 @@ version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
-    schedule: {interval: weekly, day: monday}
+    schedule: {interval: daily}
     open-pull-requests-limit: 10
     groups:
       kubernetes:
@@ -16,7 +16,7 @@ updates:
       - dependency-name: github.com/Claiyc/wings
   - package-ecosystem: github-actions
     directory: /
-    schedule: {interval: weekly, day: monday}
+    schedule: {interval: daily}
     groups:
       # Every step of the CodeQL Action must come from one release: `analyze`
       # refuses a configuration file written by a different version of `init`.
@@ -26,4 +26,4 @@ updates:
         patterns: ["github/codeql-action*"]
   - package-ecosystem: docker
     directories: ["/build"]
-    schedule: {interval: weekly, day: monday}
+    schedule: {interval: daily}
