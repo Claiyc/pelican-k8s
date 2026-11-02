@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-02
+
+### What's Changed
+* build(deps): bump the kubernetes group with 4 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/144
+* build(deps): bump SonarSource/sonarqube-scan-action from 8.3.0 to 8.4.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/145
+* chore: run Dependabot daily instead of weekly by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/147
+* build(deps): bump golang.org/x/net from 0.60.0 to 0.62.0 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/148
+
 ## [2.2.1] - 2026-10-26
 
 ### What's Changed
@@ -280,7 +288,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.0.0...v2.1.0
