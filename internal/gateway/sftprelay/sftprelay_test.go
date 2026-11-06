@@ -518,10 +518,7 @@ func TestRelayAgentUnavailable(t *testing.T) {
 		t.Fatalf("client auth does not depend on the pod: %v", err)
 	}
 	defer c.Close()
-	if sess, err := c.NewSession(); err == nil {
-		sess.Close()
-		t.Fatal("session opened without an agent")
-	}
+	assertNoSession(t, c, "session opened without an agent")
 }
 
 func TestRelayAgentDialFailure(t *testing.T) {
@@ -531,9 +528,46 @@ func TestRelayAgentDialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if sess, err := c.NewSession(); err == nil {
-		sess.Close()
-		t.Fatal("session opened without a reachable agent")
+	assertNoSession(t, c, "session opened without a reachable agent")
+}
+
+// assertNoSession checks that the relay refuses a session by dropping the
+// client connection. It waits on the connection closing as well as on
+// NewSession: when the relay closes the connection just as the client opens
+// a channel, x/crypto's client can register that channel after its mux has
+// already shut its channels down, and NewSession then never returns.
+func assertNoSession(t *testing.T, c *ssh.Client, msg string) {
+	t.Helper()
+	opened := make(chan error, 1)
+	go func() {
+		sess, err := c.NewSession()
+		if err == nil {
+			sess.Close()
+		}
+		opened <- err
+	}()
+	closed := make(chan struct{})
+	go func() {
+		_ = c.Wait()
+		close(closed)
+	}()
+	select {
+	case err := <-opened:
+		if err == nil {
+			t.Fatal(msg)
+		}
+	case <-closed:
+		// A session confirmed before the connection closed has its result
+		// on the way; one that never got that far cannot open.
+		select {
+		case err := <-opened:
+			if err == nil {
+				t.Fatal(msg)
+			}
+		case <-time.After(100 * time.Millisecond):
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the relay neither refused the session nor closed the connection")
 	}
 }
 
