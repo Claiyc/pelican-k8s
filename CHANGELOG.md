@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-11-06
+
+### What's Changed
+* build(deps): bump brotli and klauspost/compress for govulncheck by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/153
+* build(deps): bump helm/kind-action from 1.15.1 to 1.15.2 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/151
+* build(deps): bump SonarSource/sonarqube-scan-action from 8.4.0 to 8.4.1 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/152
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/150
+* gateway/sftprelay: stop the no-agent tests hanging on a dropped connection by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/155
+
 ## [2.2.2] - 2026-11-02
 
 ### What's Changed
@@ -288,7 +297,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.3...HEAD
+[2.2.3]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.1.0...v2.2.0
