@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-11-12
+
+### What's Changed
+* build(deps): bump golang.org/x/sys from 0.49.0 to 0.50.0 in the golang-x group by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/159
+* build(deps): bump docker/login-action from 4.7.0 to 4.8.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/158
+* build(deps): bump softprops/action-gh-release from 3.0.3 to 3.0.4 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/157
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/156
+* build: Go 1.27.4 for GO-2026-6859 (net/http) by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/161
+
 ## [2.2.3] - 2026-11-06
 
 ### What's Changed
@@ -297,7 +306,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.3...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.4...HEAD
+[2.2.4]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.0...v2.2.1
