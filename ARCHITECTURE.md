@@ -492,7 +492,7 @@ and the SFTP server on `:2022`.
 | 2 | `server.ImageAndStopConfigurable` and `server.Attachable` interfaces in place of `*docker.Environment` type assertions | Image and stop configuration, websocket attach |
 | 3 | `server.Installer` interface, set with `server.WithInstaller`; Wings takes the install lock before calling it | `internal/agent/installer`, the Job-backed installer (§8.2) |
 | 4 | Package `boot` (`boot.InitializeDatabase`, `boot.Scheduler`) over Wings' `internal/database` and `internal/cron` | Activity database and cron scheduler |
-| 5 | `server.WithTransfersIntoExistingServers`: `POST /api/transfers` fills a server the manager already has (offline, not installing) instead of refusing it, and a failed transfer keeps that server and its files | Incoming transfers into the agent's server (§8.10) |
+| 5 | `server.WithTransfersIntoExistingServers`: `POST /api/transfers` fills a server the manager already has instead of refusing it, if that server is offline, not busy and its data directory empty; the transfer holds the server's power lock (`Server.LockForIncomingTransfer`), and a failed one keeps the server and empties the directory again | Incoming transfers into the agent's server (§8.10) |
 
 **Configuration.** ConfigMap `pelican-agent-config` (`config.yml`, rendered from the chart's `agent.*`
 values, `agent.extra` merged in) plus the token Secret:
@@ -1414,11 +1414,12 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    comes up (or the client goes away meanwhile), no result will ever be reported, so the gateway deletes
    the CR it created for this push; one reused from an earlier attempt is left for the next retry.
 3. The agent runs Wings with `server.WithTransfersIntoExistingServers` (hook 5, §6.3), so Wings extracts
-   into the agent's server instead of building a second one from the Panel; it refuses the push (`409`)
-   while that server is running or installing. Wings checks the archive checksum and reports
-   `transfer/success` or `transfer/failure` through the remote API. A failed transfer leaves the server
-   and its files in place and removes only the backups it received; the gateway then deletes the CR and
-   its volume (step 6). While the transfer runs, the agent
+   into the agent's server instead of building a second one from the Panel. It refuses the push (`409`)
+   unless that server is offline, not busy and its data directory (`volumes/<uuid>`, created empty) has
+   no files, and holds the server's power lock until the transfer is done, so no start can run while the
+   files arrive. Wings checks the archive checksum and reports `transfer/success` or `transfer/failure`
+   through the remote API. A failed transfer keeps the server, empties its data directory again and
+   removes the backups it received; the gateway then deletes the CR and its volume (step 6). While the transfer runs, the agent
    reports it as in-flight work, so it is not moved.
 4. The gateway forwards the result to the Panel (60 s: the Panel deletes the server on the old node
    before it answers). On success the Panel moves the server to this node and its new allocation; the
