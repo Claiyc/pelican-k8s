@@ -21,15 +21,12 @@ reconciles into ordinary pods: a small agent pod with Wings embedded as a
 library, and a game pod that exists only while the server is on. The Panel,
 the eggs and the Wings core logic stay unmodified.
 
-```
-Panel ──Wings API──▶ gateway ──spec/status──▶ GameServer CR
-                        │                           │
-                        │ proxied data path         │ operator reconciles
-                        ▼                           ▼
-                      agent ◀──── shim protocol ──── shim ──▶ egg entrypoint
-              (Wings as a library,          (PID 1 of the game pod,
-               always running)               only while the server is on)
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+    <img alt="Architecture: the Panel calls the gateway over the Wings API; the gateway writes spec and status to the GameServer resource and proxies console, files and SFTP to the agent pod; the operator watches the GameServer and reconciles the agent pod and a game pod per run; the agent drives the shim over the shim protocol, and the shim runs the egg entrypoint. Both pods share the server PVC." src="docs/images/architecture-light.svg" width="860">
+  </picture>
+</p>
 
 | Component | What it does |
 |---|---|

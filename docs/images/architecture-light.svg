@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" role="img" aria-labelledby="title desc">
+<title id="title">pelican-k8s architecture</title>
+<desc id="desc">The Panel calls the gateway over the Wings API. The gateway writes spec and status to the GameServer custom resource and proxies console, files and SFTP to the agent pod. The operator watches the GameServer and reconciles the agent pod and the game pod. The agent drives the shim in the game pod over the shim protocol; the shim runs the egg entrypoint. Both pods share the server PVC.</desc>
+<defs>
+<marker id="m-0f9488" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#0f9488"/></marker>
+<marker id="m-4b5563" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#4b5563"/></marker>
+<marker id="m-e8590c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#e8590c"/></marker>
+<marker id="m-7c3aed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#7c3aed"/></marker>
+<marker id="m-2563eb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#2563eb"/></marker>
+<marker id="m-59636e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="#59636e"/></marker>
+</defs>
+<rect width="1000" height="560" rx="14" fill="#ffffff"/>
+<rect x="236" y="22" width="744" height="516" rx="14" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.4" stroke-dasharray="7 5"/>
+<text x="256" y="46" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#59636e">KUBERNETES CLUSTER</text>
+<rect x="24" y="72" width="168" height="80" rx="10" fill="#eef2f6" stroke="#57606a" stroke-width="1.6"/>
+<text x="108.0" y="108.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">Pelican Panel</text>
+<text x="108.0" y="129.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">unmodified</text>
+<rect x="290" y="72" width="220" height="80" rx="10" fill="#eaf2ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="400.0" y="108.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">gateway</text>
+<text x="400.0" y="129.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">looks like one Wings node</text>
+<rect x="730" y="72" width="220" height="80" rx="10" fill="#f3f4f6" stroke="#4b5563" stroke-width="1.6"/>
+<text x="840.0" y="108.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="16" font-weight="600" fill="#1f2328">GameServer</text>
+<text x="840.0" y="129.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">custom resource</text>
+<rect x="730" y="206" width="220" height="64" rx="10" fill="#f3edff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="840.0" y="234.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">operator</text>
+<text x="840.0" y="255.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">the only reconciler</text>
+<path d="M192,112 L288,112" fill="none" stroke="#2563eb" stroke-width="1.6" marker-end="url(#m-2563eb)"/>
+<text x="240" y="103" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">Wings API</text>
+<path d="M510,112 L728,112" fill="none" stroke="#4b5563" stroke-width="1.6" marker-end="url(#m-4b5563)"/>
+<text x="619" y="103" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">spec · status</text>
+<path d="M840,154 L840,204" fill="none" stroke="#7c3aed" stroke-width="1.6" marker-start="url(#m-7c3aed)" marker-end="url(#m-7c3aed)"/>
+<text x="852" y="184" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">watch</text>
+<rect x="276" y="330" width="258" height="132" rx="12" fill="#ffffff" stroke="#0f9488" stroke-width="1.4"/>
+<text x="290" y="352" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0f9488">AGENT POD</text>
+<rect x="422" y="337" width="110.39999999999999" height="19" rx="9.5" fill="#ffffff" stroke="#0f9488" stroke-width="1"/>
+<text x="477.2" y="351" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0f9488">always running</text>
+<rect x="290" y="366" width="230" height="82" rx="10" fill="#e7f7f4" stroke="#0f9488" stroke-width="1.6"/>
+<text x="405.0" y="393.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">agent</text>
+<text x="405.0" y="414.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">Wings as a library</text>
+<text x="405.0" y="431.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">files · SFTP · console · backups</text>
+<rect x="604" y="330" width="346" height="132" rx="12" fill="#ffffff" stroke="#e8590c" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="618" y="352" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#e8590c">GAME POD</text>
+<rect x="844" y="337" width="103.8" height="19" rx="9.5" fill="#ffffff" stroke="#e8590c" stroke-width="1"/>
+<text x="895.9" y="351" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#e8590c">only while on</text>
+<rect x="618" y="366" width="146" height="82" rx="10" fill="#fff1e7" stroke="#e8590c" stroke-width="1.6"/>
+<text x="691.0" y="393.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">shim</text>
+<text x="691.0" y="414.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">PID 1 · PTY, signals,</text>
+<text x="691.0" y="431.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">exit codes, stats</text>
+<rect x="790" y="366" width="146" height="82" rx="10" fill="transparent" stroke="#e8590c" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="863.0" y="393.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#1f2328">egg</text>
+<text x="863.0" y="414.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">entrypoint</text>
+<text x="863.0" y="431.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" fill="#59636e">unmodified image</text>
+<path d="M764,407 L788,407" fill="none" stroke="#e8590c" stroke-width="1.6" marker-end="url(#m-e8590c)"/>
+<path d="M372,152 L372,364" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#m-2563eb)"/>
+<text x="384" y="190" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">proxied data path</text>
+<text x="384" y="207" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#59636e">console · files · SFTP</text>
+<path d="M520,407 L616,407" fill="none" stroke="#0f9488" stroke-width="1.6" marker-start="url(#m-0f9488)" marker-end="url(#m-0f9488)"/>
+<text x="569.0" y="398" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">shim</text>
+<text x="569.0" y="426" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">protocol</text>
+<path d="M730,238 L476,238 L476,328" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#m-7c3aed)"/>
+<path d="M840,270 L840,328" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#m-7c3aed)"/>
+<text x="600" y="229" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">reconciles</text>
+<text x="852" y="303" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500" fill="#1f2328">creates per run</text>
+<path d="M520,494 L520,520 A85.0,6 0 0 0 690,520 L690,494 A85.0,6 0 0 0 520,494 z" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.4"/>
+<ellipse cx="605.0" cy="494" rx="85.0" ry="6" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.4"/>
+<text x="605.0" y="516" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328">PVC · server files</text>
+<path d="M405,462 L405,507 L518,507" fill="none" stroke="#59636e" stroke-width="1.3"/>
+<path d="M777,462 L777,507 L692,507" fill="none" stroke="#59636e" stroke-width="1.3"/>
+</svg>
