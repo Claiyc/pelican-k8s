@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/pelican/wings/config"
+	"github.com/pelican/wings/environment"
 	"github.com/pelican/wings/remote"
 	"github.com/pelican/wings/router"
 	"github.com/pelican/wings/server/transfer"
@@ -137,10 +139,27 @@ func TestIncomingTransferChecksumMismatchFails(t *testing.T) {
 	if r := reportedTransfers(); len(r) != before+1 || r[len(r)-1] {
 		t.Fatalf("results = %v", r)
 	}
-	// Wings drops the server on a failed transfer; the gateway removes the
-	// GameServer when the failure is reported.
-	if f.manager.Len() != 0 || transfer.Incoming().Get(serverID) != nil {
-		t.Fatalf("servers = %d", f.manager.Len())
+	// Wings keeps the agent's server and its files on a failed transfer; the
+	// gateway removes the GameServer and its volume when the failure is reported.
+	if f.manager.Len() != 1 || f.manager.All()[0] != f.srv || transfer.Incoming().Get(serverID) != nil || f.srv.IsTransferring() {
+		t.Fatalf("a failed transfer must leave the agent's server in place: %d servers", f.manager.Len())
+	}
+}
+
+func TestIncomingTransferRefusedWhileRunning(t *testing.T) {
+	f := newTransferFixture(t)
+	before := len(reportedTransfers())
+	f.env.SetState(environment.ProcessRunningState)
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, transferRequest(t, "transfer", map[string]string{"server.properties": "motd=moved"}, ""))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("a transfer into a running server must be refused: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(f.srv.Filesystem().Path(), "server.properties")); err == nil {
+		t.Fatal("nothing may be extracted into a running server")
+	}
+	if r := reportedTransfers(); len(r) != before {
+		t.Fatalf("a refused push reported a result: %v", r)
 	}
 }
 
@@ -161,35 +180,22 @@ func TestIncomingTransferRejectedIsUndone(t *testing.T) {
 }
 
 func TestIncomingTransferIsActivity(t *testing.T) {
-	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
-	var reasons any
-	f.wings = func(w http.ResponseWriter, r *http.Request) {
-		if tr := transfer.Incoming().Get(serverID); tr == nil || tr.Server != f.srv || !f.srv.IsTransferring() {
-			t.Error("the agent's server must be registered as the transfer target")
-		}
-		reasons = decode(t, f.do("GET", "/internal/v1/activity", "Bearer "+apiToken, ""))["reasons"]
-		w.WriteHeader(http.StatusOK)
-	}
-	f.handler.ServeHTTP(httptest.NewRecorder(), transferRequest(t, "transfer", map[string]string{"a": "b"}, ""))
+	f := newTransferFixture(t)
+	// The push is held open, so the transfer is still running when the
+	// activity is read.
+	req := transferRequest(t, "transfer", map[string]string{"a": "b"}, "")
+	pr, pw := io.Pipe()
+	req.Body = pr
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.handler.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	waitFor(t, "the transfer to start", f.srv.IsTransferring)
+	reasons := decode(t, f.do("GET", "/internal/v1/activity", "Bearer "+apiToken, ""))["reasons"]
+	_ = pw.CloseWithError(io.ErrUnexpectedEOF)
+	<-done
 	if rs, _ := reasons.([]any); len(rs) != 1 || rs[0] != "transfer" {
 		t.Fatalf("a transfer in flight must keep the agent from moving: %v", reasons)
-	}
-}
-
-func TestIncomingTransferRegistersOnlyAnAuthorizedTarget(t *testing.T) {
-	f := newFixture(t, sleepArgv, remote.ProcessStopConfiguration{})
-	f.wings = func(w http.ResponseWriter, r *http.Request) {
-		if transfer.Incoming().Get(serverID) != nil || f.srv.IsTransferring() {
-			t.Errorf("%s: nothing may be registered before Wings accepts the token", r.Header.Get("X-Case"))
-		}
-		w.WriteHeader(http.StatusForbidden)
-	}
-	cases := map[string]*http.Request{
-		"no token":    httptest.NewRequest(http.MethodPost, "/api/transfers", nil),
-		"wrong scope": transferRequest(t, "websocket", map[string]string{"a": "b"}, ""),
-	}
-	for name, req := range cases {
-		req.Header.Set("X-Case", name)
-		f.handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
 }

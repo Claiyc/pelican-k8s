@@ -8,11 +8,11 @@ Wings node.
 
 | Repo | Commit | Notes |
 |---|---|---|
-| `github.com/pelican/wings` | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
+| `github.com/pelican/wings` | `cbce59e` (2026-11-11, `v1.0.0-rc.2`) | Go module `github.com/pelican/wings`, MIT |
 | `github.com/pelican/panel` | `6095cea` (2026-11-13, `v1.0.0-rc.3`) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still at release candidates
-(Panel `v1.0.0-rc.3`; Wings `v1.0.0-rc.1`, which differs from `9fb682f` only in a test), so
+(Panel `v1.0.0-rc.3`, Wings `v1.0.0-rc.2`), so
 **re-verify this document when bumping versions**.
 
 ---
@@ -27,20 +27,20 @@ Paths below are relative to the respective repo root. Pelican is still at releas
 - `Node::getConnectionAddress()` = `"$scheme://$fqdn:$daemon_connect"` (`app/Models/Node.php:322-325`).
   The same address is used for the API, the browser's websocket URL, signed download/upload URLs,
   and the JWT `aud` claim.
-- Wings check: `middleware.RequireAuthorization()` (`router/middleware/middleware.go:168-189`) compares
+- Wings check: `middleware.RequireAuthorization()` (`router/middleware/middleware.go:177-198`) compares
   in constant time against `config.token`.
 - **Response header check:** `DaemonRepository::getHttpClient` → `enforceValidNodeToken`
   (`app/Repositories/Daemon/DaemonRepository.php:48-67`) **throws if the response `User-Agent` header
   is empty, or if it matches `^Pelican Wings\/v(?:\d+\.\d+\.\d+|develop) \(id:(\w*)\)$` with an id that
   is not the node's `daemon_token_id`.** Wings sets `User-Agent: Pelican Wings/v<ver> (id:<token_id>)`
-  in `RequireAuthorization` (middleware.go:174).
+  in `RequireAuthorization` (middleware.go:183).
   → **The gateway must emit this header on every response.**
 
 ### 1.2 Wings → Panel (remote API)
 
 - Base `<remote>/api/remote`. Header `Authorization: Bearer <token_id>.<token>`, UA
   `Pelican Wings/v<ver> (id:<token_id>)`, plus `remote_query.custom_headers`
-  (`remote/http.go:111-138`). 5xx responses are retried with backoff for at most 30 s.
+  (`remote/http.go:130-158`). 5xx responses are retried with backoff for at most 30 s.
 - Panel `DaemonAuthenticate` (`app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:28-50`) splits the
   token on `.` (exactly two parts), looks up `Node where daemon_token_id`, runs `hash_equals` on the
   token, and binds the node to the request.
@@ -51,9 +51,10 @@ Paths below are relative to the respective repo root. Pelican is still at releas
 
 - **HS256, key = node daemon token.** Panel: `NodeJWTService.php:77`
   (`forSymmetricSigner(new Sha256(), InMemory::plainText($node->daemon_token))`). Wings:
-  `config/config.go:441-443`.
+  `config/config.go:445-447`.
   → **Anyone holding the node token can mint tokens for every server on the node.**
-- Wings validates **only `exp`** (`router/tokens/parser.go:22-30`); `iss`, `aud` and `nbf` are not checked.
+- Wings validates **only `exp`** (`router/tokens/parser.go:26-36`); `iss`, `aud` and `nbf` are not checked.
+  A malformed, badly signed or expired token is answered `401` (`ErrInvalidToken`, `router/middleware/middleware.go:89-93`).
 - Standard claims set by the Panel (`NodeJWTService.php:79-107`): `iss`, `aud`, `jti = sha256(user.id . server.uuid)`,
   `iat`, `nbf = now-5min`, `exp`, optional `sub`, `user_uuid`, `scope`, `unique_id = Str::random()`.
 - Scopes (`app/Enums/NodeJwtScope.php`, `router/tokens/token.go:11-17`): `websocket`, `file-upload`,
@@ -71,15 +72,16 @@ Paths below are relative to the respective repo root. Pelican is still at releas
 
 - **Boot-time cutoff** (`router/websocket/websocket.go:18,59`): a user-bound token with `iat` before
   Wings' start time is rejected.
-- **User denylist** `userDenylist` keyed `"<server>:<user>"` (`websocket.go:30-48`), written by
-  `POST /api/deauthorize-user {user, servers[]}` (`router/router_system.go:261-289`). That handler also
+- **User denylist** `userDenylist` keyed `"<server>:<user>"` (`router/websocket/websocket.go:30-48`), written by
+  `POST /api/deauthorize-user {user, servers[]}` (`router/router_system.go:298-326`). That handler also
   runs `Websockets().CancelAll()` and `Sftp().Cancel(user)`. **If `servers` is empty it cancels sessions
   on all servers but writes no deny entry.**
-- **Legacy JTI denylist** via `POST /api/servers/:s/ws/deny {jtis[]}` (`router_server.go:327-341`).
+- **Legacy JTI denylist** via `POST /api/servers/:s/ws/deny {jtis[]}` (`router_server.go:333-347`).
   The Panel sends `md5(...)` (`DaemonServerRepository.php:176`) while it signs `jti = sha256(...)`,
   so this path never matches.
-- **One-time use** for download, upload and backup tokens: `TokenStore` (go-cache, 60 min TTL, keyed by
-  `unique_id`; `router/tokens/token_store.go:14-42`).
+- **One-time use** for upload tokens only: `TokenStore` (go-cache, 60 min TTL, keyed by `unique_id`;
+  `router/tokens/token_store.go:14-42`). File and backup download tokens can be reused until they
+  expire, so a browser can re-request or resume a download (`router/router_download.go`).
 - `DaemonServerRepository::deauthorize` (`:185-191`) posts `{user, servers: [uuid]}` for one server,
   or `servers: []` for a whole node (`RevokeSftpAccessJob`), which takes the "cancel everything,
   deny nothing" branch.
@@ -97,11 +99,11 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 
 | Method | Path | Line | Scope | Auth |
 |---|---|---|---|---|
-| GET | `/download/backup` | 48 | T | `?token=` backup-download JWT, one-time |
-| GET | `/download/file` | 49 | T | `?token=` file-download JWT, one-time |
-| POST | `/upload/file` | 50 | T | `?token=` file-upload JWT, one-time; `?directory=` |
-| GET | `/api/servers/:server/ws` | 55 | S | `ServerExists`; JWT arrives in the first `auth` message |
-| POST | `/api/transfers` | 60 | T | `Authorization: Bearer <transfer JWT>`, UUID in `sub` |
+| GET, HEAD | `/download/backup` | 48-49 | T | `?token=` backup-download JWT, reusable until it expires; `Range` supported |
+| GET, HEAD | `/download/file` | 50-51 | T | `?token=` file-download JWT, reusable until it expires; `Range` supported |
+| POST | `/upload/file` | 52 | T | `?token=` file-upload JWT, one-time; `?directory=` |
+| GET | `/api/servers/:server/ws` | 57 | S | `ServerExists`; JWT arrives in the first `auth` message |
+| POST | `/api/transfers` | 62 | T | `Authorization: Bearer <transfer JWT>`, UUID in `sub`. One request per server at a time (`409` otherwise); `409` for a server the node already has, or for an existing data directory unless the source shares a storage pool (`X-Storage-Pool`). A failed transfer removes the server, its container and data directory, and the backups and install log it received |
 
 ### 2.2 Node-token routes
 
@@ -125,7 +127,7 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 |---|---|
 | Core | `GET ""` (Panel: 1 s timeout, reads `state`; on failure the Panel assumes `state: "missing"`; batch transfers use `getState`, 5 s, which takes only a `404` as `missing` and any other failure as unknown), `DELETE ""`, `GET /logs`, `GET /install-logs`, `POST /power {action}`, `POST /commands`, `POST /install`, `POST /reinstall` (409 if a power action is running), `POST /sync`, `POST /ws/deny`, `POST /transfer`, `DELETE /transfer`, `DELETE /deleteAllBackups` |
 | Files | `GET /files/contents`, `GET /files/list-directory`, `PUT /files/rename`, `POST /files/{copy,write,create-directory,delete,compress,decompress,chmod}`, `GET /files/search`, `GET/POST /files/pull`, `DELETE /files/pull/:download` |
-| Backups | `POST /backup {adapter, uuid, ignore}` (400 when `ignore` is not a valid ignore list, since `9fb682f`), `POST /backup/:backup/restore {adapter, truncate_directory, download_url}`, `DELETE /backup/:backup` |
+| Backups | `POST /backup {adapter, uuid, ignore}` (400 when `ignore` is not a valid ignore list), `POST /backup/:backup/restore {adapter, truncate_directory, download_url}`, `DELETE /backup/:backup` |
 
 Panel timeouts worth noting: compress and decompress 15 min, search 2 min (`DaemonFileRepository`).
 
@@ -231,11 +233,11 @@ the Panel pre-expands every other placeholder (`{{server.build.default.port}}`, 
   - checks the password, or the public key by sha256 fingerprint
   - requires owner, admin, or subuser permission `file.sftp`, and validates server state
   - responds `{user: <uuid>, server: <uuid>, permissions: [...]}`
-- Wings stores these in `ssh.Permissions.Extensions` (`server.go:276-285`). The file handler checks
+- Wings stores these in `ssh.Permissions.Extensions` (`sftp/server.go:277-286`). The file handler checks
   `file.read`, `file.read-content`, `file.create`, `file.update` and `file.delete` (`sftp/handler.go:21-25`),
   and `sftp.read_only` applies globally.
 - Host key: ED25519 at `<system.data>/.sftp/id_ed25519`, generated if missing. Algorithms are pinned
-  (`server.go:71-86`); `MaxAuthTries` is 6.
+  (`sftp/server.go:71-86`); `MaxAuthTries` is 6.
 - Sessions are tracked per user (`srv.Sftp().Context(user)`) and cancelled on install, transfer, restore,
   suspend and deauthorize.
 
@@ -269,7 +271,7 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
 
 ## 7. Server lifecycle inside Wings
 
-- **Boot** (`cmd/root.go:113-430`):
+- **Boot** (`cmd/root.go:114-443`):
   1. directories → pelican user → passwd files → logrotate
   2. Panel client → SQLite activity DB → quotas
   3. `server.NewManager` (paged `GET /servers`) → **`environment.ConfigureDocker`** → read `states.json`
@@ -278,15 +280,17 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
      with each server's **actual** environment state, so a server stopped from the console is not
      restarted after a reboot
   5. cron → SFTP → `POST /servers/reset` → HTTP server
-- **Manager** `InitServer` (`server/manager.go:187-239`) builds the filesystem at `<data>/<uuid>` and the
-  environment via a **hard-coded `docker.New(...)`** (222-231).
-- **Power** `HandlePowerAction` (`server/power.go:57-168`): refused while installing, transferring or
+- **Manager** `InitServer` (`server/manager.go:186-255`) creates `<data>/<uuid>`, opens it as the server's
+  filesystem (an `os.Root`, held open until the server is removed) and builds the
+  environment via a **hard-coded `docker.New(...)`** (237-246).
+- **Power** `HandlePowerAction` (`server/power.go:69-196`): refused while installing, transferring or
   restoring; takes a power lock. Start: `onBeforeStart` (Sync, suspend check, `SyncWithEnvironment`, disk
   check, `UpdateConfigurationFiles`, chown, machine-id) → `Env.Start`. Stop/restart: `WaitForStop(10 min, terminate)`.
-  Kill: `Terminate(SIGKILL)`.
+  Kill: `Terminate(SIGKILL)`; while a start or restart still holds the power lock with the server offline
+  or starting, a kill waits up to 30 s for that boot to finish before it terminates without the lock.
 - **Done detection:** while `starting`, a console line matching `startup.done` (substring or `regex:`)
   switches to `running` (`server/listeners.go:156-193`). A console line equal to the stop command sets offline.
-- **State push:** `OnStateChange` always posts `container/status` (`server/server.go:402-452`) and
+- **State push:** `OnStateChange` always posts `container/status` (`server/server.go:406-456`) and
   triggers crash detection on starting/running → offline.
 - **Crash handling** `handleServerCrash` (`server/crash.go:49-106`): runs only on a `starting`/`running`
   → `offline` transition, so a `stopping` → `offline` transition (power stop, stop command typed into the
@@ -294,7 +298,7 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
   `detect_clean_exit_as_crash=false` a clean exit is not a crash (the default is `true`); records the
   last console lines as activity; restarts unless the previous crash was within
   `crash_detection.timeout` (60 s).
-- **Sync** (`server.go:258-290`, `update.go:21-68`): re-fetch config, update disk limit, then
+- **Sync** (`server/server.go:258-290`, `update.go:21-68`): re-fetch config, update disk limit, then
   `SyncWithEnvironment`. **This type-asserts `*docker.Environment` to push the image and stop config**
   (update.go:36-40). If the server is suspended, it stops the server and cancels websockets and SFTP.
 - **Install** (`server/install.go`):
@@ -318,17 +322,17 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
 
 | Location | Effect | Needed in agent mode? |
 |---|---|---|
-| `cmd/root.go:96-124` | Docker `Info`, `log.Fatalf` if unreachable | remove |
-| `cmd/root.go:142` `EnsurePelicanUser` | `useradd` | skip (rootless/distroless path) |
-| `cmd/root.go:146,154` passwd, logrotate | host files | disable via config |
-| `server/manager.go:222-231` | hard-coded `docker.New` | **replace with factory** |
-| `cmd/root.go:191` `ConfigureDocker` | network setup (fatal) | skip |
+| `cmd/root.go:97-125` | Docker `Info`, `log.Fatalf` if unreachable | remove |
+| `cmd/root.go:143` `EnsurePelicanUser` | `useradd` | skip (rootless/distroless path) |
+| `cmd/root.go:148,155` passwd, logrotate | host files | disable via config |
+| `server/manager.go:237-246` | hard-coded `docker.New` | **replace with factory** |
+| `cmd/root.go:192` `ConfigureDocker` | network setup (fatal) | skip |
 | `system/system.go:106-174,391-410` | `/api/system` fails without Docker | gateway answers |
 | `system/system.go:335-389` | docker disk, prune | gateway stubs |
 | `server/install.go` | installer container | **replace** (external install) |
 | `server/update.go:36-40` | docker type assertion for image and stop config | **generic interface** |
 | `router/websocket/websocket.go:445-449` | `IsAttached` gate | n/a for non-docker env |
-| `server/power.go:223-230` | chown to uid 988 | `check_permissions_on_boot: false` |
+| `server/power.go:251-258` | chown to uid 988 | `check_permissions_on_boot: false` |
 | `internal/diagnostics` | docker info | optional |
 
 ### 7.2 `environment.ProcessEnvironment` (`environment/environment.go:27-115`)

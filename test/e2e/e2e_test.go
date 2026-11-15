@@ -151,11 +151,18 @@ func TestFilesAndConsole(t *testing.T) {
 	if res.StatusCode != 200 || string(b) != "hello from e2e" {
 		t.Fatalf("download: %d %q", res.StatusCode, b)
 	}
-	// One-time token: the second use must fail.
-	res, _ = e.http.Get(e.gateway + "/download/file?token=" + tok)
+	// A download link stays valid until it expires, so a browser can request it
+	// again and resume an interrupted download with Range.
+	req, _ := http.NewRequest("GET", e.gateway+"/download/file?token="+tok, nil)
+	req.Header.Set("Range", "bytes=11-")
+	res, err = e.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode == 200 {
-		t.Fatal("download token was reusable")
+	if res.StatusCode != http.StatusPartialContent || string(b) != "e2e" {
+		t.Fatalf("resumed download: %d %q", res.StatusCode, b)
 	}
 	if code, _ := e.call(t, "POST", "/api/servers/"+e.server+"/files/delete", `{"root":"/","files":["e2e.txt"]}`); code != 204 {
 		t.Fatal("delete")

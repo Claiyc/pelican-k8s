@@ -49,8 +49,8 @@ centrally (gateway). Kubernetes owns scheduling, storage, networking and restart
    capabilities dropped and the `RuntimeDefault` seccomp profile. Install Jobs run as root in the same
    namespace, so the namespace is labelled `baseline` and the shape of game and agent pods is enforced by
    `ValidatingAdmissionPolicy`s that match pods in the servers namespace by ServiceAccount (§12.2).
-5. **Wings as a dependency.** The agent imports Wings as a Go module; four opt-in hooks on a fork
-   branch plug in the shim and the Job installer (§6.3).
+5. **Wings as a dependency.** The agent imports Wings as a Go module; five opt-in hooks on a fork
+   branch plug in the shim, the Job installer and incoming transfers (§6.3).
 
 **Not provided:** transfers away from the cluster (one gateway is one node; incoming transfers are
 supported, §8.10), Panel mounts, `force_outgoing_ip`,
@@ -195,7 +195,7 @@ for agents) and `:2022` (SFTP).
 6. Answer **node-level** endpoints (`/api/system*`, list servers) from cluster data and configuration.
 7. Keep CRs in line with the Panel (resync, §13) and send the Panel's once-per-boot server reset (§8.9).
 
-Wings' token denylist, one-time token store and boot cutoff run inside each agent for its own server.
+Wings' token denylist, one-time upload token store and boot cutoff run inside each agent for its own server.
 The gateway's per-replica state is the live websocket and SSH connections and the state cache (§14).
 
 ### 5.2 Route handling
@@ -225,7 +225,7 @@ not intercept is forwarded to the agent unchanged. Every `/api/servers/:s*` rout
 | `POST /api/servers/:s/power` | Re-sync the configuration on `start`/`restart`, then patch `spec.power` (§8.3); `202`. `400` for starting a suspended server, `422` for an unknown action |
 | `POST /api/servers/:s/commands`, `/ws/deny`, `GET /logs`, `/install-logs`, `/files/*`, `/backup*`, anything else under `/api/servers/:s/` | Proxy to the agent with the agent token |
 | `GET /api/servers/:s/ws` | Websocket proxy (§5.5) |
-| `GET /download/file`, `/download/backup`, `POST /upload/file` | Verify the JWT with the node token (`403` for a bad signature or an expired token, `404` for a wrong scope or a missing `server_uuid`), re-sign it with the agent token of the `server_uuid` claim (§5.4) and proxy to that agent, which runs Wings' scope, expiry, one-time and denylist checks |
+| `GET /download/file`, `/download/backup`, `POST /upload/file` | Verify the JWT with the node token (`403` for a bad signature or an expired token, `404` for a wrong scope or a missing `server_uuid`), re-sign it with the agent token of the `server_uuid` claim (§5.4) and proxy to that agent, which runs Wings' scope, expiry, denylist and (uploads) one-time checks. `HEAD` and `Range` requests pass through, so downloads can be resumed |
 | `GET /healthz` | Liveness and readiness of the gateway |
 
 **Response headers:** every response carries `User-Agent: Pelican Wings/v<advertisedVersion> (id:<token_id>)`.
@@ -257,7 +257,7 @@ environment variables. The node token never leaves the gateway.
 |---|---|
 | Gateway/operator → agent HTTP API | `Authorization: Bearer <agent token>`, as the Panel talks to Wings. Wings' `RequireAuthorization` middleware checks it |
 | Agent → gateway (remote API) | `Authorization: Bearer <token_id>.<token>` from the agent's own Wings `remote` client. The gateway maps the token to the server (§5.7); unknown tokens get `403` |
-| Browser JWTs (websocket `auth`, signed URLs) | Signed by the Panel with the node token. The gateway **verifies** the HS256 signature and expiry with the node token, then **re-signs the same claims** (`iat`, `exp`, `jti`, `unique_id`, `server_uuid`, `user_uuid`, `permissions`, scope) with the agent token of the target server. Wings in the agent then validates the token as if it came from the Panel: scope, `exp`, one-time `unique_id`, `(server, user)` denylist and boot cutoff |
+| Browser JWTs (websocket `auth`, signed URLs) | Signed by the Panel with the node token. The gateway **verifies** the HS256 signature and expiry with the node token, then **re-signs the same claims** (`iat`, `exp`, `jti`, `unique_id`, `server_uuid`, `user_uuid`, `permissions`, scope) with the agent token of the target server. Wings in the agent then validates the token as if it came from the Panel: scope, `exp`, one-time `unique_id` (uploads), `(server, user)` denylist and boot cutoff |
 
 Because claims are preserved, revocation follows Wings: a `deauthorize-user` rejects tokens issued
 before it, and an agent restart rejects tokens issued before the restart (the Panel UI fetches a fresh
@@ -474,16 +474,16 @@ the agent's own routes and serves both on `:8080`:
 | `/internal/v1/prestop` | kubelet `preStop` (httpGet) of the agent container | Return at once when the process is offline. Otherwise wait up to 10 s for the shim to report `terminating`, and return if it does not; if it does, return when the process is offline. At most 15 minutes in all (§6.4) |
 | `GET /internal/v1/shim` | operator (agent token) | `{attached, podUID, running, terminating}`: the game pod whose shim holds the authenticated connection (§7.6), and whether that shim is stopping the process because its container is terminated |
 | `GET /internal/v1/activity` | operator (agent token) | `{busy, reasons}`: in-flight file requests (uploads, downloads, compress, decompress), remote pulls, restore, install and an incoming transfer; backups count through `status.backups.pending` (§7.7) |
-| `POST /api/transfers` | gateway (the Panel's transfer JWT, re-signed with the agent token) | Registers this server as the incoming transfer's target and marks it transferring, then hands the request to Wings (§8.10) |
 | `POST /internal/v1/exit-state {code, oomKilled}` | operator (agent token) | Inject the exit of a game container that terminated, e.g. after an OOM kill (§6.4) |
 | `POST /internal/v1/notice {message}` | operator (agent token) | Print a daemon line on the console: what a start waits for while there is no shim to print anything (§7.6) |
 
 The agent also listens on `:8082` for the shim (§6.4).
 
 Everything else the agent serves is Wings' router: power, commands, files, backups, websocket, signed
-downloads and uploads, `deauthorize-user`, `ws/deny`, and the SFTP server on `:2022`.
+downloads and uploads, `deauthorize-user`, `ws/deny`, an incoming transfer (`POST /api/transfers`, §8.10),
+and the SFTP server on `:2022`.
 
-**Hooks.** The agent plugs into Wings through four opt-in hooks on the `pelican-k8s-hooks` branch of
+**Hooks.** The agent plugs into Wings through five opt-in hooks on the `pelican-k8s-hooks` branch of
 [Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`:
 
 | # | Hook | Used by the agent for |
@@ -492,6 +492,7 @@ downloads and uploads, `deauthorize-user`, `ws/deny`, and the SFTP server on `:2
 | 2 | `server.ImageAndStopConfigurable` and `server.Attachable` interfaces in place of `*docker.Environment` type assertions | Image and stop configuration, websocket attach |
 | 3 | `server.Installer` interface, set with `server.WithInstaller`; Wings takes the install lock before calling it | `internal/agent/installer`, the Job-backed installer (§8.2) |
 | 4 | Package `boot` (`boot.InitializeDatabase`, `boot.Scheduler`) over Wings' `internal/database` and `internal/cron` | Activity database and cron scheduler |
+| 5 | `server.WithTransfersIntoExistingServers`: `POST /api/transfers` fills a server the manager already has (offline, not installing) instead of refusing it, and a failed transfer keeps that server and its files | Incoming transfers into the agent's server (§8.10) |
 
 **Configuration.** ConfigMap `pelican-agent-config` (`config.yml`, rendered from the chart's `agent.*`
 values, `agent.extra` merged in) plus the token Secret:
@@ -1297,7 +1298,8 @@ sequenceDiagram
   filesystem on the PVC.
 - **Signed URLs:** browser → gateway `/download/file?token=…` → the gateway verifies the signature with
   the node token and re-signs the claims with the agent token of `server_uuid` → the agent runs Wings'
-  scope, expiry, one-time and denylist checks and streams the file. Uploads likewise (`upload_limit`
+  scope, expiry and denylist checks and streams the file; the link stays valid until it expires, and
+  `Range` resumes a download. Uploads likewise, with a one-time token (`upload_limit`
   enforced by the agent's Wings configuration; the Ingress body limit must allow it).
 - **Remote pull** (`/files/pull`): the agent downloads. The NetworkPolicy and Wings' private-range block
   both apply.
@@ -1411,9 +1413,12 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    the agent token and proxied with its body. The source's upload is held while it waits. If no agent
    comes up (or the client goes away meanwhile), no result will ever be reported, so the gateway deletes
    the CR it created for this push; one reused from an earlier attempt is left for the next retry.
-3. The agent registers its own server as the transfer target, so Wings extracts into it instead of
-   building a second server from the Panel. Wings checks the archive checksum and reports
-   `transfer/success` or `transfer/failure` through the remote API. While the transfer runs, the agent
+3. The agent runs Wings with `server.WithTransfersIntoExistingServers` (hook 5, §6.3), so Wings extracts
+   into the agent's server instead of building a second one from the Panel; it refuses the push (`409`)
+   while that server is running or installing. Wings checks the archive checksum and reports
+   `transfer/success` or `transfer/failure` through the remote API. A failed transfer leaves the server
+   and its files in place and removes only the backups it received; the gateway then deletes the CR and
+   its volume (step 6). While the transfer runs, the agent
    reports it as in-flight work, so it is not moved.
 4. The gateway forwards the result to the Panel (60 s: the Panel deletes the server on the old node
    before it answers). On success the Panel moves the server to this node and its new allocation; the

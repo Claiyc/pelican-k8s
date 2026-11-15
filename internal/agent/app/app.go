@@ -120,7 +120,9 @@ func Run(ctx context.Context, o Options) error {
 	var manager *server.Manager
 	for attempt := 1; ; attempt++ {
 		var err error
-		manager, err = server.NewManager(ctx, inst.Client(client), server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst))
+		manager, err = server.NewManager(ctx, inst.Client(client), server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst),
+			// The gateway creates the server before a Panel transfer pushes its files.
+			server.WithTransfersIntoExistingServers())
 		if err == nil {
 			break
 		}
@@ -138,7 +140,7 @@ func Run(ctx context.Context, o Options) error {
 		return errors.New("gateway returned no server for this agent token")
 	}
 	for _, s := range manager.All() {
-		if err := s.EnsureDataDirectoryExists(); err != nil {
+		if _, err := s.EnsureDataDirectoryExists(); err != nil {
 			return err
 		}
 		// Never auto-start here: the operator drives spec.power. The shim
