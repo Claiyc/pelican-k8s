@@ -391,6 +391,9 @@ func TestResetServersState(t *testing.T) {
 		"restore in flight": func(gs *v1alpha1.GameServer) {
 			gs.Status.Backups.Pending = []v1alpha1.PendingBackup{{UUID: "b-1", Agent: "agent-pod-1/"}}
 		},
+		"incoming transfer open": func(gs *v1alpha1.GameServer) {
+			gs.Annotations = map[string]string{v1alpha1.AnnotationTransferIn: time.Now().UTC().Format(time.RFC3339)}
+		},
 	}
 	// The agent pod whose instance runs the restore.
 	agentPod := func() *corev1.Pod {

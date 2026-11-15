@@ -1387,9 +1387,10 @@ in-flight work.
   agent container restart the operator has not recorded yet.
 - **Gateway restart or rollout:** live websocket and SSH connections on that replica drop and clients
   reconnect. `POST /api/remote/servers/reset` clears `installing` and `restoring_backup` for every
-  server on the node, so after each start the gateway sends it once no CR has an install in progress
-  (`spec.install.generation` above `observedGeneration`, or `result: Running`) and none has a pending
-  backup or restore of its current agent (§8.7), checking every 30 s.
+  server on the node and fails every open transfer to or from it, so after each start the gateway
+  sends it once no CR has an install in progress (`spec.install.generation` above `observedGeneration`,
+  or `result: Running`), none has a pending backup or restore of its current agent (§8.7) and none
+  carries the incoming-transfer mark (§8.10), checking every 30 s.
 - **Operator restart:** reconciles are idempotent; `status.power.observedGeneration`,
   `status.agent.podUID` and `status.game.podUID` prevent duplicate power actions.
 
@@ -1422,7 +1423,9 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    only its answer was lost, so the transfer is finished; not listed, the copy made here is deleted and
    the refusal is passed to Wings. A success the Panel could not be asked about (unreachable, 5xx)
    leaves the CR marked, and Wings in the agent keeps the server in its transferring state (no power
-   actions; reported as in-flight work) until the agent pod is replaced.
+   actions; reported as in-flight work) until the agent pod is replaced. The gateway holds back its
+   boot-time node reset (§8.9) while any CR is marked, since the Panel fails every open transfer of the
+   node on a reset.
 5. Resync (§13) never marks a CR in transfer `Orphaned` and never syncs it (the Panel lists the server on
    the old node and serves the old node's allocation until it succeeds). Once the Panel lists it on this
    node, Resync finishes the transfer; a mark the Panel still does not list after 24 hours belongs to a
