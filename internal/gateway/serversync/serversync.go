@@ -498,10 +498,11 @@ func (s *Syncer) Resync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// The list only says which servers exist. Its configuration is not usable:
-	// the Panel eager-loads the variables there, which makes every startup
-	// variable come back with the egg default instead of the server's value.
-	// Wings never notices because it fetches each server again at boot.
+	// The list only says which servers exist. Its configuration is not used:
+	// up to v1.0.0-rc.2 the Panel eager-loads the variables there, which makes
+	// every startup variable come back with the egg default instead of the
+	// server's value (Wings never notices because it fetches each server again
+	// at boot), so each server is fetched on its own.
 	panelSet := map[string]bool{}
 	for _, srv := range servers {
 		panelSet[srv.Uuid] = true

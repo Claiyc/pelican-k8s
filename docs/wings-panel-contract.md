@@ -9,10 +9,10 @@ Wings node.
 | Repo | Commit | Notes |
 |---|---|---|
 | `github.com/pelican/wings` | `9fb682f` (2026-10-05) | Go module `github.com/pelican/wings`, MIT |
-| `github.com/pelican/panel` | `f64a167` (2026-10-22, `v1.0.0-rc.2`) | Laravel 13 / Filament 5, AGPL-3.0 |
+| `github.com/pelican/panel` | `6095cea` (2026-11-13, `v1.0.0-rc.3`) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still at release candidates
-(Panel `v1.0.0-rc.2`; Wings `v1.0.0-rc.1`, which differs from `9fb682f` only in a test), so
+(Panel `v1.0.0-rc.3`; Wings `v1.0.0-rc.1`, which differs from `9fb682f` only in a test), so
 **re-verify this document when bumping versions**.
 
 ---
@@ -21,10 +21,10 @@ Paths below are relative to the respective repo root. Pelican is still at releas
 
 ### 1.1 Panel → Wings (node token)
 
-- Laravel macro `Http::daemon` (`app/Providers/AppServiceProvider.php:68-78`):
+- Laravel macro `Http::daemon` (`app/Providers/AppServiceProvider.php:85-95`):
   `baseUrl($node->getConnectionAddress())`, `withToken($node->daemon_token)` →
   `Authorization: Bearer <token>` (token only, no id). TLS verify only in production.
-- `Node::getConnectionAddress()` = `"$scheme://$fqdn:$daemon_connect"` (`app/Models/Node.php:219-222`).
+- `Node::getConnectionAddress()` = `"$scheme://$fqdn:$daemon_connect"` (`app/Models/Node.php:322-325`).
   The same address is used for the API, the browser's websocket URL, signed download/upload URLs,
   and the JWT `aud` claim.
 - Wings check: `middleware.RequireAuthorization()` (`router/middleware/middleware.go:168-189`) compares
@@ -65,7 +65,7 @@ Paths below are relative to the respective repo root. Pelican is still at releas
 | File download | `FileController.php:95-103` | `file_path`, `server_uuid`, `user_uuid` | 15 min | `server_uuid` |
 | File upload | `FileUploadController.php:47-52` | `server_uuid`, `user_uuid` | 15 min | `server_uuid` |
 | Backup download | `WingsBackupSchema.php:46-54` | `backup_uuid`, `server_uuid`, `user_uuid` | 15 min | `server_uuid` |
-| Transfer | `TransferServerService.php:109-113` | `sub = server uuid` | 15 min | `sub` |
+| Transfer | `TransferServerService.php:116-120` | `sub = server uuid` | 15 min | `sub` |
 
 ### 1.4 Revocation and replay state (all in memory, per Wings process)
 
@@ -76,11 +76,11 @@ Paths below are relative to the respective repo root. Pelican is still at releas
   runs `Websockets().CancelAll()` and `Sftp().Cancel(user)`. **If `servers` is empty it cancels sessions
   on all servers but writes no deny entry.**
 - **Legacy JTI denylist** via `POST /api/servers/:s/ws/deny {jtis[]}` (`router_server.go:327-341`).
-  The Panel sends `md5(...)` (`DaemonServerRepository.php:139`) while it signs `jti = sha256(...)`,
+  The Panel sends `md5(...)` (`DaemonServerRepository.php:176`) while it signs `jti = sha256(...)`,
   so this path never matches.
 - **One-time use** for download, upload and backup tokens: `TokenStore` (go-cache, 60 min TTL, keyed by
   `unique_id`; `router/tokens/token_store.go:14-42`).
-- `DaemonServerRepository::deauthorize` (`:148-154`) posts `{user, servers: [uuid]}` for one server,
+- `DaemonServerRepository::deauthorize` (`:185-191`) posts `{user, servers: [uuid]}` for one server,
   or `servers: []` for a whole node (`RevokeSftpAccessJob`), which takes the "cancel everything,
   deny nothing" branch.
 
@@ -108,13 +108,13 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 | Method | Path | Scope | Panel caller |
 |---|---|---|---|
 | POST | `/api/update` | N | `DaemonSystemRepository` (pushes `Node::getConfiguration()`) |
-| GET | `/api/system` | N | `DaemonSystemRepository` (3 s timeout); the UI reads `version`/`exception` (`NodeSystemInformation.php:23-24`) |
+| GET | `/api/system` | N | `DaemonSystemRepository` (3 s timeout); the UI reads `version`/`exception` (`NodeSystemInformation.php:24-25`) |
 | GET | `/api/diagnostics` | N | `DaemonSystemRepository` |
 | GET | `/api/system/docker/disk` | N | no caller found |
 | DELETE | `/api/system/docker/image/prune` | N | `PruneImagesCommand.php:38-55` (expects `ImagesDeleted`, `SpaceReclaimed`) |
-| GET | `/api/system/ips` | N | `Node.php:441` (`ip_addresses`) |
-| GET | `/api/system/utilization` | N | `Node.php:418-422` (`memory_total`, …) |
-| GET | `/api/servers` | N | list |
+| GET | `/api/system/ips` | N | `Node.php:657` (`ip_addresses`) |
+| GET | `/api/system/utilization` | N | `Node.php:634-638` (`memory_total`, …) |
+| GET | `/api/servers` | N | `DaemonServerRepository::getStates` (5 s; the node's mass-action table) reads `configuration.uuid` and `state` of each entry |
 | POST | `/api/servers` | N (UUID in body) | `DaemonServerRepository::create {uuid, start_on_completion}` |
 | DELETE | `/api/transfers/:server` | S | `DaemonServerRepository::cancelTransfer` on the destination node; the response is ignored. Wings mounts it without `ServerExists`, so `ExtractServer` panics and it answers 500 |
 | POST | `/api/deauthorize-user` | N | `RevokeSftpAccessJob` |
@@ -123,7 +123,7 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 
 | Group | Routes |
 |---|---|
-| Core | `GET ""` (Panel: 1 s timeout, reads `state`; on failure the Panel assumes `state: "missing"`), `DELETE ""`, `GET /logs`, `GET /install-logs`, `POST /power {action}`, `POST /commands`, `POST /install`, `POST /reinstall` (409 if a power action is running), `POST /sync`, `POST /ws/deny`, `POST /transfer`, `DELETE /transfer`, `DELETE /deleteAllBackups` |
+| Core | `GET ""` (Panel: 1 s timeout, reads `state`; on failure the Panel assumes `state: "missing"`; batch transfers use `getState`, 5 s, which takes only a `404` as `missing` and any other failure as unknown), `DELETE ""`, `GET /logs`, `GET /install-logs`, `POST /power {action}`, `POST /commands`, `POST /install`, `POST /reinstall` (409 if a power action is running), `POST /sync`, `POST /ws/deny`, `POST /transfer`, `DELETE /transfer`, `DELETE /deleteAllBackups` |
 | Files | `GET /files/contents`, `GET /files/list-directory`, `PUT /files/rename`, `POST /files/{copy,write,create-directory,delete,compress,decompress,chmod}`, `GET /files/search`, `GET/POST /files/pull`, `DELETE /files/pull/:download` |
 | Backups | `POST /backup {adapter, uuid, ignore}` (400 when `ignore` is not a valid ignore list, since `9fb682f`), `POST /backup/:backup/restore {adapter, truncate_directory, download_url}`, `DELETE /backup/:backup` |
 
@@ -133,6 +133,12 @@ Panel timeouts worth noting: compress and decompress 15 min, search 2 min (`Daem
 (legacy or broken). Cancelling a transfer (`DaemonServerRepository::cancelTransfer`) calls
 `DELETE /api/servers/{uuid}/transfer` on the source node and `DELETE /api/transfers/{uuid}` on the
 destination, and ignores both responses.
+
+Starting a transfer (`TransferServerService::notify`, `:37-58`) posts `POST /api/servers/{uuid}/transfer`
+to the source node with a 30 s timeout and throws on any non-2xx answer. An answer of any status, or a
+connection that was never made, marks the transfer failed and releases the new allocations
+(`ServerTransfer::markFailed`); a connection that broke after the request was sent leaves the transfer
+open (`TransferUnconfirmedException`), since the daemon may be running it.
 
 ---
 
@@ -147,7 +153,7 @@ resolves the groups and diffs the result against this table.
 |---|---|---|---|
 | POST | `/sftp/auth` | `SftpAuthenticationController` | SFTP login |
 | GET | `/servers?page&per_page` | `ServerDetailsController@list` | boot sync (paged by node) |
-| POST | `/servers/reset` | `@resetState` | once per boot: clears `Installing`/`RestoringBackup` for **all** node servers |
+| POST | `/servers/reset` | `@resetState` | once per boot: clears `Installing`/`RestoringBackup` for **all** node servers and marks every unfinished transfer to or from the node failed |
 | POST | `/activity` | `ActivityProcessingController` | activity batches `{data:[…]}` |
 | GET | `/servers/{uuid}` | `ServerDetailsController` | `{settings, process_configuration}` |
 | GET | `/servers/{uuid}/install` | `ServerInstallController@index` | `{container_image, entrypoint, script}` |
@@ -162,7 +168,7 @@ resolves the groups and diffs the result against this table.
 
 State reads: `Server::retrieveStatus()` caches `GET /api/servers/{uuid}` for 15 s (and answers `missing`
 without asking while the node is under maintenance), and a pushed `container/status` value wins for up
-to 1 h (`Server.php:520-532`, `ServerContainersController.php:17-26`).
+to 1 h (`Server.php:539-551`, `ServerContainersController.php:17-26`).
 
 ---
 
@@ -196,7 +202,7 @@ Servers **without an allocation** (allowed since 2025-06) arrive as
 `"default": {"ip": "127.0.0.1", "port": 0}` and `"mappings": {"": []}`. `container.image` may carry a
 leading `~`, which Wings strips and interprets as "never pull".
 
-**`process_configuration`** (`EggConfigurationService.php:26-81`):
+**`process_configuration`** (`EggConfigurationService.php:28-83`):
 `startup{done: string[], user_interaction: [], strip_ansi}`, `stop{type: "command"|"signal", value}`
 (an egg stop of `^C` becomes a signal `C`, which Wings maps to SIGINT), and
 `configs[{file, parser, replace[{match, if_value?, replace_with}]}]`.
@@ -215,7 +221,7 @@ the Panel pre-expands every other placeholder (`{{server.build.default.port}}`, 
 
 - Username format `^(?i)(.+)\.([a-z0-9]{8})$` → `<panel username>.<uuid_short>` (`sftp/server.go:31`).
   Panel connection string: `sftp://<user>.<uuid_short>@<daemon_sftp_alias ?? fqdn>:<daemon_sftp>`
-  (`app/Models/Server.php:612-614`).
+  (`app/Models/Server.php:631-633`).
 - Auth request `POST /api/remote/sftp/auth` with body
   `{type: password|public_key, username, password|authorized_key, ip, session_id, client_version}`
   (`remote/types.go:75-82`).
@@ -394,6 +400,9 @@ What the Docker implementation does, which a replacement must emulate:
 
 - `throttles{enabled, lines 2000, line_reset_interval 100}`.
 - `docker.*`: network, `tmpfs_size` 100, `container_pid_limit` 512, `installer_limits`, `overhead` multipliers.
-- Panel-generated node config (`Node.php:246-272`) sets only: `uuid`, `token_id`, `token`,
-  `api{host, port=daemon_listen, ssl, upload_limit}`, `system{data, sftp.bind_port}`, `allowed_mounts`, `remote`.
+- Panel-generated node config (`Node.php:351-385`) sets: `uuid`, `token_id`, `token`,
+  `api{host, port=daemon_listen, ssl, upload_limit}`, `system{data, sftp.bind_port}`, `allowed_mounts`, `remote`,
+  merged over the node's optional `daemon_config` overrides: the keys in `Node::DAEMON_CONFIG_KEYS`
+  (`Node.php:135-176`; e.g. `debug`, `allowed_origins`, `api.trusted_proxies`, `api.ssl.cert`/`key`,
+  `remote_query.timeout`, `system.*`, `docker.*`, `throttles.*`), each sent only when set.
   `daemon_listen` (bind port) and `daemon_connect` (advertised port) are separate fields.

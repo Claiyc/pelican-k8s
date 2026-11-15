@@ -216,10 +216,14 @@ func (g *Gateway) resetServersState(ctx context.Context) {
 			busy := false
 			for _, gs := range list {
 				installPending := gs.Spec.Install.Generation > gs.Status.Install.ObservedGeneration
+				// The reset also fails every open transfer to or from the node,
+				// and an incoming one runs in its agent, which outlives the
+				// gateway. Resync removes the mark once the transfer is settled.
+				_, transferIn := gs.Annotations[v1alpha1.AnnotationTransferIn]
 				// A backup or restore of an earlier agent instance ended with it.
 				// A failed lookup cannot tell, so it waits for the next tick.
 				agent, err := g.Store.AgentInstance(ctx, gs.Spec.Panel.UUID)
-				if err != nil || installPending || gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Live(agent)) > 0 {
+				if err != nil || installPending || transferIn || gs.Status.Install.Result == v1alpha1.InstallRunning || len(gs.Status.Backups.Live(agent)) > 0 {
 					busy = true
 					break
 				}
