@@ -17,9 +17,7 @@ import (
 	"github.com/pelican/wings/config"
 	"github.com/pelican/wings/environment"
 	"github.com/pelican/wings/router/downloader"
-	"github.com/pelican/wings/router/tokens"
 	"github.com/pelican/wings/server"
-	"github.com/pelican/wings/server/transfer"
 
 	"github.com/Claiyc/pelican-k8s/internal/agent/shimenv"
 	"github.com/Claiyc/pelican-k8s/internal/pki"
@@ -98,34 +96,11 @@ func Handler(wings http.Handler, m *server.Manager, reg *shimenv.Registry, repor
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	// A Panel transfer pushes the server's files here, through the gateway.
-	mux.Handle("POST /api/transfers", incomingTransfer(wings, m))
 	// Called by the operator for a new install generation.
 	mux.Handle("POST /api/servers/{server}/install", installGuard(wings, m, reportPending))
 	mux.Handle("POST /api/servers/{server}/reinstall", installGuard(wings, m, reportPending))
 	mux.Handle("/", act.Track(wings))
 	return mux
-}
-
-// incomingTransfer lets Wings receive a Panel transfer into the server this
-// agent already runs. Without a registered incoming transfer Wings would build
-// a second server from the Panel's configuration, so the server the token names
-// is registered first and Wings extracts into it. Wings drops the registration
-// once it handled the transfer; a request it rejected earlier is undone here.
-func incomingTransfer(wings http.Handler, m *server.Manager) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var registered *transfer.Transfer
-		if s := transferTarget(r, m); s != nil && transfer.Incoming().Get(s.ID()) == nil {
-			registered = transfer.New(r.Context(), s)
-			s.SetTransferring(true)
-			transfer.Incoming().Add(registered)
-		}
-		wings.ServeHTTP(w, r)
-		if registered != nil && transfer.Incoming().Get(registered.Server.ID()) == registered {
-			transfer.Incoming().Remove(registered)
-			registered.Server.SetTransferring(false)
-		}
-	})
 }
 
 // installGuard answers 409 while an earlier install still holds Wings' install
@@ -145,26 +120,6 @@ func installGuard(wings http.Handler, m *server.Manager, reportPending func(uuid
 		}
 		wings.ServeHTTP(w, r)
 	})
-}
-
-// transferTarget returns the server a transfer request is for: the subject of
-// its token, verified as Wings verifies it. It is nil for a token Wings will
-// reject or one naming a server this agent does not run; Wings then answers
-// the request itself.
-func transferTarget(r *http.Request, m *server.Manager) *server.Server {
-	auth := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
-	if len(auth) != 2 || auth[0] != "Bearer" {
-		return nil
-	}
-	var p tokens.TransferPayload
-	if err := tokens.ParseToken([]byte(auth[1]), &p); err != nil || !p.HasScope(tokens.ServerTransfer) {
-		return nil
-	}
-	s, ok := m.Get(p.Subject)
-	if !ok {
-		return nil
-	}
-	return s
 }
 
 // authorized guards a route with the agent's own Wings token, as the Panel's

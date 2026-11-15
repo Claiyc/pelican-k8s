@@ -68,7 +68,7 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 	t.Cleanup(cancel)
 
 	reg := shimenv.NewRegistry(ln, nil, nil)
-	m := server.NewEmptyManager(stubPanel{}, server.WithEnvironmentFactory(reg.Factory))
+	m := server.NewEmptyManager(stubPanel{}, server.WithEnvironmentFactory(reg.Factory), server.WithTransfersIntoExistingServers())
 	settings, _ := json.Marshal(map[string]any{
 		"uuid":       serverID,
 		"invocation": "sleep",

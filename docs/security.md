@@ -14,8 +14,8 @@
 The node token signs every browser JWT for every server on the node. The
 gateway verifies those JWTs and re-signs the same claims with the agent token
 of the target server, so a compromised agent can only mint tokens for its own
-server, and Wings' own scope, expiry, one-time-use and denylist checks run in
-the agent.
+server, and Wings' own scope, expiry, denylist and (for uploads) one-time-use
+checks run in the agent.
 
 ## Pod security
 

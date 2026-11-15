@@ -7,7 +7,7 @@
 | Power, console, stats, done detection, stop command/signal | ✅ | Wings code, driven through the shim. A kill leaves the server stopped and removes its game pod at once; on Wings a kill sent while a restart waits for the process to stop lets that restart finish and start the server again. A start for a server that is not offline restarts it, where Wings refuses it |
 | Crash detection and auto restart | ✅ | Wings code; container-level exits (OOM) are relayed by the operator |
 | File manager, compress/decompress, search, remote pull | ✅ | Wings code on the server volume |
-| Signed downloads and uploads | ✅ | Gateway verifies with the node token, re-signs with the agent token; one-time use enforced by Wings |
+| Signed downloads and uploads | ✅ | Gateway verifies with the node token, re-signs with the agent token. Download links stay valid until they expire and support `Range`; upload links are one-time, enforced by Wings |
 | SFTP | ✅ | Gateway terminates SSH, authenticates against the Panel, relays to the agent's Wings SFTP server; activity rows carry the gateway address |
 | Egg config file rewriting | ✅ | Wings parser; the default allocation IP is presented as `0.0.0.0`, the real IP as `SERVER_PUBLIC_IP` |
 | Installs and reinstalls | ✅ | Kubernetes Job with the egg installer image; exit codes ignored unless `strictExitCode` |
