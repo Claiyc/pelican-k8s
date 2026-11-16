@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Generate the README architecture diagram (light and dark SVGs).
 
-Usage: python3 hack/gen-architecture-diagram.py docs/images
+Usage: python3 hack/gen-architecture-diagram.py
+
+The SVGs are written to docs/images, next to the README that shows them.
 """
-import sys
+from pathlib import Path
+
+OUT = Path(__file__).resolve().parent.parent / "docs" / "images"
 SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
 MONO = "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"
 
@@ -55,7 +59,8 @@ def gen(t):
     a('<title id="title">pelican-k8s architecture</title>')
     a('<desc id="desc">The Panel calls the gateway over the Wings API. The gateway writes spec and status to the GameServer custom resource and proxies console, files and SFTP to the agent pod. The operator watches the GameServer and reconciles the agent pod and the game pod. The agent drives the shim in the game pod over the shim protocol; the shim runs the egg entrypoint. Both pods share the server PVC.</desc>')
     a('<defs>')
-    for c in {T["line"], T["gw"][1], T["op"][1], T["sh"][1], T["ag"][1], T["cr"][1]}:
+    # dict.fromkeys drops duplicate colours and keeps the order, so the output is reproducible.
+    for c in dict.fromkeys([T["line"], T["gw"][1], T["op"][1], T["sh"][1], T["ag"][1], T["cr"][1]]):
         marker("m-"+c[1:], c)
     a('</defs>')
     a(f'<rect width="{W}" height="{H}" rx="14" fill="{T["bg"]}"/>')
@@ -129,4 +134,4 @@ def gen(t):
     return "\n".join(o)
 
 for t in THEMES:
-    open(f"{sys.argv[1]}/architecture-{t}.svg","w").write(gen(t)+"\n")
+    (OUT / f"architecture-{t}.svg").write_text(gen(t) + "\n")
