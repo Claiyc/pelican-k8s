@@ -35,8 +35,10 @@ handlers and the shim all have unit tests to extend.
 - `go vet`, `golangci-lint`, `helm lint` and the unit tests run in CI; keep them green.
   `make lint` runs the same two lint stages as CI: the whole tree on the
   baseline linters, your changes on all of them.
-- Codecov, SonarQube Cloud and CodeRabbit comment on the pull request. They
-  are advisory: read them, fix what is right, say so when it is not.
+- Codecov, SonarQube Cloud and CodeRabbit comment on the pull request.
+  SonarQube Cloud's quality gate blocks the merge (the CI job *Coverage and
+  quality reports* fails with it); Codecov and CodeRabbit are advisory: read
+  them, fix what is right, say so when it is not.
 - Do not modify vendored upstream behaviour: Wings changes go to the fork
   branch as opt-in hooks (see docs/development.md) and are proposed upstream.
 - A new or changed chart value also changes the chart's `values.schema.json`
