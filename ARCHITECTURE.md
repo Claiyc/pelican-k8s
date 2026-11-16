@@ -1419,7 +1419,8 @@ signed with this node's token (`scope: transfer`, `sub` = server UUID, 15 min).
    no files, and holds the server's power lock until the transfer is done, so no start can run while the
    files arrive. Wings checks the archive checksum and reports `transfer/success` or `transfer/failure`
    through the remote API. A failed transfer keeps the server, empties its data directory again and
-   removes the backups it received; the gateway then deletes the CR and its volume (step 6). While the transfer runs, the agent
+   removes the backups it received (if files are left, the server stays transferring, so it cannot be
+   started); the gateway then deletes the CR and its volume (step 6). While the transfer runs, the agent
    reports it as in-flight work, so it is not moved.
 4. The gateway forwards the result to the Panel (60 s: the Panel deletes the server on the old node
    before it answers). On success the Panel moves the server to this node and its new allocation; the
