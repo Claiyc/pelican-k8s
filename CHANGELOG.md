@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-16
+
+### What's Changed
+* build(deps): bump azure/setup-helm from 5.0.1 to 5.1.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/162
+* build(deps): bump go.opentelemetry.io/otel/trace from 1.44.0 to 1.47.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/163
+* docs: replace ASCII architecture sketch in README with an SVG diagram by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/166
+* charts/pelican-panel: deploy Pelican Panel v1.0.0-rc.3 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/167
+* Bump Wings to v1.0.0-rc.2 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/168
+* Pin Wings to pelican-k8s-hooks 67d4ae1 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/169
+* Pin Wings to pelican-k8s-hooks 8d2dbe9 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/170
+* hack/gen-architecture-diagram.py: fix the path-traversal finding, make output reproducible by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/171
+* ci: fail the quality reports job with the SonarQube Cloud quality gate by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/172
+
 ## [2.2.4] - 2026-11-12
 
 ### What's Changed
@@ -306,7 +319,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.4...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.4...v2.3.0
 [2.2.4]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.1...v2.2.2
