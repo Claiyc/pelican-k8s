@@ -239,11 +239,19 @@ jobs:
           tree.write("golangci-lint.xml", encoding="UTF-8", xml_declaration=True)
           print(f"left {dropped} gocognit findings out of the SonarQube report")
           PY
+      # Waits for the quality gate and fails this job with it, so a failed
+      # gate blocks the merge: this job is a required check on master, and
+      # SonarQube Cloud's own check is not (it never reports on pull requests
+      # without the token, which would block them).
       - name: SonarQube Cloud analysis
         if: steps.sonar.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=600
 
   helm:
     name: Helm charts
