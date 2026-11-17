@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-16
+
+### What's Changed
+* build(deps): bump SonarSource/sonarqube-scan-action from 8.4.1 to 8.5.0 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/174
+* build(deps): bump golang.org/x/crypto from 0.58.0 to 0.59.0 in the golang-x group by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/173
+
 ## [2.3.0] - 2026-11-16
 
 ### What's Changed
@@ -319,7 +325,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.4...v2.3.0
 [2.2.4]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/Claiyc/pelican-k8s/compare/v2.2.2...v2.2.3
