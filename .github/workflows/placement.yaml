@@ -52,6 +52,7 @@ jobs:
             case "$f" in
               api/*|cmd/*|internal/*|build/*|go.mod|go.sum|charts/pelican-k8s/*|test/placement/*|test/fakepanel/*|\
               hack/e2e-placement.sh|hack/kind-placement.yaml|.github/workflows/placement.yaml) relevant=true ;;
+              *) ;;
             esac
           done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
           echo "relevant=$relevant" | tee -a "$GITHUB_OUTPUT"
