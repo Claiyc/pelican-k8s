@@ -195,7 +195,7 @@ echo "restored server uuid $NEW"; [[ ${#NEW} -eq 36 && "$NEW" != "$UUID" ]]
 for i in $(seq 1 60); do
   rs=$(tinker '$r = App\Models\ServerRestore::latest("id")->first(); echo $r->status, " ", $r->error, PHP_EOL;')
   echo "t=$((i*5))s restore=$rs"
-  case "$rs" in completed*) break;; failed*) exit 1;; esac
+  case "$rs" in completed*) break;; failed*) exit 1;; *) ;; esac
   sleep 5
 done
 [[ "$rs" == completed* ]]

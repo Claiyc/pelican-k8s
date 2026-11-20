@@ -741,11 +741,14 @@ func TestBackupProxyDropsRefusedAndEndedBackups(t *testing.T) {
 	}
 }
 
-// A restore of another server's local backup gets a link to the backup on the
-// source server's agent, through the gateway's remote API listener; any other
-// restore reaches the agent as the Panel sent it.
-func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
-	f := newFixture(t)
+const restoreBackup = "5b1d2c3e-0000-4000-8000-000000000001"
+
+// newRestoreFixture is a fixture with this server's agent, a second server
+// (otherUUID) as a restore source and a remote API listener URL. restore
+// posts a restore of restoreBackup and returns the body the agent got.
+func newRestoreFixture(t *testing.T) (f *fixture, restore func(body string) string) {
+	t.Helper()
+	f = newFixture(t)
 	f.h.Cfg.RemoteURL = "https://gw.example.svc:8081"
 	f.create()
 	f.addPod()
@@ -753,16 +756,20 @@ func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
 	if err := f.c.Create(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
-	const backup = "5b1d2c3e-0000-4000-8000-000000000001"
-	restore := func(body string) map[string]any {
+	return f, func(body string) string {
 		t.Helper()
-		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+backup+"/restore", body); code != 200 {
-			t.Fatalf("restore code = %d", code)
+		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+restoreBackup+"/restore", body); code != 200 {
+			t.Fatalf("%s: restore code = %d", body, code)
 		}
-		return decodeMap(t, f.calls()[len(f.calls())-1].body)
+		return f.calls()[len(f.calls())-1].body
 	}
+}
 
-	got := restore(`{"adapter":"wings","truncate_directory":true,"source_server":"` + otherUUID + `"}`)
+// A restore of another server's local backup gets a link to the backup on the
+// source server's agent, through the gateway's remote API listener.
+func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
+	_, restore := newRestoreFixture(t)
+	got := decodeMap(t, restore(`{"adapter":"wings","truncate_directory":true,"source_server":"`+otherUUID+`"}`))
 	if got["source_server"] != otherUUID || got["truncate_directory"] != true || got["adapter"] != "wings" {
 		t.Fatalf("the Panel's fields must reach the agent: %v", got)
 	}
@@ -779,29 +786,32 @@ func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
 		claims.ExpirationTime == nil || time.Until(claims.ExpirationTime.Time) > sourceBackupTTL {
 		t.Fatalf("claims = %+v", claims)
 	}
+}
 
-	// A link to this node's own backup download (the Panel's restore link when
-	// the backup is already being restored) goes to the remote API listener,
-	// with the Panel's token.
-	own := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
-		"jti": "j", "server_uuid": otherUUID, "backup_uuid": backup, "unique_id": "u", "scope": "backup-download"})
-	got = restore(`{"adapter":"s3","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=` + own + `"}`)
-	if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+own || got["adapter"] != "s3" {
-		t.Fatalf("own link: %v", got)
+// A link to this node's own backup download goes to the remote API listener
+// with the Panel's token: the Panel's restore link when the backup is already
+// being restored (adapter s3), and the user's download link of an in-place
+// restore, which Wings uses only when the backup is not on disk.
+func TestRestoreMovesOwnBackupLinks(t *testing.T) {
+	_, restore := newRestoreFixture(t)
+	restoreLink := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		"jti": "j", "server_uuid": otherUUID, "backup_uuid": restoreBackup, "unique_id": "u", "scope": "backup-download"})
+	userLink := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(15 * time.Minute).Unix(),
+		"jti": "j", "server_uuid": uuid, "backup_uuid": restoreBackup, "user_uuid": "u", "unique_id": "u", "scope": "backup-download"})
+	for adapter, token := range map[string]string{"s3": restoreLink, "wings": userLink} {
+		got := decodeMap(t, restore(`{"adapter":"`+adapter+`","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=`+token+`"}`))
+		if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+token || got["adapter"] != adapter {
+			t.Fatalf("%s: %v", adapter, got)
+		}
 	}
+}
 
-	// The Panel's in-place restore carries the user's download link, which goes
-	// to the listener too; Wings uses it only when the backup is not on disk.
-	user := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(15 * time.Minute).Unix(),
-		"jti": "j", "server_uuid": uuid, "backup_uuid": backup, "user_uuid": "u", "unique_id": "u", "scope": "backup-download"})
-	got = restore(`{"adapter":"wings","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=` + user + `"}`)
-	if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+user || got["adapter"] != "wings" {
-		t.Fatalf("in-place restore: %v", got)
-	}
-
-	// Left alone: a body without a link, an S3 backup, another node's links
-	// (signed with another key, or not a backup download) and a source server
-	// this gateway does not have.
+// Any other restore reaches the agent as the Panel sent it: a body without a
+// link, an S3 backup, another node's links (signed with another key, or not a
+// backup download), a source server this gateway does not have and bodies
+// that do not decode.
+func TestRestoreLeavesOtherBodiesAlone(t *testing.T) {
+	_, restore := newRestoreFixture(t)
 	other := signToken(t, "another-node", map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "server_uuid": otherUUID, "scope": "backup-download"})
 	fileTok := signToken(t, nodeToken, fileClaims("file-download", time.Now().Add(time.Hour)))
 	for _, body := range []string{
@@ -816,11 +826,8 @@ func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
 		`{"adapter":5,"source_server":"` + otherUUID + `"}`,
 		`not json`,
 	} {
-		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+backup+"/restore", body); code != 200 {
-			t.Fatalf("%s: restore code = %d", body, code)
-		}
-		if last := f.calls()[len(f.calls())-1]; last.body != body {
-			t.Fatalf("agent got %q, want %q", last.body, body)
+		if got := restore(body); got != body {
+			t.Fatalf("agent got %q, want %q", got, body)
 		}
 	}
 }

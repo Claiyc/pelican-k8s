@@ -221,22 +221,28 @@ func TestStopWhileDetachedSignalsTheProcess(t *testing.T) {
 	}
 }
 
+// startStubborn starts a process that ignores SIGTERM and its stop command,
+// with the given stop configuration, and waits until it runs.
+func startStubborn(t *testing.T, stop remote.ProcessStopConfiguration) *Environment {
+	t.Helper()
+	e, _, _ := newTestEnv(t, []string{"/bin/sh", "-c", `trap '' TERM; echo ready; while true; do sleep 0.05; done`})
+	e.SetStopConfiguration(stop)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitLogLine(t, e, "ready")
+	return e
+}
+
 // A process that ignores SIGTERM and its stop command is only ended by the
 // escalation to SIGKILL once the wait expires.
 func TestWaitForStopEscalates(t *testing.T) {
-	stubborn := []string{"/bin/sh", "-c", `trap '' TERM; echo ready; while true; do sleep 0.05; done`}
-
 	for name, stop := range map[string]remote.ProcessStopConfiguration{
 		"signal stop": {Type: remote.ProcessStopSignal, Value: "SIGTERM"},
 		"stdin stop":  {Type: remote.ProcessStopCommand, Value: "stop"},
 	} {
 		t.Run(name+" terminates", func(t *testing.T) {
-			e, _, _ := newTestEnv(t, stubborn)
-			e.SetStopConfiguration(stop)
-			if err := e.Start(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			waitLogLine(t, e, "ready")
+			e := startStubborn(t, stop)
 			if err := e.WaitForStop(context.Background(), 300*time.Millisecond, true); err != nil {
 				t.Fatal(err)
 			}
@@ -246,14 +252,10 @@ func TestWaitForStopEscalates(t *testing.T) {
 			}
 		})
 	}
+	stdinStop := remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"}
 
 	t.Run("without terminate it reports the timeout", func(t *testing.T) {
-		e, _, _ := newTestEnv(t, stubborn)
-		e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"})
-		if err := e.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		waitLogLine(t, e, "ready")
+		e := startStubborn(t, stdinStop)
 		err := e.WaitForStop(context.Background(), 300*time.Millisecond, false)
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Fatalf("err = %v", err)
@@ -264,12 +266,7 @@ func TestWaitForStopEscalates(t *testing.T) {
 	})
 
 	t.Run("parent context cancellation without terminate", func(t *testing.T) {
-		e, _, _ := newTestEnv(t, stubborn)
-		e.SetStopConfiguration(remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "stop"})
-		if err := e.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		waitLogLine(t, e, "ready")
+		e := startStubborn(t, stdinStop)
 		cctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 		if err := e.WaitForStop(cctx, time.Minute, false); !errors.Is(err, context.DeadlineExceeded) {
