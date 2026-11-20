@@ -251,7 +251,7 @@ func TestSupersededResultNeverReachesTheGateway(t *testing.T) {
 	reg := shimenv.NewRegistry(ln, nil, nil)
 	m := server.NewEmptyManager(inst.Client(rec), server.WithEnvironmentFactory(reg.Factory), server.WithInstaller(inst))
 	settings, _ := json.Marshal(map[string]any{"uuid": "1a2b3c4d-0000-4000-8000-000000000000", "allocations": map[string]any{"default": map[string]any{"ip": "0.0.0.0", "port": 25565}}})
-	s, err := m.InitServer(remote.ServerConfigurationResponse{Settings: settings, ProcessConfiguration: &remote.ProcessConfiguration{}})
+	s, err := m.InitServer("1a2b3c4d-0000-4000-8000-000000000000", remote.ServerConfigurationResponse{Settings: settings, ProcessConfiguration: &remote.ProcessConfiguration{}})
 	if err != nil {
 		t.Fatal(err)
 	}

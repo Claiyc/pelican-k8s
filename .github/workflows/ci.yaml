@@ -49,8 +49,7 @@ jobs:
         run: go test -count=1 ./test/upstream/
       - name: Known vulnerabilities in dependencies (govulncheck)
         # Fails on any reachable vulnerability that has a fixed version. Findings
-        # without a fix (e.g. in docker/docker, linked through Wings but never
-        # executed by the agent) are reported in the step summary only.
+        # without a fix are reported in the step summary only.
         run: |
           set +e
           go run golang.org/x/vuln/cmd/govulncheck@latest ./... > govulncheck.txt 2>&1

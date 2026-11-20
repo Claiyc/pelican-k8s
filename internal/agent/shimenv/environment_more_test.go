@@ -482,14 +482,14 @@ func TestRegistryFactory(t *testing.T) {
 	}
 
 	m := server.NewEmptyManager(nopPanel{}, server.WithEnvironmentFactory(reg.Factory))
-	settings := `{"uuid":"srv-1","invocation":"x","container":{"image":"example/yolk:7"},"allocations":{"default":{"ip":"0.0.0.0","port":25565}}}`
+	settings := `{"uuid":"5e1f0c2a-0000-4000-8000-000000000001","invocation":"x","container":{"image":"example/yolk:7"},"allocations":{"default":{"ip":"0.0.0.0","port":25565}}}`
 	pc := &remote.ProcessConfiguration{}
 	pc.Stop = remote.ProcessStopConfiguration{Type: remote.ProcessStopCommand, Value: "end"}
 	data := remote.ServerConfigurationResponse{Settings: []byte(settings), ProcessConfiguration: pc}
-	if _, err := m.InitServer(data); err != nil {
+	if _, err := m.InitServer("5e1f0c2a-0000-4000-8000-000000000001", data); err != nil {
 		t.Fatal(err)
 	}
-	e1, ok := reg.Get("srv-1")
+	e1, ok := reg.Get("5e1f0c2a-0000-4000-8000-000000000001")
 	if !ok {
 		t.Fatal("environment not registered")
 	}
@@ -499,7 +499,7 @@ func TestRegistryFactory(t *testing.T) {
 	if got := e1.stopConfig(); got != pc.Stop {
 		t.Fatalf("stop config %+v", got)
 	}
-	if e1.o.Addr != ln.Addr() || e1.o.RunLog != filepath.Join(dir, "log", "console", "srv-1.log") {
+	if e1.o.Addr != ln.Addr() || e1.o.RunLog != filepath.Join(dir, "log", "console", "5e1f0c2a-0000-4000-8000-000000000001.log") {
 		t.Fatalf("options %+v", e1.o)
 	}
 	if len(e1.o.ExtraEnv) != 1 || e1.o.ExtraEnv[0] != "INTERNAL_IP=10.1.2.3" {
@@ -507,10 +507,10 @@ func TestRegistryFactory(t *testing.T) {
 	}
 
 	// Initialising the same server again replaces and closes the old environment.
-	if _, err := m.InitServer(data); err != nil {
+	if _, err := m.InitServer("5e1f0c2a-0000-4000-8000-000000000001", data); err != nil {
 		t.Fatal(err)
 	}
-	e2, _ := reg.Get("srv-1")
+	e2, _ := reg.Get("5e1f0c2a-0000-4000-8000-000000000001")
 	if e2 == e1 {
 		t.Fatal("the environment must be replaced")
 	}

@@ -127,18 +127,14 @@ required check that never reports would block the pull request.
 
 ### Standing Scorecard findings
 
-**Vulnerabilities.** These advisories have no fixed version, and their
-vulnerable code is not linked; `test/supplychain` asserts that.
+**Vulnerabilities.** This advisory has no fixed version, and its vulnerable
+code is not linked; `test/supplychain` asserts that.
 
 | Advisory | Module | Where the vulnerable code lives |
 |---|---|---|
-| GO-2026-4883, GO-2026-4887 | `github.com/docker/docker` | plugin privilege validation and AuthZ plugin handling, daemon-side |
-| GO-2026-5617, GO-2026-5668, GO-2026-5746 | `github.com/docker/docker` | `docker/docker/daemon` (`docker cp`, `PUT /containers/{id}/archive`) |
 | GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
 
-`github.com/docker/docker` enters through `internal/agent/installer` →
-`wings/system` → `docker/docker/api/types`; `docker/docker/daemon` is not
-linked. `x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
+`x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
 vulnerability reachable from this code.
 
 **Other checks** need settings outside the tree: *Code-Review* counts

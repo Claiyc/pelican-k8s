@@ -2,7 +2,7 @@ module github.com/Claiyc/pelican-k8s
 
 go 1.27.4
 
-replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261116002105-8d2dbe9dbe9b
+replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261120171247-03591f2f6a10
 
 tool sigs.k8s.io/controller-tools/cmd/controller-gen
 
@@ -32,7 +32,6 @@ require (
 require (
 	emperror.dev/errors v0.8.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/Microsoft/hcsshim v0.14.1 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/acobaugh/osrelease v0.1.0 // indirect
 	github.com/andybalholm/brotli v1.2.7 // indirect
@@ -42,7 +41,6 @@ require (
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.4 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
-	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
@@ -51,14 +49,12 @@ require (
 	github.com/cloudwego/base64x v0.1.7 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
-	github.com/containerd/log v0.1.0 // indirect
 	github.com/creasty/defaults v1.8.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/cli v29.7.2+incompatible // indirect
-	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
-	github.com/docker/go-connections v0.8.1 // indirect
+	github.com/docker/go-connections v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -125,9 +121,9 @@ require (
 	github.com/minio/minlz v1.1.1 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
+	github.com/moby/moby/api v1.57.0 // indirect
+	github.com/moby/moby/client v0.6.3 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
-	github.com/moby/sys/sequential v0.7.0 // indirect
-	github.com/moby/term v0.5.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
