@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pelican/wings/config"
+	"github.com/pelican/wings/server"
 
 	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
@@ -361,57 +362,36 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	}
 }
 
-// trustCABundle lets a client cloned from the transport, as Wings' restore
-// client is, verify a server the internal CA signed, and keeps the system
-// roots.
-func TestTrustCABundle(t *testing.T) {
-	ca, _, err := pki.NewCA(time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPEM, keyPEM, err := ca.Issue("pelican-gateway", []string{"localhost"}, pki.Server, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
+// The agent gives Wings a restore TLS configuration that trusts the internal
+// CA bundle, and only with TLS: without it Wings keeps its default.
+func TestRestoreTLSConfig(t *testing.T) {
+	agentDir, gatewayServer, _ := testPKI(t)
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
-	srv.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	srv.TLS = gatewayServer
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	link := "https://localhost:" + strings.TrimPrefix(srv.URL, "https://127.0.0.1:")
 
-	base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-	if res, err := (&http.Client{Transport: base.Clone()}).Get(link); err == nil {
-		res.Body.Close()
-		t.Fatal("the server must not be trusted before the bundle is added")
-	}
-	caFile := filepath.Join(t.TempDir(), "ca.crt")
-	if err := os.WriteFile(caFile, ca.CertPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := trustCABundle(base, caFile); err != nil {
-		t.Fatal(err)
-	}
-	if base.TLSClientConfig.MinVersion != tls.VersionTLS12 {
-		t.Fatal("the transport's own TLS settings must be kept")
-	}
-	res, err := (&http.Client{Transport: base.Clone()}).Get(link)
+	certs, _, err := loadTLS(agentDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	m := server.NewEmptyManager(nil, managerOptions(nil, nil, certs)...)
+	cfg := m.RestoreTLSConfig()
+	if cfg == nil || cfg.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("restore TLS configuration = %+v", cfg)
+	}
+	res, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}).Get(link)
+	if err != nil {
+		t.Fatalf("the gateway's certificate must verify: %v", err)
+	}
 	res.Body.Close()
-
-	if err := os.WriteFile(caFile, []byte("not a certificate"), 0o600); err != nil {
-		t.Fatal(err)
+	if res, err := (&http.Client{Transport: &http.Transport{}}).Get(link); err == nil {
+		res.Body.Close()
+		t.Fatal("the default configuration must not trust the internal CA")
 	}
-	if err := trustCABundle(&http.Transport{}, caFile); err == nil {
-		t.Fatal("a bundle without certificates must fail")
-	}
-	if err := trustCABundle(&http.Transport{}, filepath.Join(t.TempDir(), "missing")); err == nil {
-		t.Fatal("a missing bundle must fail")
+	if cfg := server.NewEmptyManager(nil, managerOptions(nil, nil, nil)...).RestoreTLSConfig(); cfg != nil {
+		t.Fatalf("without TLS the restore keeps Wings' default, got %+v", cfg)
 	}
 }
 

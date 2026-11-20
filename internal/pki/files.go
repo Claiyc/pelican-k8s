@@ -155,6 +155,22 @@ func (r *Roots) Pool() *x509.CertPool {
 	return r.pool
 }
 
+// WithSystemRoots returns a new pool of the system roots and the current
+// bundle (reloaded like Pool), for clients that reach both public hosts and
+// hosts the internal CA certifies. Without system roots it holds the bundle.
+func (r *Roots) WithSystemRoots() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	r.Pool() // reloads the bundle when due
+	r.mu.Lock()
+	b := r.pem
+	r.mu.Unlock()
+	pool.AppendCertsFromPEM(b)
+	return pool
+}
+
 // Dir is a mounted certificate directory: a key pair and the CA bundle.
 type Dir struct {
 	KeyPair *KeyPair

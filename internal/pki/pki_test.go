@@ -608,3 +608,46 @@ func TestIssuerSetCA(t *testing.T) {
 		t.Error("bad bundle: want error")
 	}
 }
+
+// WithSystemRoots follows the bundle on disk, so a client built from it per
+// connection trusts a CA that rotation adds, without a restart.
+func TestRootsWithSystemRoots(t *testing.T) {
+	first, _ := newCA(t)
+	next, _ := newCA(t)
+	path := filepath.Join(t.TempDir(), CAFile)
+	if err := os.WriteFile(path, first.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LoadRoots(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	r.now = func() time.Time { return now }
+	verifies := func(ca *CA) bool {
+		t.Helper()
+		certPEM, _, err := ca.Issue(GatewayName, []string{"gateway.example"}, Server, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := ParseCertificate(certPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = cert.Verify(x509.VerifyOptions{DNSName: "gateway.example", Roots: r.WithSystemRoots(), CurrentTime: now})
+		return err == nil
+	}
+	if !verifies(first) || verifies(next) {
+		t.Fatal("the pool must hold the bundle on disk, and only that")
+	}
+	if err := os.WriteFile(path, append(append([]byte{}, first.CertPEM...), next.CertPEM...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if verifies(next) {
+		t.Fatal("the bundle is reloaded at most every reloadEvery")
+	}
+	now = now.Add(reloadEvery)
+	if !verifies(next) || !verifies(first) {
+		t.Fatal("a reloaded bundle must be trusted")
+	}
+}

@@ -49,8 +49,8 @@ centrally (gateway). Kubernetes owns scheduling, storage, networking and restart
    capabilities dropped and the `RuntimeDefault` seccomp profile. Install Jobs run as root in the same
    namespace, so the namespace is labelled `baseline` and the shape of game and agent pods is enforced by
    `ValidatingAdmissionPolicy`s that match pods in the servers namespace by ServiceAccount (§12.2).
-5. **Wings as a dependency.** The agent imports Wings as a Go module; five opt-in hooks on a fork
-   branch plug in the shim, the Job installer and incoming transfers (§6.3).
+5. **Wings as a dependency.** The agent imports Wings as a Go module; six opt-in hooks on a fork
+   branch plug in the shim, the Job installer, incoming transfers and the restore download's trust (§6.3).
 
 **Not provided:** transfers away from the cluster (one gateway is one node; incoming transfers are
 supported, §8.10), Panel mounts, `force_outgoing_ip`,
@@ -486,7 +486,7 @@ Everything else the agent serves is Wings' router: power, commands, files, backu
 downloads and uploads, `deauthorize-user`, `ws/deny`, an incoming transfer (`POST /api/transfers`, §8.10),
 and the SFTP server on `:2022`.
 
-**Hooks.** The agent plugs into Wings through five opt-in hooks on the `pelican-k8s-hooks` branch of
+**Hooks.** The agent plugs into Wings through six opt-in hooks on the `pelican-k8s-hooks` branch of
 [Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`:
 
 | # | Hook | Used by the agent for |
@@ -496,6 +496,7 @@ and the SFTP server on `:2022`.
 | 3 | `server.Installer` interface, set with `server.WithInstaller`; Wings takes the install lock before calling it | `internal/agent/installer`, the Job-backed installer (§8.2) |
 | 4 | Package `boot` (`boot.InitializeDatabase`, `boot.Scheduler`) over Wings' `internal/database` and `internal/cron` | Activity database and cron scheduler |
 | 5 | `server.WithTransfersIntoExistingServers`: `POST /api/transfers` fills a server the manager already has instead of refusing it, if that server is offline, not busy and its data directory empty; the transfer holds the server's power lock (`Server.LockForIncomingTransfer`), and a failed one keeps the server and empties the directory again | Incoming transfers into the agent's server (§8.10) |
+| 6 | `server.WithRestoreTLSConfig` (`func() *tls.Config`): called for every restore that downloads its archive; a non-nil result replaces the TLS configuration the restore client takes from `http.DefaultTransport`, and the restore client's address checks still apply | With `tls.enabled`, trust in the gateway's certificate for a restore of another server's local backup (§8.7, §12.6) |
 
 **Configuration.** ConfigMap `pelican-agent-config` (`config.yml`, rendered from the chart's `agent.*`
 values, `agent.extra` merged in) plus the token Secret:
@@ -1365,8 +1366,8 @@ in-flight work.
   the Panel's always does for a new server) first saves the whole archive to the target agent's scratch
   volume and checks it, so that volume must hold the archive (§10.1). The agent adds the gateway's host to Wings'
   `restore_host_allowlist`, so an `s3`-adapter link to that private address is allowed, and with
-  `tls.enabled` its default HTTP transport, which Wings' restore client is built from, trusts the
-  internal CA bundle as read at agent start (§12.6). A backup in S3, or a local backup on a Docker
+  `tls.enabled` every restore download trusts the system roots and the internal CA bundle as it is on
+  disk then (hook 6, §6.3, §12.6). A backup in S3, or a local backup on a Docker
   Wings node, is downloaded from the Panel's link; a Wings node on a private network needs an
   `inClusterEgress.additional` entry or a narrower `blockedEgressCIDRs` (§12.4). Other nodes restore
   local backups of this cluster through the gateway's public `/download/backup`.
@@ -1810,11 +1811,9 @@ and the agent is SSH and needs none of it.
   every 30 s and switch to a renewed pair or bundle without a restart; Kubernetes updates mounted
   Secrets within about a minute. Clients take the bundle per connection, and the shim reads it on every
   connection.
-- **Restore downloads.** Wings builds its backup restore client from Go's default HTTP transport,
-  which the agent makes trust the system roots and the bundle as it reads it at start. That is the one
-  exception to per-connection bundles: an agent started before step 1 of a CA rotation cannot verify
-  the gateway's reissued certificate for a restore of another server's local backup (§8.7) until its
-  pod is replaced.
+- **Restore downloads.** Wings' backup restore client takes its TLS configuration from the agent for
+  every restore (hook 6, §6.3): the system roots and the current bundle, so a restore of another
+  server's local backup (§8.7) verifies the gateway through a CA rotation as every other client does.
 - **CA rotation.** With `tls.ca.rotation.enabled` (default `false`) the leader replaces the CA once it
   enters the last third of its lifetime (`tls.ca.lifetime`, ten years by default) in three steps, each
   recorded on the CA Secret (`pelican-k8s.io/ca-rotation`, `-since`) and each waiting

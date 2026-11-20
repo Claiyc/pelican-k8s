@@ -6,7 +6,6 @@ package app
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -124,9 +123,7 @@ func Run(ctx context.Context, o Options) error {
 	var manager *server.Manager
 	for attempt := 1; ; attempt++ {
 		var err error
-		manager, err = server.NewManager(ctx, inst.Client(client), server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst),
-			// The gateway creates the server before a Panel transfer pushes its files.
-			server.WithTransfersIntoExistingServers())
+		manager, err = server.NewManager(ctx, inst.Client(client), managerOptions(registry, inst, certs)...)
 		if err == nil {
 			break
 		}
@@ -202,17 +199,13 @@ func Run(ctx context.Context, o Options) error {
 type agentCerts struct{ dir *pki.Dir }
 
 // loadTLS loads the certificate directory, when one is set, and returns the
-// transport for calls to the gateway that trusts the internal CA. It also
-// makes http.DefaultTransport trust that CA (trustCABundle).
+// transport for calls to the gateway that trusts the internal CA.
 func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
 	if dir == "" {
 		return nil, nil, nil
 	}
 	d, err := pki.LoadDir(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tls: %w", err)
-	}
-	if err := trustCABundle(http.DefaultTransport.(*http.Transport), filepath.Join(dir, pki.CAFile)); err != nil {
 		return nil, nil, fmt.Errorf("tls: %w", err)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -234,32 +227,26 @@ func allowGatewayRestores(c *config.Configuration) {
 	c.System.Backups.RestoreHostAllowlist = append(c.System.Backups.RestoreHostAllowlist, u.Hostname())
 }
 
-// trustCABundle makes t trust the internal CA bundle as well as the system
-// roots. Wings builds its backup restore client from http.DefaultTransport, and
-// a restore of another server's local backup downloads it from the gateway's
-// remote API listener (ARCHITECTURE.md 8.7), whose certificate the internal CA
-// signs. The bundle is read once: the pool is in use before any request, and a
-// tls.Config cannot be swapped under a running transport.
-func trustCABundle(t *http.Transport, caFile string) error {
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
+// managerOptions are the Wings hooks the agent sets on its server manager.
+func managerOptions(registry *shimenv.Registry, inst *installer.Installer, certs *agentCerts) []server.ManagerOption {
+	opts := []server.ManagerOption{
+		server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst),
+		// The gateway creates the server before a Panel transfer pushes its files.
+		server.WithTransfersIntoExistingServers(),
 	}
-	b, err := os.ReadFile(filepath.Clean(caFile))
-	if err != nil {
-		return err
+	if certs != nil {
+		opts = append(opts, server.WithRestoreTLSConfig(certs.restoreTLSConfig))
 	}
-	if !pool.AppendCertsFromPEM(b) {
-		return fmt.Errorf("%s: no certificates", caFile)
-	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if t.TLSClientConfig != nil {
-		cfg = t.TLSClientConfig.Clone()
-		cfg.MinVersion = max(cfg.MinVersion, tls.VersionTLS12)
-	}
-	cfg.RootCAs = pool
-	t.TLSClientConfig = cfg
-	return nil
+	return opts
+}
+
+// restoreTLSConfig is the TLS configuration of a backup restore download
+// (server.WithRestoreTLSConfig): the system roots and the internal CA bundle
+// as it is on disk now. A restore of another server's local backup downloads
+// it from the gateway's remote API listener (ARCHITECTURE.md 8.7), whose
+// certificate the internal CA signs; the bundle follows a CA rotation.
+func (c *agentCerts) restoreTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: c.dir.Roots.WithSystemRoots()}
 }
 
 // shimConfig is the shim listener's TLS configuration: the agent's

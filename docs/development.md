@@ -50,7 +50,7 @@ created.
 
 ## Wings as a dependency
 
-The agent imports `github.com/pelican/wings`. Five opt-in hooks are needed
+The agent imports `github.com/pelican/wings`. Six opt-in hooks are needed
 (ARCHITECTURE.md 6.3) and live on the `pelican-k8s-hooks` branch of the
 [Claiyc/wings](https://github.com/Claiyc/wings) fork, pinned in `go.mod`:
 
@@ -59,6 +59,7 @@ The agent imports `github.com/pelican/wings`. Five opt-in hooks are needed
 3. `server.Installer` interface with the install lock held by `Server.Install`
 4. package `boot` exposing the activity database initialisation and the cron scheduler that live under `internal/`
 5. `server.WithTransfersIntoExistingServers`, so an incoming transfer fills the agent's (empty, offline) server under its power lock instead of being refused
+6. `server.WithRestoreTLSConfig`, the TLS configuration of each backup restore download, so the agent's trust in the gateway follows the internal CA bundle
 
 Bumping Wings: bring `pelican-k8s-hooks` up to date with upstream, push, point
 the `replace` line at the new tip
