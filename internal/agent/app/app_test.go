@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelican/wings/config"
+
 	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
@@ -356,5 +358,74 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	if res, err := kubelet.Get(base + "/internal/v1/healthz"); err == nil {
 		res.Body.Close()
 		t.Fatal("the HTTP server is still serving")
+	}
+}
+
+// trustCABundle lets a client cloned from the transport, as Wings' restore
+// client is, verify a server the internal CA signed, and keeps the system
+// roots.
+func TestTrustCABundle(t *testing.T) {
+	ca, _, err := pki.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, keyPEM, err := ca.Issue("pelican-gateway", []string{"localhost"}, pki.Server, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	link := "https://localhost:" + strings.TrimPrefix(srv.URL, "https://127.0.0.1:")
+
+	base := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+	if res, err := (&http.Client{Transport: base.Clone()}).Get(link); err == nil {
+		res.Body.Close()
+		t.Fatal("the server must not be trusted before the bundle is added")
+	}
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, ca.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := trustCABundle(base, caFile); err != nil {
+		t.Fatal(err)
+	}
+	if base.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatal("the transport's own TLS settings must be kept")
+	}
+	res, err := (&http.Client{Transport: base.Clone()}).Get(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+
+	if err := os.WriteFile(caFile, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := trustCABundle(&http.Transport{}, caFile); err == nil {
+		t.Fatal("a bundle without certificates must fail")
+	}
+	if err := trustCABundle(&http.Transport{}, filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("a missing bundle must fail")
+	}
+}
+
+func TestAllowGatewayRestores(t *testing.T) {
+	c := &config.Configuration{PanelLocation: "https://pelican-gateway.pelican-system.svc:8081"}
+	c.System.Backups.RestoreHostAllowlist = []string{"backups.example"}
+	allowGatewayRestores(c)
+	allowGatewayRestores(c)
+	if got := c.System.Backups.RestoreHostAllowlist; len(got) != 2 || got[1] != "pelican-gateway.pelican-system.svc" {
+		t.Fatalf("allowlist = %v", got)
+	}
+	empty := &config.Configuration{}
+	allowGatewayRestores(empty)
+	if len(empty.System.Backups.RestoreHostAllowlist) != 0 {
+		t.Fatalf("allowlist = %v", empty.System.Backups.RestoreHostAllowlist)
 	}
 }

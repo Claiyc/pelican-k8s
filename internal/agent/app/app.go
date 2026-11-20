@@ -6,13 +6,16 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -70,6 +73,7 @@ func Run(ctx context.Context, o Options) error {
 		c.System.User.Rootless.Enabled = true
 		c.System.User.Rootless.ContainerUID = os.Getuid()
 		c.System.User.Rootless.ContainerGID = os.Getgid()
+		allowGatewayRestores(c)
 	})
 	cfg := config.Get()
 	if cfg.Token.ID == "" || cfg.Token.Token == "" {
@@ -91,6 +95,11 @@ func Run(ctx context.Context, o Options) error {
 	certs, gatewayTransport, err := loadTLS(o.TLSDir)
 	if err != nil {
 		return err
+	}
+	if o.TLSDir != "" {
+		if err := trustCABundle(http.DefaultTransport.(*http.Transport), filepath.Join(o.TLSDir, pki.CAFile)); err != nil {
+			return fmt.Errorf("tls: %w", err)
+		}
 	}
 	client := remote.New(cfg.PanelLocation,
 		remote.WithCredentials(cfg.Token.ID, cfg.Token.Token),
@@ -210,6 +219,47 @@ func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialTLSContext = pki.TLSDialer(t.DialContext, d.ClientConfig)
 	return &agentCerts{dir: d}, t, nil
+}
+
+// allowGatewayRestores adds the gateway's host to Wings' restore allowlist.
+// A restore of a local backup that is not on this agent downloads it from the
+// gateway's remote API listener (ARCHITECTURE.md 8.7), at a cluster-internal
+// address. Wings allows private addresses for links to local backups, but not
+// for the s3 adapter, which the Panel uses when that backup is already being
+// restored elsewhere.
+func allowGatewayRestores(c *config.Configuration) {
+	u, err := url.Parse(c.PanelLocation)
+	if err != nil || u.Hostname() == "" || slices.Contains(c.System.Backups.RestoreHostAllowlist, u.Hostname()) {
+		return
+	}
+	c.System.Backups.RestoreHostAllowlist = append(c.System.Backups.RestoreHostAllowlist, u.Hostname())
+}
+
+// trustCABundle makes t trust the internal CA bundle as well as the system
+// roots. Wings builds its backup restore client from http.DefaultTransport, and
+// a restore of another server's local backup downloads it from the gateway's
+// remote API listener (ARCHITECTURE.md 8.7), whose certificate the internal CA
+// signs. The bundle is read once: the pool is in use before any request, and a
+// tls.Config cannot be swapped under a running transport.
+func trustCABundle(t *http.Transport, caFile string) error {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	b, err := os.ReadFile(filepath.Clean(caFile))
+	if err != nil {
+		return err
+	}
+	if !pool.AppendCertsFromPEM(b) {
+		return fmt.Errorf("%s: no certificates", caFile)
+	}
+	cfg := &tls.Config{}
+	if t.TLSClientConfig != nil {
+		cfg = t.TLSClientConfig.Clone()
+	}
+	cfg.RootCAs = pool
+	t.TLSClientConfig = cfg
+	return nil
 }
 
 // shimConfig is the shim listener's TLS configuration: the agent's

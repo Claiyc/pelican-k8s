@@ -107,6 +107,7 @@ var gatewayRoutes = map[route]string{
 	{"GET", "/api/system/ips"}: "systemIPs", {"GET", "/api/system/utilization"}: "utilization",
 	{"GET", "/api/servers"}: "listServers", {"POST", "/api/servers"}: "createServer",
 	{"DELETE", "/api/transfers/:server"}: "unsupported", {"POST", "/api/deauthorize-user"}: "deauthorize",
+	{"DELETE", "/api/backups/:server/:backup"}: "deleteKeptBackup",
 	{"GET", "/api/servers/:server"}: "getServer", {"DELETE", "/api/servers/:server"}: "deleteServer",
 	{"POST", "/api/servers/:server/sync"}: "syncServer", {"POST", "/api/servers/:server/install"}: "install",
 	{"POST", "/api/servers/:server/reinstall"}: "install", {"POST", "/api/servers/:server/power"}: "power",

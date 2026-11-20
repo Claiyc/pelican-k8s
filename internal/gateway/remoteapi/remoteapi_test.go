@@ -212,6 +212,53 @@ func TestAuthRejectsUnknownAgents(t *testing.T) {
 	}
 }
 
+// GET /download/backup carries its own token and needs no agent token; the
+// rest of the remote API still does.
+func TestBackupDownloadNeedsNoAgentToken(t *testing.T) {
+	f := newFixture(t, options{})
+	f.withServer(false)
+	f.h.BackupDownload = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("backup " + r.URL.Query().Get("token")))
+	})
+	srv := httptest.NewServer(f.h.Routes())
+	t.Cleanup(srv.Close)
+	get := func(path, token string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(b)
+	}
+	if code, body := get("/download/backup?token=jwt", ""); code != 200 || body != "backup jwt" {
+		t.Fatalf("%d %s", code, body)
+	}
+	if code, _ := get("/api/remote/servers", ""); code != 403 {
+		t.Fatalf("the remote API without an agent token: %d", code)
+	}
+	if code, _ := get("/api/remote/servers", bearer); code != 200 {
+		t.Fatalf("the remote API with the agent token: %d", code)
+	}
+	// Without a handler the path is an unknown remote API call.
+	f.h.BackupDownload = nil
+	plain := httptest.NewServer(f.h.Routes())
+	t.Cleanup(plain.Close)
+	res, err := http.Get(plain.URL + "/download/backup?token=jwt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 403 {
+		t.Fatalf("code = %d", res.StatusCode)
+	}
+}
+
 func TestUnmatchedRoute(t *testing.T) {
 	f := newFixture(t, options{})
 	f.withServer(false)

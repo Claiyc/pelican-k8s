@@ -108,7 +108,7 @@ func New(ctx context.Context, cfg *config.Config, rc *rest.Config, logger *slog.
 		}
 	}
 	g.PanelAPI.WS = &wsproxy.Proxy{Cfg: cfg, Store: st, Agents: res, Sync: sync, Log: logger.With("component", "wsproxy"), OriginForAgent: cfg.RemoteURL}
-	g.Remote = &remoteapi.Handler{Store: st, Panel: p, Sync: sync, Agents: res, Sftp: sessions, Log: logger.With("component", "remoteapi")}
+	g.Remote = &remoteapi.Handler{Store: st, Panel: p, Sync: sync, Agents: res, Sftp: sessions, Log: logger.With("component", "remoteapi"), BackupDownload: g.PanelAPI.BackupDownload()}
 	g.Relay = &sftprelay.Relay{Listen: cfg.ListenSFTP, Panel: p, Store: st, Agents: res, Sessions: sessions, KeyOnly: cfg.SFTPKeyOnly, Log: logger.With("component", "sftp")}
 	return g, nil
 }

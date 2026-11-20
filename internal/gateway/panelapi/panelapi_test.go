@@ -741,6 +741,143 @@ func TestBackupProxyDropsRefusedAndEndedBackups(t *testing.T) {
 	}
 }
 
+// A restore of another server's local backup gets a link to the backup on the
+// source server's agent, through the gateway's remote API listener; any other
+// restore reaches the agent as the Panel sent it.
+func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
+	f := newFixture(t)
+	f.h.Cfg.RemoteURL = "https://gw.example.svc:8081"
+	f.create()
+	f.addPod()
+	source := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Name: names.ForUUID(otherUUID), Namespace: ns}}
+	if err := f.c.Create(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	const backup = "5b1d2c3e-0000-4000-8000-000000000001"
+	restore := func(body string) map[string]any {
+		t.Helper()
+		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+backup+"/restore", body); code != 200 {
+			t.Fatalf("restore code = %d", code)
+		}
+		return decodeMap(t, f.calls()[len(f.calls())-1].body)
+	}
+
+	got := restore(`{"adapter":"wings","truncate_directory":true,"source_server":"` + otherUUID + `"}`)
+	if got["source_server"] != otherUUID || got["truncate_directory"] != true || got["adapter"] != "wings" {
+		t.Fatalf("the Panel's fields must reach the agent: %v", got)
+	}
+	link, _ := got["download_url"].(string)
+	prefix := "https://gw.example.svc:8081/download/backup?token="
+	if !strings.HasPrefix(link, prefix) {
+		t.Fatalf("download_url = %q", link)
+	}
+	claims, _, err := jwtx.Verify([]byte(strings.TrimPrefix(link, prefix)), []byte(nodeToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ServerUUID != otherUUID || claims.Scope != "backup-download" || claims.UserUUID != "" ||
+		claims.ExpirationTime == nil || time.Until(claims.ExpirationTime.Time) > sourceBackupTTL {
+		t.Fatalf("claims = %+v", claims)
+	}
+
+	// A link to this node's own backup download (the Panel's restore link when
+	// the backup is already being restored) goes to the remote API listener,
+	// with the Panel's token.
+	own := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		"jti": "j", "server_uuid": otherUUID, "backup_uuid": backup, "unique_id": "u", "scope": "backup-download"})
+	got = restore(`{"adapter":"s3","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=` + own + `"}`)
+	if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+own || got["adapter"] != "s3" {
+		t.Fatalf("own link: %v", got)
+	}
+
+	// Left alone: the server's own backup, an S3 backup, another node's links
+	// (signed with another key, or not a backup download) and a source server
+	// this gateway does not have.
+	other := signToken(t, "another-node", map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "server_uuid": otherUUID, "scope": "backup-download"})
+	fileTok := signToken(t, nodeToken, fileClaims("file-download", time.Now().Add(time.Hour)))
+	for _, body := range []string{
+		`{"adapter":"wings","download_url":"https://node-2.example:8080/download/backup?token=` + other + `","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"s3","download_url":"https://node.example:8443/download/file?token=` + fileTok + `"}`,
+		`{"adapter":"s3","download_url":"https://node.example:8443/download/backup?token=` + fileTok + `"}`,
+		`{"adapter":"wings","truncate_directory":false}`,
+		`{"adapter":"wings","source_server":"` + uuid + `"}`,
+		`{"adapter":"s3","download_url":"https://s3.example/b","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"wings","download_url":"https://node-2.example:8080/download/backup?token=x","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"wings","source_server":"7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"}`,
+		`not json`,
+	} {
+		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+backup+"/restore", body); code != 200 {
+			t.Fatalf("%s: restore code = %d", body, code)
+		}
+		if last := f.calls()[len(f.calls())-1]; last.body != body {
+			t.Fatalf("agent got %q, want %q", last.body, body)
+		}
+	}
+}
+
+// BackupDownload is the Panel-facing backup download: the token is verified
+// with the node token and re-signed for the agent of its server.
+func TestBackupDownloadForAgents(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	claims := map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(), "jti": "j",
+		"server_uuid": uuid, "backup_uuid": "b", "unique_id": "u", "scope": "backup-download"}
+	srv := httptest.NewServer(f.h.BackupDownload())
+	t.Cleanup(srv.Close)
+	res, err := http.Get(srv.URL + "/download/backup?token=" + signToken(t, nodeToken, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("code = %d", res.StatusCode)
+	}
+	last := f.calls()[len(f.calls())-1]
+	tok := strings.TrimPrefix(last.uri, "/download/backup?token=")
+	if _, _, err := jwtx.Verify([]byte(tok), []byte(agentTok)); err != nil {
+		t.Fatalf("the agent must get the token re-signed with its own token: %v (%s)", err, last.uri)
+	}
+	res, err = http.Get(srv.URL + "/download/backup?token=" + signToken(t, agentTok, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a token not signed with the node token: code = %d", res.StatusCode)
+	}
+	// A server this node does not have (a backup kept after its server was
+	// deleted) answers 404 at once instead of waiting for an agent.
+	claims["server_uuid"] = otherUUID
+	start := time.Now()
+	res, err = http.Get(srv.URL + "/download/backup?token=" + signToken(t, nodeToken, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound || time.Since(start) > time.Second {
+		t.Fatalf("unknown server: code = %d after %s", res.StatusCode, time.Since(start))
+	}
+}
+
+func TestDeleteKeptBackup(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	const backup = "5b1d2c3e-0000-4000-8000-000000000001"
+	if code, body := f.node("DELETE", "/api/backups/"+uuid+"/"+backup, ""); code != 200 || body != "agent says /api/backups/"+uuid+"/"+backup {
+		t.Fatalf("a server this node has: %d %s", code, body)
+	}
+	before := len(f.calls())
+	code, body := f.node("DELETE", "/api/backups/"+otherUUID+"/"+backup, "")
+	if code != http.StatusNotFound || !strings.Contains(body, "not found on this node") || len(f.calls()) != before {
+		t.Fatalf("a deleted server: %d %s", code, body)
+	}
+	if code, _, _ := f.do("DELETE", "/api/backups/"+uuid+"/"+backup, "", ""); code != http.StatusUnauthorized {
+		t.Fatalf("without the node token: %d", code)
+	}
+}
+
 func signToken(t *testing.T, key string, claims map[string]any) string {
 	t.Helper()
 	tok, err := jwt.Sign(claims, jwt.NewHS256([]byte(key)))
