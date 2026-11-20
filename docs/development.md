@@ -101,7 +101,7 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | What | How | Where to look |
 |---|---|---|
 | Go modules, GitHub Actions, base images | Dependabot daily PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
-| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
+| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it, opens an issue when the latest Wings release is not merged into the pinned commit and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
 | Pelican Panel | The same workflow runs `hack/check-panel-contract.sh` against the latest Panel image (diffing it with `docs/wings-panel-contract.md`), compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
