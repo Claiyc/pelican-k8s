@@ -265,8 +265,10 @@ jobs:
           python3 -I - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
           import json
 
-          issues = json.load(open("sonar-issues.json"))["issues"]
-          print(f"## SonarQube Cloud: {len(issues)} open issues on this pull request")
+          data = json.load(open("sonar-issues.json"))
+          issues, total = data["issues"], data.get("total", len(data["issues"]))
+          shown = f"{total}" if total == len(issues) else f"{total} (the first {len(issues)} listed)"
+          print(f"## SonarQube Cloud: {shown} open issues on this pull request")
           for i in issues:
               path = i["component"].split(":", 1)[-1]
               print(f"- `{path}:{i.get('line', '')}` {i['severity']} {i['type']} `{i['rule']}`: {i['message']}")

@@ -61,11 +61,13 @@ jobs:
           # ancestor of that commit (the branch merges upstream tags).
           latest=$(gh api repos/pelican/wings/releases/latest --jq .tag_name)
           pin=$(awk '$1 == "replace" && $2 == "github.com/pelican/wings" {print $NF}' go.mod)
+          # The pin is fetched by its full hash, so the check also works when the
+          # branch no longer contains it.
+          commit=$(gh api "repos/Claiyc/wings/commits/${pin##*-}" --jq .sha)
           git init -q "$RUNNER_TEMP/wings"
           cd "$RUNNER_TEMP/wings"
-          git fetch -q --filter=blob:none https://github.com/Claiyc/wings pelican-k8s-hooks
+          git fetch -q --filter=blob:none https://github.com/Claiyc/wings "$commit"
           git fetch -q --filter=blob:none https://github.com/pelican/wings "refs/tags/$latest:refs/tags/$latest"
-          commit=$(git rev-parse --verify "${pin##*-}^{commit}")
           echo "pinned Wings $pin, latest Wings release=$latest" | tee -a "$GITHUB_STEP_SUMMARY"
           git merge-base --is-ancestor "refs/tags/$latest" "$commit" || { echo "::warning::the pinned Wings ($pin) does not contain Wings $latest"; echo "WINGS_BEHIND=$latest" >> "$GITHUB_ENV"; }
       - name: Open the tracking issue

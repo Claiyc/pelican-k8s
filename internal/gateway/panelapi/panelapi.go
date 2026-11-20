@@ -519,13 +519,29 @@ func (h *Handler) deauthorize(w http.ResponseWriter, r *http.Request) {
 // from DELETE /api/servers/:s/backup/:b. A server this node has is asked
 // through its agent. Without the server there is no backup: local backups live
 // on the agent's scratch volume and go with it (ARCHITECTURE.md 8.7), so the
-// answer is Wings' 404, which the Panel accepts.
+// answer is Wings' 404, which the Panel accepts. Identifiers that are not
+// canonical UUIDs are a 400, as in Wings.
 func (h *Handler) deleteKeptBackup(w http.ResponseWriter, r *http.Request) {
+	if !canonicalUUID(r.PathValue("server")) {
+		writeError(w, http.StatusBadRequest, "The server identifier must be a valid UUID.")
+		return
+	}
+	if !canonicalUUID(r.PathValue("backup")) {
+		writeError(w, http.StatusBadRequest, "The backup identifier must be a valid UUID.")
+		return
+	}
 	if !h.Store.Exists(r.Context(), r.PathValue("server")) {
 		writeError(w, http.StatusNotFound, "The requested backup was not found on this node.")
 		return
 	}
 	h.proxy(w, r)
+}
+
+// canonicalUUID reports whether value is a UUID in its canonical lowercase
+// form, which is how Wings accepts identifiers it uses in paths.
+func canonicalUUID(value string) bool {
+	parsed, err := googleuuid.Parse(value)
+	return err == nil && value == parsed.String()
 }
 
 // proxy forwards a server-scoped request to its agent.
@@ -680,9 +696,11 @@ func (h *Handler) sourceBackupToken(server, backup string) string {
 // BackupDownload serves backup downloads to agents on the remote API
 // listener, for restores of another server's local backup (linkSourceBackup).
 // It is the Panel-facing GET /download/backup: the token is verified with the
-// node token and re-signed for the agent of its server_uuid.
-func (h *Handler) BackupDownload() http.HandlerFunc {
-	return h.signedProxy(backupDownloadScope)
+// node token and re-signed for the agent of its server_uuid. Like every
+// gateway response it carries the Wings User-Agent, and a panic is answered
+// with a 500.
+func (h *Handler) BackupDownload() http.Handler {
+	return h.wrap(h.signedProxy(backupDownloadScope))
 }
 
 // readBackupBody reads the body of a backup or restore request, puts it back

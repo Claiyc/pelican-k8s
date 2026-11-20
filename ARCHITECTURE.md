@@ -215,7 +215,7 @@ not intercept is forwarded to the agent unchanged. Every `/api/servers/:s*` rout
 | `GET /api/system/utilization` | Totals are the summed node allocatable memory and ephemeral storage; usage is the sum of the servers' `status.usage` |
 | `GET /api/servers` | List from CRs plus the state cache |
 | `POST /api/servers` | Server create flow (§8.1); spec only. For an existing CR: sync plus a new install generation (not a reinstall) |
-| `DELETE /api/backups/:s/:b` | A backup kept after its server was deleted (§8.7): proxied to the agent while the server exists, `404` otherwise |
+| `DELETE /api/backups/:s/:b` | A backup kept after its server was deleted (§8.7): proxied to the agent while the server exists, `404` otherwise; `400` when either identifier is not a canonical UUID |
 | `POST /api/deauthorize-user` | Forward `{user, servers: [uuid]}` to the agent of each listed server, or of every server when `servers` is empty; a server whose agent is not available is skipped (§5.3). Wings in each agent denylists the user, closes every websocket of the server (of all users) and closes that user's SFTP sessions |
 | `POST /api/transfers` | Incoming transfer (§8.10): a JWT in `Authorization: Bearer`, verified with the node token (`401` without it; `403` for a bad signature, an expired token, a scope other than `transfer` or a `sub` that is not a UUID). The server is created from the Panel without an install (`404` when the Panel does not know it, `409` when it exists here unmarked or an earlier attempt is still being removed), and the request is re-signed for its agent and proxied (`503` when the agent is not up within 3 minutes) |
 | `DELETE /api/transfers/:s`, `POST`/`DELETE /api/servers/:s/transfer` | `501` |

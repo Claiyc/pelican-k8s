@@ -847,8 +847,8 @@ func TestBackupDownloadForAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != 200 {
-		t.Fatalf("code = %d", res.StatusCode)
+	if res.StatusCode != 200 || res.Header.Get("User-Agent") != "Pelican Wings/v1.2.3 (id:nodeid)" {
+		t.Fatalf("code = %d, User-Agent = %q", res.StatusCode, res.Header.Get("User-Agent"))
 	}
 	last := f.calls()[len(f.calls())-1]
 	tok := strings.TrimPrefix(last.uri, "/download/backup?token=")
@@ -892,6 +892,16 @@ func TestDeleteKeptBackup(t *testing.T) {
 	}
 	if code, _, _ := f.do("DELETE", "/api/backups/"+uuid+"/"+backup, "", ""); code != http.StatusUnauthorized {
 		t.Fatalf("without the node token: %d", code)
+	}
+	// Identifiers that are not canonical UUIDs are refused, as Wings does.
+	before = len(f.calls())
+	for _, path := range []string{"not-a-uuid/" + backup, uuid + "/not-a-uuid", strings.ToUpper(uuid) + "/" + backup} {
+		if code, body := f.node("DELETE", "/api/backups/"+path, ""); code != http.StatusBadRequest || !strings.Contains(body, "valid UUID") {
+			t.Fatalf("%s: %d %s", path, code, body)
+		}
+	}
+	if len(f.calls()) != before {
+		t.Fatal("an invalid identifier must not reach the agent")
 	}
 }
 
