@@ -80,7 +80,7 @@ func newFixture(t *testing.T, argv []string, stop remote.ProcessStopConfiguratio
 	})
 	pc := &remote.ProcessConfiguration{}
 	pc.Stop = stop
-	s, err := m.InitServer(remote.ServerConfigurationResponse{Settings: settings, ProcessConfiguration: pc})
+	s, err := m.InitServer(serverID, remote.ServerConfigurationResponse{Settings: settings, ProcessConfiguration: pc})
 	if err != nil {
 		t.Fatal(err)
 	}

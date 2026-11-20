@@ -43,6 +43,11 @@ type Handler struct {
 	Agents *agents.Resolver
 	Sftp   SftpSessions
 	Log    *slog.Logger
+	// BackupDownload serves GET /download/backup without the agent token: the
+	// link a restore of another server's local backup downloads from, which
+	// carries its own JWT (panelapi.Handler.BackupDownload). When nil, the path
+	// is an ordinary remote API path and needs the agent token.
+	BackupDownload http.Handler
 	// Metrics counters (optional).
 	OnUnmatched func(method, path string)
 
@@ -82,7 +87,14 @@ func (h *Handler) Routes() http.Handler {
 		h.Log.Warn("unmatched remote api call from agent", "method", r.Method, "path", r.URL.Path)
 		writeErr(w, http.StatusNotFound, "NotFoundHttpException", "The requested resource does not exist.")
 	})
-	return h.auth(mux)
+	outer := http.NewServeMux()
+	outer.Handle("/", h.auth(mux))
+	if h.BackupDownload != nil {
+		// Wings downloads a backup link without credentials of its own; the
+		// token in the query is the authorization.
+		outer.Handle("GET /download/backup", h.BackupDownload)
+	}
+	return outer
 }
 
 // auth maps the agent token to its server and stores the UUID in the context.

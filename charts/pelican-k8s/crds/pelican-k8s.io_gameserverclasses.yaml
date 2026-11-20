@@ -237,7 +237,7 @@ spec:
                     type: string
                   strictExitCode:
                     description: StrictExitCode makes a non-zero script exit code
-                      fail the install (Wings ignores it).
+                      fail the install, as in Wings.
                     type: boolean
                 type: object
               network:

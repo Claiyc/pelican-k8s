@@ -49,8 +49,7 @@ jobs:
         run: go test -count=1 ./test/upstream/
       - name: Known vulnerabilities in dependencies (govulncheck)
         # Fails on any reachable vulnerability that has a fixed version. Findings
-        # without a fix (e.g. in docker/docker, linked through Wings but never
-        # executed by the agent) are reported in the step summary only.
+        # without a fix are reported in the step summary only.
         run: |
           set +e
           go run golang.org/x/vuln/cmd/govulncheck@latest ./... > govulncheck.txt 2>&1
@@ -252,6 +251,28 @@ jobs:
           args: >
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
+      # The pull request's open issues, also when the gate passed, so they can
+      # be read from the job without access to SonarQube Cloud.
+      - name: SonarQube Cloud issues of this pull request
+        if: ${{ !cancelled() && steps.sonar.outputs.enabled == 'true' && github.event_name == 'pull_request' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          curl -sSf -u "$SONAR_TOKEN:" -o sonar-issues.json \
+            "https://sonarcloud.io/api/issues/search?componentKeys=Claiyc_pelican-k8s&pullRequest=$PR&resolved=false&ps=100" \
+            || { echo "::warning::could not read the SonarQube Cloud issues"; exit 0; }
+          python3 -I - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+
+          data = json.load(open("sonar-issues.json"))
+          issues, total = data["issues"], data.get("total", len(data["issues"]))
+          shown = f"{total}" if total == len(issues) else f"{total} (the first {len(issues)} listed)"
+          print(f"## SonarQube Cloud: {shown} open issues on this pull request")
+          for i in issues:
+              path = i["component"].split(":", 1)[-1]
+              print(f"- `{path}:{i.get('line', '')}` {i['severity']} {i['type']} `{i['rule']}`: {i['message']}")
+          PY
 
   helm:
     name: Helm charts

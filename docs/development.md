@@ -50,7 +50,7 @@ created.
 
 ## Wings as a dependency
 
-The agent imports `github.com/pelican/wings`. Five opt-in hooks are needed
+The agent imports `github.com/pelican/wings`. Six opt-in hooks are needed
 (ARCHITECTURE.md 6.3) and live on the `pelican-k8s-hooks` branch of the
 [Claiyc/wings](https://github.com/Claiyc/wings) fork, pinned in `go.mod`:
 
@@ -59,6 +59,7 @@ The agent imports `github.com/pelican/wings`. Five opt-in hooks are needed
 3. `server.Installer` interface with the install lock held by `Server.Install`
 4. package `boot` exposing the activity database initialisation and the cron scheduler that live under `internal/`
 5. `server.WithTransfersIntoExistingServers`, so an incoming transfer fills the agent's (empty, offline) server under its power lock instead of being refused
+6. `server.WithRestoreTLSConfig`, the TLS configuration of each backup restore download, so the agent's trust in the gateway follows the internal CA bundle
 
 Bumping Wings: bring `pelican-k8s-hooks` up to date with upstream, push, point
 the `replace` line at the new tip
@@ -101,13 +102,13 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | What | How | Where to look |
 |---|---|---|
 | Go modules, GitHub Actions, base images | Dependabot daily PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
-| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
+| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it, opens an issue when the latest Wings release is not merged into the pinned commit and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
 | Pelican Panel | The same workflow runs `hack/check-panel-contract.sh` against the latest Panel image (diffing it with `docs/wings-panel-contract.md`), compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go, the `security-and-quality` suite) on pushes, PRs and weekly. golangci-lint in CI in two stages (`make lint`): the whole tree must pass the linters in the Makefile's `LINT_GATE`, and code changed since the base branch must pass every linter in `.golangci.yml`. Every finding of every linter on the existing code is uploaded as SARIF and fails nothing (`make lint-all` lists the same locally) | Security → Code scanning, CI job *golangci-lint* |
 | Test coverage | The unit tests and the spike (the agent in-process) each write a coverage profile; the CI job *Coverage and quality reports* uploads both to Codecov, which comments on pull requests with the coverage of the changed lines (target 70 %, reported and not enforced, `codecov.yml`). The kind suites run the images and are not counted | Codecov, coverage badge |
-| Maintainability, duplication, complexity, security | SonarQube Cloud, analysed from the same CI job with both coverage profiles and every golangci-lint finding, which it lists next to its own issues (`sonar-project.properties`). The job waits for the quality gate and fails with it, and it is a required check, so a failed gate blocks the merge; pull requests from forks and Dependabot run without the token, skip the analysis and pass | SonarQube Cloud, quality gate badge, CI job *Coverage and quality reports* |
+| Maintainability, duplication, complexity, security | SonarQube Cloud, analysed from the same CI job with both coverage profiles and every golangci-lint finding, which it lists next to its own issues (`sonar-project.properties`). The job waits for the quality gate and fails with it, lists the pull request's open issues in its summary, and it is a required check, so a failed gate blocks the merge; pull requests from forks and Dependabot run without the token, skip the analysis and pass | SonarQube Cloud, quality gate badge, CI job *Coverage and quality reports* |
 | Review | CodeRabbit reviews pull requests as an advisory reader (`.coderabbit.yaml`); it skips Dependabot and release PRs and blocks nothing | Pull request comments |
 | Untrusted-input parsers | Native Go fuzzing of the shim protocol, the output ring buffer and the gateway's JWT verification | CI job *Fuzz* |
 | Build inputs | Every GitHub Action is pinned to a commit SHA and every base image to a digest (the trailing comment carries the human-readable version); Dependabot bumps both. `test/supplychain` fails the build if a pin or a least-privilege token scope regresses | `.github/workflows/`, `build/*.Dockerfile` |
@@ -127,18 +128,14 @@ required check that never reports would block the pull request.
 
 ### Standing Scorecard findings
 
-**Vulnerabilities.** These advisories have no fixed version, and their
-vulnerable code is not linked; `test/supplychain` asserts that.
+**Vulnerabilities.** This advisory has no fixed version, and its vulnerable
+code is not linked; `test/supplychain` asserts that.
 
 | Advisory | Module | Where the vulnerable code lives |
 |---|---|---|
-| GO-2026-4883, GO-2026-4887 | `github.com/docker/docker` | plugin privilege validation and AuthZ plugin handling, daemon-side |
-| GO-2026-5617, GO-2026-5668, GO-2026-5746 | `github.com/docker/docker` | `docker/docker/daemon` (`docker cp`, `PUT /containers/{id}/archive`) |
 | GO-2026-5932 | `golang.org/x/crypto` | `x/crypto/openpgp`, unmaintained upstream and unsafe by design |
 
-`github.com/docker/docker` enters through `internal/agent/installer` →
-`wings/system` → `docker/docker/api/types`; `docker/docker/daemon` is not
-linked. `x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
+`x/crypto/openpgp` is not in the build graph. `govulncheck` finds no
 vulnerability reachable from this code.
 
 **Other checks** need settings outside the tree: *Code-Review* counts

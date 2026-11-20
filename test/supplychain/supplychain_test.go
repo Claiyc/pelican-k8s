@@ -218,14 +218,9 @@ func TestWorkflowTokensAreLeastPrivilege(t *testing.T) {
 // reports the advisories against the whole module, so the only thing that can
 // regress here is a new import pulling the vulnerable code into the build.
 //
-//	GO-2026-4883, GO-2026-4887, GO-2026-5617, GO-2026-5668, GO-2026-5746
-//	   docker/docker, daemon-side; reachable only by something running the
-//	   Docker daemon. The agent links api/types (through Wings) for struct
-//	   definitions and never the daemon.
 //	GO-2026-5932
 //	   x/crypto/openpgp, unmaintained by upstream and unsafe by design.
 var unlinkedVulnerablePackages = []string{
-	"github.com/docker/docker/daemon",
 	"golang.org/x/crypto/openpgp",
 }
 
@@ -248,7 +243,7 @@ func TestVulnerablePackagesAreNotLinked(t *testing.T) {
 		linked[strings.TrimSpace(p)] = true
 	}
 	// Guard against the query silently returning nothing.
-	if !linked["github.com/docker/docker/api/types"] {
+	if !linked["github.com/moby/moby/api/types/container"] {
 		t.Fatal("go list -deps returned an unexpected graph; the check is not meaningful")
 	}
 	for _, pkg := range unlinkedVulnerablePackages {

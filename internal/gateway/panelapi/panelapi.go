@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -59,9 +60,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version})
 	})
-	mux.HandleFunc("GET /download/backup", h.signedProxy("backup-download"))
-	mux.HandleFunc("GET /download/file", h.signedProxy("file-download"))
-	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload"))
+	mux.HandleFunc("GET "+backupDownloadPath, h.signedProxy(backupDownloadScope, false))
+	mux.HandleFunc("GET /download/file", h.signedProxy("file-download", false))
+	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload", false))
 	mux.HandleFunc("GET /api/servers/{server}/ws", h.websocket)
 	mux.HandleFunc("POST /api/transfers", h.transfers)
 
@@ -78,6 +79,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/servers", auth(h.listServers))
 	mux.HandleFunc("POST /api/servers", auth(h.createServer))
 	mux.HandleFunc("DELETE /api/transfers/{server}", auth(h.unsupported))
+	mux.HandleFunc("DELETE /api/backups/{server}/{backup}", auth(h.deleteKeptBackup))
 	mux.HandleFunc("POST /api/deauthorize-user", auth(h.deauthorize))
 
 	mux.HandleFunc("GET /api/servers/{server}", auth(h.serverExists(h.getServer)))
@@ -512,6 +514,36 @@ func (h *Handler) deauthorize(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// deleteKeptBackup deletes a local backup by its server's UUID, which the
+// Panel sends for a backup kept after its server was deleted, and after a 404
+// from DELETE /api/servers/:s/backup/:b. A server this node has is asked
+// through its agent. Without the server there is no backup: local backups live
+// on the agent's scratch volume and go with it (ARCHITECTURE.md 8.7), so the
+// answer is Wings' 404, which the Panel accepts. Identifiers that are not
+// canonical UUIDs are a 400, as in Wings.
+func (h *Handler) deleteKeptBackup(w http.ResponseWriter, r *http.Request) {
+	if !canonicalUUID(r.PathValue("server")) {
+		writeError(w, http.StatusBadRequest, "The server identifier must be a valid UUID.")
+		return
+	}
+	if !canonicalUUID(r.PathValue("backup")) {
+		writeError(w, http.StatusBadRequest, "The backup identifier must be a valid UUID.")
+		return
+	}
+	if !h.Store.Exists(r.Context(), r.PathValue("server")) {
+		writeError(w, http.StatusNotFound, "The requested backup was not found on this node.")
+		return
+	}
+	h.proxy(w, r)
+}
+
+// canonicalUUID reports whether value is a UUID in its canonical lowercase
+// form, which is how Wings accepts identifiers it uses in paths.
+func canonicalUUID(value string) bool {
+	parsed, err := googleuuid.Parse(value)
+	return err == nil && value == parsed.String()
+}
+
 // proxy forwards a server-scoped request to its agent.
 func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("server")
@@ -528,16 +560,7 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 // restore, or cannot be reached, runs nothing, so its record is dropped again.
 func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("server")
-	backup := r.PathValue("backup")
-	if backup == "" {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		var data struct {
-			UUID string `json:"uuid"`
-		}
-		_ = json.Unmarshal(body, &data)
-		backup = data.UUID
-	}
+	backup := h.readBackupBody(r, uuid)
 	t, err := h.Agents.Wait(r.Context(), uuid)
 	if err != nil {
 		h.agentUnavailable(w, err)
@@ -574,6 +597,147 @@ func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 			h.Log.Warn("cannot drop the refused backup", "uuid", uuid, "error", err)
 		}
 	}
+}
+
+// backupDownloadPath and backupDownloadScope are Wings' backup download route
+// and the scope of its JWT.
+const (
+	backupDownloadPath  = "/download/backup"
+	backupDownloadScope = "backup-download"
+)
+
+// gatewayIssuer is the iss claim of the JWTs the gateway mints itself
+// (sourceBackupToken); the Panel's carry its own URL.
+const gatewayIssuer = "pelican-k8s-gateway"
+
+// issuedNow returns the claims with iat and nbf set to now.
+func issuedNow(raw json.RawMessage) json.RawMessage {
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(raw, &claims) != nil {
+		return raw
+	}
+	now, _ := json.Marshal(time.Now().Unix())
+	claims["iat"], claims["nbf"] = now, now
+	out, _ := json.Marshal(claims) // values decoded from JSON
+	return out
+}
+
+// sourceBackupTTL is how long the link to another server's local backup works.
+// The agent opens it before it answers the restore request.
+const sourceBackupTTL = 15 * time.Minute
+
+// linkSourceBackup points a restore at a backup on another server's agent.
+// Every server here has an agent and a scratch volume of its own, while the
+// Panel sees one node, so:
+//
+//   - a restore of another server's local backup (adapter wings,
+//     source_server) comes without a link, because Wings would find the backup
+//     on its own disk. The archive is on the source server's agent; the restore
+//     gets a link to it, a backup-download JWT for the source server signed with
+//     the node token like the Panel's.
+//   - a link to this node's own GET /download/backup leads to the gateway's
+//     public address, which agents cannot reach. The Panel sends one with every
+//     in-place restore (the user's download link, adapter wings) and, with
+//     adapter s3, for a backup that is already being restored elsewhere.
+//
+// Both links go to the gateway's backup download on the remote API listener,
+// which agents reach and which re-signs the token for the agent of its
+// server_uuid (BackupDownload). Wings in the target agent only uses a link
+// for a local backup it does not have. It returns false when the body is left
+// as it is.
+func (h *Handler) linkSourceBackup(ctx context.Context, uuid, backup string, body []byte) ([]byte, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return nil, false
+	}
+	var data struct {
+		Adapter      string `json:"adapter"`
+		DownloadURL  string `json:"download_url"`
+		SourceServer string `json:"source_server"`
+	}
+	if json.Unmarshal(body, &data) != nil {
+		return nil, false
+	}
+	var link string
+	switch {
+	case data.DownloadURL != "":
+		query, ok := h.ownBackupLink(data.DownloadURL)
+		if !ok {
+			return nil, false
+		}
+		link = h.Cfg.RemoteURL + backupDownloadPath + "?" + query
+	case data.Adapter == "wings" && data.SourceServer != "" && data.SourceServer != uuid && h.Store.Exists(ctx, data.SourceServer):
+		link = h.Cfg.RemoteURL + backupDownloadPath + "?token=" + h.sourceBackupToken(data.SourceServer, backup)
+	default:
+		return nil, false
+	}
+	// Marshalling a string, and an object of values that were decoded from
+	// JSON, cannot fail.
+	fields["download_url"], _ = json.Marshal(link)
+	out, _ := json.Marshal(fields)
+	return out, true
+}
+
+// ownBackupLink reports whether link is a backup download of this node: the
+// path is /download/backup and the token is signed with the node token, which
+// no other node's links are. It returns the link's query.
+func (h *Handler) ownBackupLink(link string) (string, bool) {
+	u, err := url.Parse(link)
+	if err != nil || u.Path != backupDownloadPath {
+		return "", false
+	}
+	claims, _, err := jwtx.Verify([]byte(u.Query().Get("token")), []byte(h.Cfg.NodeToken))
+	if err != nil || !strings.Contains(" "+claims.Scope+" ", " "+backupDownloadScope+" ") {
+		return "", false
+	}
+	return u.RawQuery, true
+}
+
+// sourceBackupToken returns a backup-download JWT for a local backup of
+// server, signed with the node token. Like the Panel's restore links it names
+// no user.
+func (h *Handler) sourceBackupToken(server, backup string) string {
+	now := time.Now()
+	// Neither can fail: the claims are strings and numbers, and HS256 signs
+	// any valid JSON payload.
+	raw, _ := json.Marshal(map[string]any{
+		"iss": gatewayIssuer, "iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(sourceBackupTTL).Unix(),
+		"jti": googleuuid.NewString(), "unique_id": googleuuid.NewString(),
+		"server_uuid": server, "backup_uuid": backup, "scope": backupDownloadScope,
+	})
+	token, _ := jwtx.Resign(raw, []byte(h.Cfg.NodeToken))
+	return string(token)
+}
+
+// BackupDownload serves backup downloads to agents on the remote API
+// listener, for restores of another server's local backup (linkSourceBackup).
+// It is the Panel-facing GET /download/backup: the token is verified with the
+// node token and re-signed for the agent of its server_uuid. Like every
+// gateway response it carries the Wings User-Agent, and a panic is answered
+// with a 500.
+func (h *Handler) BackupDownload() http.Handler {
+	return h.wrap(h.signedProxy(backupDownloadScope, true))
+}
+
+// readBackupBody reads the body of a backup or restore request, puts it back
+// for the proxy and returns the backup's UUID: from the path for a restore,
+// whose body may get a link to another server's backup (linkSourceBackup), or
+// from the body for a new backup.
+func (h *Handler) readBackupBody(r *http.Request, uuid string) string {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	backup := r.PathValue("backup")
+	if backup == "" {
+		var data struct {
+			UUID string `json:"uuid"`
+		}
+		_ = json.Unmarshal(body, &data)
+		backup = data.UUID
+	} else if linked, ok := h.linkSourceBackup(r.Context(), uuid, backup, body); ok {
+		body = linked
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	r.ContentLength = int64(len(body))
+	return backup
 }
 
 // withoutBackup returns the entries other than backup.
@@ -624,7 +788,13 @@ func (h *Handler) agentUnavailable(w http.ResponseWriter, err error) {
 
 // signedProxy verifies the Panel-signed JWT in ?token=, re-signs it for the
 // target agent and proxies the request (section 8.4).
-func (h *Handler) signedProxy(scope string) http.HandlerFunc {
+//
+// With refreshOwn, a token the gateway minted itself (sourceBackupToken) is
+// re-signed as issued now, once its agent is up: Wings refuses a token issued
+// before it started, and the source agent may have restarted while the
+// restore waited for the target agent and then for it. Tokens the Panel
+// issued keep their claims.
+func (h *Handler) signedProxy(scope string, refreshOwn bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
 		claims, raw, err := jwtx.Verify([]byte(token), []byte(h.Cfg.NodeToken))
@@ -632,7 +802,9 @@ func (h *Handler) signedProxy(scope string) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		if claims.ServerUUID == "" || !strings.Contains(" "+claims.Scope+" ", " "+scope+" ") {
+		// A server this node does not have has no agent to wait for: a backup
+		// kept after its server was deleted went with the agent's scratch volume.
+		if claims.ServerUUID == "" || !strings.Contains(" "+claims.Scope+" ", " "+scope+" ") || !h.Store.Exists(r.Context(), claims.ServerUUID) {
 			writeError(w, http.StatusNotFound, "The requested resource was not found on this server.")
 			return
 		}
@@ -640,6 +812,9 @@ func (h *Handler) signedProxy(scope string) http.HandlerFunc {
 		if err != nil {
 			h.agentUnavailable(w, err)
 			return
+		}
+		if refreshOwn && claims.Issuer == gatewayIssuer {
+			raw = issuedNow(raw)
 		}
 		resigned, err := jwtx.Resign(raw, []byte(t.Token))
 		if err != nil {

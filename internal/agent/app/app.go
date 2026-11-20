@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -70,6 +72,7 @@ func Run(ctx context.Context, o Options) error {
 		c.System.User.Rootless.Enabled = true
 		c.System.User.Rootless.ContainerUID = os.Getuid()
 		c.System.User.Rootless.ContainerGID = os.Getgid()
+		allowGatewayRestores(c)
 	})
 	cfg := config.Get()
 	if cfg.Token.ID == "" || cfg.Token.Token == "" {
@@ -120,9 +123,7 @@ func Run(ctx context.Context, o Options) error {
 	var manager *server.Manager
 	for attempt := 1; ; attempt++ {
 		var err error
-		manager, err = server.NewManager(ctx, inst.Client(client), server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst),
-			// The gateway creates the server before a Panel transfer pushes its files.
-			server.WithTransfersIntoExistingServers())
+		manager, err = server.NewManager(ctx, inst.Client(client), managerOptions(registry, inst, certs)...)
 		if err == nil {
 			break
 		}
@@ -210,6 +211,42 @@ func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialTLSContext = pki.TLSDialer(t.DialContext, d.ClientConfig)
 	return &agentCerts{dir: d}, t, nil
+}
+
+// allowGatewayRestores adds the gateway's host to Wings' restore allowlist.
+// A restore of a local backup that is not on this agent downloads it from the
+// gateway's remote API listener (ARCHITECTURE.md 8.7), at a cluster-internal
+// address. Wings allows private addresses for links to local backups, but not
+// for the s3 adapter, which the Panel uses when that backup is already being
+// restored elsewhere.
+func allowGatewayRestores(c *config.Configuration) {
+	u, err := url.Parse(c.PanelLocation)
+	if err != nil || u.Hostname() == "" || slices.Contains(c.System.Backups.RestoreHostAllowlist, u.Hostname()) {
+		return
+	}
+	c.System.Backups.RestoreHostAllowlist = append(c.System.Backups.RestoreHostAllowlist, u.Hostname())
+}
+
+// managerOptions are the Wings hooks the agent sets on its server manager.
+func managerOptions(registry *shimenv.Registry, inst *installer.Installer, certs *agentCerts) []server.ManagerOption {
+	opts := []server.ManagerOption{
+		server.WithEnvironmentFactory(registry.Factory), server.WithInstaller(inst),
+		// The gateway creates the server before a Panel transfer pushes its files.
+		server.WithTransfersIntoExistingServers(),
+	}
+	if certs != nil {
+		opts = append(opts, server.WithRestoreTLSConfig(certs.restoreTLSConfig))
+	}
+	return opts
+}
+
+// restoreTLSConfig is the TLS configuration of a backup restore download
+// (server.WithRestoreTLSConfig): the system roots and the internal CA bundle
+// as it is on disk now. A restore of another server's local backup downloads
+// it from the gateway's remote API listener (ARCHITECTURE.md 8.7), whose
+// certificate the internal CA signs; the bundle follows a CA rotation.
+func (c *agentCerts) restoreTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: c.dir.Roots.WithSystemRoots()}
 }
 
 // shimConfig is the shim listener's TLS configuration: the agent's

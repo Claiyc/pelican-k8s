@@ -741,6 +741,220 @@ func TestBackupProxyDropsRefusedAndEndedBackups(t *testing.T) {
 	}
 }
 
+const restoreBackup = "5b1d2c3e-0000-4000-8000-000000000001"
+
+// newRestoreFixture is a fixture with this server's agent, a second server
+// (otherUUID) as a restore source and a remote API listener URL. restore
+// posts a restore of restoreBackup and returns the body the agent got.
+func newRestoreFixture(t *testing.T) (f *fixture, restore func(body string) string) {
+	t.Helper()
+	f = newFixture(t)
+	f.h.Cfg.RemoteURL = "https://gw.example.svc:8081"
+	f.create()
+	f.addPod()
+	source := &v1alpha1.GameServer{ObjectMeta: metav1.ObjectMeta{Name: names.ForUUID(otherUUID), Namespace: ns}}
+	if err := f.c.Create(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	return f, func(body string) string {
+		t.Helper()
+		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+restoreBackup+"/restore", body); code != 200 {
+			t.Fatalf("%s: restore code = %d", body, code)
+		}
+		return f.calls()[len(f.calls())-1].body
+	}
+}
+
+// A restore of another server's local backup gets a link to the backup on the
+// source server's agent, through the gateway's remote API listener.
+func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
+	_, restore := newRestoreFixture(t)
+	got := decodeMap(t, restore(`{"adapter":"wings","truncate_directory":true,"source_server":"`+otherUUID+`"}`))
+	if got["source_server"] != otherUUID || got["truncate_directory"] != true || got["adapter"] != "wings" {
+		t.Fatalf("the Panel's fields must reach the agent: %v", got)
+	}
+	link, _ := got["download_url"].(string)
+	prefix := "https://gw.example.svc:8081/download/backup?token="
+	if !strings.HasPrefix(link, prefix) {
+		t.Fatalf("download_url = %q", link)
+	}
+	claims, _, err := jwtx.Verify([]byte(strings.TrimPrefix(link, prefix)), []byte(nodeToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ServerUUID != otherUUID || claims.Scope != "backup-download" || claims.UserUUID != "" ||
+		claims.ExpirationTime == nil || time.Until(claims.ExpirationTime.Time) > sourceBackupTTL {
+		t.Fatalf("claims = %+v", claims)
+	}
+}
+
+// A link to this node's own backup download goes to the remote API listener
+// with the Panel's token: the Panel's restore link when the backup is already
+// being restored (adapter s3), and the user's download link of an in-place
+// restore, which Wings uses only when the backup is not on disk.
+func TestRestoreMovesOwnBackupLinks(t *testing.T) {
+	_, restore := newRestoreFixture(t)
+	restoreLink := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+		"jti": "j", "server_uuid": otherUUID, "backup_uuid": restoreBackup, "unique_id": "u", "scope": "backup-download"})
+	userLink := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(15 * time.Minute).Unix(),
+		"jti": "j", "server_uuid": uuid, "backup_uuid": restoreBackup, "user_uuid": "u", "unique_id": "u", "scope": "backup-download"})
+	for adapter, token := range map[string]string{"s3": restoreLink, "wings": userLink} {
+		got := decodeMap(t, restore(`{"adapter":"`+adapter+`","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=`+token+`"}`))
+		if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+token || got["adapter"] != adapter {
+			t.Fatalf("%s: %v", adapter, got)
+		}
+	}
+}
+
+// Any other restore reaches the agent as the Panel sent it: a body without a
+// link, an S3 backup, another node's links (signed with another key, or not a
+// backup download), a source server this gateway does not have and bodies
+// that do not decode.
+func TestRestoreLeavesOtherBodiesAlone(t *testing.T) {
+	_, restore := newRestoreFixture(t)
+	other := signToken(t, "another-node", map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "server_uuid": otherUUID, "scope": "backup-download"})
+	fileTok := signToken(t, nodeToken, fileClaims("file-download", time.Now().Add(time.Hour)))
+	for _, body := range []string{
+		`{"adapter":"wings","download_url":"https://node-2.example:8080/download/backup?token=` + other + `","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"s3","download_url":"https://node.example:8443/download/file?token=` + fileTok + `"}`,
+		`{"adapter":"s3","download_url":"https://node.example:8443/download/backup?token=` + fileTok + `"}`,
+		`{"adapter":"wings","truncate_directory":false}`,
+		`{"adapter":"wings","source_server":"` + uuid + `"}`,
+		`{"adapter":"s3","download_url":"https://s3.example/b","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"wings","download_url":"https://node-2.example:8080/download/backup?token=x","source_server":"` + otherUUID + `"}`,
+		`{"adapter":"wings","source_server":"7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"}`,
+		`{"adapter":5,"source_server":"` + otherUUID + `"}`,
+		`not json`,
+	} {
+		if got := restore(body); got != body {
+			t.Fatalf("agent got %q, want %q", got, body)
+		}
+	}
+}
+
+// BackupDownload is the Panel-facing backup download: the token is verified
+// with the node token and re-signed for the agent of its server.
+func TestBackupDownloadForAgents(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	claims := map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(), "jti": "j",
+		"server_uuid": uuid, "backup_uuid": "b", "unique_id": "u", "scope": "backup-download"}
+	srv := httptest.NewServer(f.h.BackupDownload())
+	t.Cleanup(srv.Close)
+	res, err := http.Get(srv.URL + "/download/backup?token=" + signToken(t, nodeToken, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 || res.Header.Get("User-Agent") != "Pelican Wings/v1.2.3 (id:nodeid)" {
+		t.Fatalf("code = %d, User-Agent = %q", res.StatusCode, res.Header.Get("User-Agent"))
+	}
+	last := f.calls()[len(f.calls())-1]
+	tok := strings.TrimPrefix(last.uri, "/download/backup?token=")
+	if _, _, err := jwtx.Verify([]byte(tok), []byte(agentTok)); err != nil {
+		t.Fatalf("the agent must get the token re-signed with its own token: %v (%s)", err, last.uri)
+	}
+	res, err = http.Get(srv.URL + "/download/backup?token=" + signToken(t, agentTok, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a token not signed with the node token: code = %d", res.StatusCode)
+	}
+	// A server this node does not have (a backup kept after its server was
+	// deleted) answers 404 at once instead of waiting for an agent.
+	claims["server_uuid"] = otherUUID
+	start := time.Now()
+	res, err = http.Get(srv.URL + "/download/backup?token=" + signToken(t, nodeToken, claims))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound || time.Since(start) > time.Second {
+		t.Fatalf("unknown server: code = %d after %s", res.StatusCode, time.Since(start))
+	}
+}
+
+// A token the gateway minted is re-signed for the source agent as issued now,
+// so a source agent that restarted since the link was made still takes it.
+// The Panel's tokens, and the public route, keep the claims as they are.
+func TestBackupDownloadRefreshesOwnTokens(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	old := time.Now().Add(-10 * time.Minute)
+	claims := func(iss string) map[string]any {
+		c := map[string]any{"iat": old.Unix(), "nbf": old.Unix(), "exp": time.Now().Add(time.Minute).Unix(), "jti": "j",
+			"server_uuid": uuid, "backup_uuid": "b", "unique_id": "u", "scope": "backup-download"}
+		if iss != "" {
+			c["iss"] = iss
+		}
+		return c
+	}
+	issuedAt := func(h http.Handler, token string) time.Time {
+		t.Helper()
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+		res, err := http.Get(srv.URL + "/download/backup?token=" + token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		got, _, err := jwtx.Verify([]byte(strings.TrimPrefix(f.calls()[len(f.calls())-1].uri, "/download/backup?token=")), []byte(agentTok))
+		if err != nil || got.IssuedAt == nil {
+			t.Fatalf("agent token: %v %+v", err, got)
+		}
+		return got.IssuedAt.Time
+	}
+	own := signToken(t, nodeToken, claims(gatewayIssuer))
+	if at := issuedAt(f.h.BackupDownload(), own); time.Since(at) > time.Minute {
+		t.Fatalf("a gateway token must be re-issued now, iat = %s", at)
+	}
+	if at := issuedAt(f.h.BackupDownload(), signToken(t, nodeToken, claims("https://panel.example"))); at.Unix() != old.Unix() {
+		t.Fatalf("a Panel token must keep its iat, got %s", at)
+	}
+	if at := issuedAt(f.h.Routes(), own); at.Unix() != old.Unix() {
+		t.Fatalf("the public route must not refresh tokens, got %s", at)
+	}
+	if !strings.Contains(f.h.sourceBackupToken(otherUUID, "b"), ".") {
+		t.Fatal("no token")
+	}
+	minted, _, err := jwtx.Verify([]byte(f.h.sourceBackupToken(otherUUID, "b")), []byte(nodeToken))
+	if err != nil || minted.Issuer != gatewayIssuer {
+		t.Fatalf("minted token: %v %+v", err, minted)
+	}
+}
+
+func TestDeleteKeptBackup(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	const backup = "5b1d2c3e-0000-4000-8000-000000000001"
+	if code, body := f.node("DELETE", "/api/backups/"+uuid+"/"+backup, ""); code != 200 || body != "agent says /api/backups/"+uuid+"/"+backup {
+		t.Fatalf("a server this node has: %d %s", code, body)
+	}
+	before := len(f.calls())
+	code, body := f.node("DELETE", "/api/backups/"+otherUUID+"/"+backup, "")
+	if code != http.StatusNotFound || !strings.Contains(body, "not found on this node") || len(f.calls()) != before {
+		t.Fatalf("a deleted server: %d %s", code, body)
+	}
+	if code, _, _ := f.do("DELETE", "/api/backups/"+uuid+"/"+backup, "", ""); code != http.StatusUnauthorized {
+		t.Fatalf("without the node token: %d", code)
+	}
+	// Identifiers that are not canonical UUIDs are refused, as Wings does.
+	before = len(f.calls())
+	for _, path := range []string{"not-a-uuid/" + backup, uuid + "/not-a-uuid", strings.ToUpper(uuid) + "/" + backup} {
+		if code, body := f.node("DELETE", "/api/backups/"+path, ""); code != http.StatusBadRequest || !strings.Contains(body, "valid UUID") {
+			t.Fatalf("%s: %d %s", path, code, body)
+		}
+	}
+	if len(f.calls()) != before {
+		t.Fatal("an invalid identifier must not reach the agent")
+	}
+}
+
 func signToken(t *testing.T, key string, claims map[string]any) string {
 	t.Helper()
 	tok, err := jwt.Sign(claims, jwt.NewHS256([]byte(key)))

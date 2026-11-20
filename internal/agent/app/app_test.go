@@ -16,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelican/wings/config"
+	"github.com/pelican/wings/server"
+
 	"github.com/Claiyc/pelican-k8s/internal/pki"
 )
 
@@ -356,5 +359,53 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	if res, err := kubelet.Get(base + "/internal/v1/healthz"); err == nil {
 		res.Body.Close()
 		t.Fatal("the HTTP server is still serving")
+	}
+}
+
+// The agent gives Wings a restore TLS configuration that trusts the internal
+// CA bundle, and only with TLS: without it Wings keeps its default.
+func TestRestoreTLSConfig(t *testing.T) {
+	agentDir, gatewayServer, _ := testPKI(t)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	srv.TLS = gatewayServer
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	link := "https://localhost:" + strings.TrimPrefix(srv.URL, "https://127.0.0.1:")
+
+	certs, _, err := loadTLS(agentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := server.NewEmptyManager(nil, managerOptions(nil, nil, certs)...)
+	cfg := m.RestoreTLSConfig()
+	if cfg == nil || cfg.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("restore TLS configuration = %+v", cfg)
+	}
+	res, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}).Get(link)
+	if err != nil {
+		t.Fatalf("the gateway's certificate must verify: %v", err)
+	}
+	res.Body.Close()
+	if res, err := (&http.Client{Transport: &http.Transport{}}).Get(link); err == nil {
+		res.Body.Close()
+		t.Fatal("the default configuration must not trust the internal CA")
+	}
+	if cfg := server.NewEmptyManager(nil, managerOptions(nil, nil, nil)...).RestoreTLSConfig(); cfg != nil {
+		t.Fatalf("without TLS the restore keeps Wings' default, got %+v", cfg)
+	}
+}
+
+func TestAllowGatewayRestores(t *testing.T) {
+	c := &config.Configuration{PanelLocation: "https://pelican-gateway.pelican-system.svc:8081"}
+	c.System.Backups.RestoreHostAllowlist = []string{"backups.example"}
+	allowGatewayRestores(c)
+	allowGatewayRestores(c)
+	if got := c.System.Backups.RestoreHostAllowlist; len(got) != 2 || got[1] != "pelican-gateway.pelican-system.svc" {
+		t.Fatalf("allowlist = %v", got)
+	}
+	empty := &config.Configuration{}
+	allowGatewayRestores(empty)
+	if len(empty.System.Backups.RestoreHostAllowlist) != 0 {
+		t.Fatalf("allowlist = %v", empty.System.Backups.RestoreHostAllowlist)
 	}
 }

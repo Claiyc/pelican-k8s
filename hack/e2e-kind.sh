@@ -185,6 +185,24 @@ echo "agent pod on $an, game pod on $gn"; [[ -n "$gn" && "$an" = "$gn" ]]
 tinker '$s = App\Models\Server::find(1); $s->update(["backup_limit" => 3]); $b = app(App\Services\Backups\InitiateBackupService::class)->setIgnoredFiles([])->handle($s->fresh(), "contract"); echo "backup ", $b->uuid, PHP_EOL;'
 for i in $(seq 1 30); do ok=$(tinker 'echo App\Models\Backup::latest("id")->first()->is_successful ? "ok" : "pending", PHP_EOL;'); [[ "$ok" = ok ]] && break; sleep 5; done
 echo "backup=$ok"; [[ "$ok" = ok ]]
+
+log "create a server from the backup (restore of another server's local backup)"
+# What the admin "create from backup" page does: the restore is recorded before
+# the node creates the server, which installs with skip_scripts; the Panel's
+# queue worker restores the backup once the install is reported.
+NEW=$(tinker '$b = App\Models\Backup::latest("id")->first(); $a = App\Models\Allocation::whereNull("server_id")->orderBy("port")->first(); $s = app(App\Services\Servers\ServerCreationService::class)->handle(["name" => "restored", "owner_id" => 1, "egg_id" => 1, "allocation_id" => $a->id, "memory" => 1024, "disk" => 4096, "cpu" => 100, "swap" => 0, "io" => 500, "oom_killer" => true, "image" => "'"$GAME_IMAGE"'", "environment" => ["MINECRAFT_VERSION" => "latest", "SERVER_JARFILE" => "server.jar", "BUILD_NUMBER" => "latest", "USER_AGENT" => "'"$EGG_USER_AGENT"'"], "start_on_completion" => false, "skip_scripts" => true], beforeDaemon: function ($s) use ($b) { app(App\Services\Backups\ServerRestoreService::class)->create($s, App\Services\Backups\RestoreSource::backup($b), false); }); echo $s->uuid;')
+echo "restored server uuid $NEW"; [[ ${#NEW} -eq 36 && "$NEW" != "$UUID" ]]
+for i in $(seq 1 60); do
+  rs=$(tinker '$r = App\Models\ServerRestore::latest("id")->first(); echo $r->status, " ", $r->error, PHP_EOL;')
+  echo "t=$((i*5))s restore=$rs"
+  case "$rs" in completed*) break;; failed*) exit 1;; *) ;; esac
+  sleep 5
+done
+[[ "$rs" == completed* ]]
+# The archive came from the first server's agent: its eula.txt is in the new server.
+eula=$(curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/servers/$NEW/files/contents?file=%2Feula.txt")
+echo "restored eula.txt: $eula"; [[ "$eula" = "eula=true" ]]
+tinker 'app(App\Services\Servers\ServerDeletionService::class)->handle(App\Models\Server::where("uuid", "'"$NEW"'")->firstOrFail()); echo "restored server deleted", PHP_EOL;'
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Suspend); echo "suspended", PHP_EOL;'
 for i in $(seq 1 40); do st=$(panel_status); [[ "$st" = offline ]] && break; sleep 5; done
 echo "after suspend=$st"; [[ "$st" = offline ]]
