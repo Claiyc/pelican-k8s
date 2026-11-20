@@ -60,8 +60,9 @@ var ErrInstallSuperseded = errors.New("installer: installation superseded by a n
 // newer generation and shown in the Panel as a failed install. Wings reports
 // once after every Run (Server.install calls SyncInstallState right after the
 // installer), so the mark Run leaves is always consumed by that report. A new
-// Run must not clear it: Wings releases the install lock before it reports, so
-// the next install can start before the old report has been dropped.
+// Run must not clear it. Wings holds the install lock until it has reported, so
+// a new Run normally starts after the mark is gone; ReportPending keeps a new
+// install from starting before then in any case.
 func (i *Installer) Client(c remote.Client) remote.Client {
 	return reportFilter{Client: c, i: i}
 }

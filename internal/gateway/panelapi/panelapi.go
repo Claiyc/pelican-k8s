@@ -603,9 +603,10 @@ const sourceBackupTTL = 15 * time.Minute
 //     on its own disk. The archive is on the source server's agent; the restore
 //     gets a link to it, a backup-download JWT for the source server signed with
 //     the node token like the Panel's.
-//   - a link to this node's own GET /download/backup (the Panel sends one, with
-//     adapter s3, when that backup is already being restored elsewhere) leads to
-//     the gateway's public address, which agents cannot reach.
+//   - a link to this node's own GET /download/backup leads to the gateway's
+//     public address, which agents cannot reach. The Panel sends one with every
+//     in-place restore (the user's download link, adapter wings) and, with
+//     adapter s3, for a backup that is already being restored elsewhere.
 //
 // Both links go to the gateway's backup download on the remote API listener,
 // which agents reach and which re-signs the token for the agent of its

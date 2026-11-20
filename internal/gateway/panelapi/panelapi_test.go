@@ -790,7 +790,16 @@ func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
 		t.Fatalf("own link: %v", got)
 	}
 
-	// Left alone: the server's own backup, an S3 backup, another node's links
+	// The Panel's in-place restore carries the user's download link, which goes
+	// to the listener too; Wings uses it only when the backup is not on disk.
+	user := signToken(t, nodeToken, map[string]any{"iat": time.Now().Unix(), "exp": time.Now().Add(15 * time.Minute).Unix(),
+		"jti": "j", "server_uuid": uuid, "backup_uuid": backup, "user_uuid": "u", "unique_id": "u", "scope": "backup-download"})
+	got = restore(`{"adapter":"wings","truncate_directory":true,"download_url":"https://node.example:8443/download/backup?token=` + user + `"}`)
+	if got["download_url"] != "https://gw.example.svc:8081/download/backup?token="+user || got["adapter"] != "wings" {
+		t.Fatalf("in-place restore: %v", got)
+	}
+
+	// Left alone: a body without a link, an S3 backup, another node's links
 	// (signed with another key, or not a backup download) and a source server
 	// this gateway does not have.
 	other := signToken(t, "another-node", map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "server_uuid": otherUUID, "scope": "backup-download"})

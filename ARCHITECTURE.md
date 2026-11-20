@@ -1217,8 +1217,8 @@ generation (not a reinstall).
    operator deletes the older Job, and the gateway answers the older generation's poll with `Superseded`.
    A finished generation's Job is not deleted, so a failed one keeps its logs (step 6). The installer
    ends that run within one poll, and drops its result: it would otherwise be recorded against the new generation
-   and reach the Panel as a failed or successful install. Wings releases the install lock and then
-   reports; the new generation's `/install` or `/reinstall` is answered `409` until the dropped report
+   and reach the Panel as a failed or successful install. Wings reports before it releases the install
+   lock, and the new generation's `/install` or `/reinstall` is answered `409` until the dropped report
    has gone, so the new run's own report can never be the one dropped. A run that took the lock before
    the new generation but prepared after it already waits for the new generation's Job: on the agent's
    install-lock `409` with `preparedGeneration` equal to the new generation the operator adopts it
@@ -1354,8 +1354,9 @@ in-flight work.
   The gateway therefore adds a `download_url` to such a restore when the source server exists: a
   backup-download JWT for the source server (no user, 15 minutes), signed with the node token, for
   `GET /download/backup` on the remote API listener (§5.7), which re-signs it for the source agent.
-  A link the Panel sets to this node's own `/download/backup` (its restore link while that backup is
-  being restored elsewhere, sent with adapter `s3`) is moved to the same listener. Wings in the target
+  A link the Panel sets to this node's own `/download/backup` is moved to the same listener: the user's
+  download link it sends with every in-place restore, and its restore link while that backup is being
+  restored elsewhere (adapter `s3`). Wings in the target
   agent, not finding the backup locally, downloads it agent → gateway → agent; the remote API listener
   is the one destination agents already reach (§12.4). A restore that truncates the server's files (as
   the Panel's always does for a new server) first saves the whole archive to the target agent's scratch

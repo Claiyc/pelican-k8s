@@ -2,7 +2,7 @@ module github.com/Claiyc/pelican-k8s
 
 go 1.27.4
 
-replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261120171247-03591f2f6a10
+replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261120180544-bac35fe62f9f
 
 tool sigs.k8s.io/controller-tools/cmd/controller-gen
 

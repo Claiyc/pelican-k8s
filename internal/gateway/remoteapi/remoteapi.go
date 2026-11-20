@@ -45,7 +45,8 @@ type Handler struct {
 	Log    *slog.Logger
 	// BackupDownload serves GET /download/backup without the agent token: the
 	// link a restore of another server's local backup downloads from, which
-	// carries its own JWT (panelapi.Handler.BackupDownload). Nil answers 404.
+	// carries its own JWT (panelapi.Handler.BackupDownload). When nil, the path
+	// is an ordinary remote API path and needs the agent token.
 	BackupDownload http.Handler
 	// Metrics counters (optional).
 	OnUnmatched func(method, path string)
