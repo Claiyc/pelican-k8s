@@ -96,11 +96,6 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	if o.TLSDir != "" {
-		if err := trustCABundle(http.DefaultTransport.(*http.Transport), filepath.Join(o.TLSDir, pki.CAFile)); err != nil {
-			return fmt.Errorf("tls: %w", err)
-		}
-	}
 	client := remote.New(cfg.PanelLocation,
 		remote.WithCredentials(cfg.Token.ID, cfg.Token.Token),
 		remote.WithCustomHeaders(cfg.RemoteQuery.CustomHeaders),
@@ -207,13 +202,17 @@ func Run(ctx context.Context, o Options) error {
 type agentCerts struct{ dir *pki.Dir }
 
 // loadTLS loads the certificate directory, when one is set, and returns the
-// transport for calls to the gateway that trusts the internal CA.
+// transport for calls to the gateway that trusts the internal CA. It also
+// makes http.DefaultTransport trust that CA (trustCABundle).
 func loadTLS(dir string) (*agentCerts, http.RoundTripper, error) {
 	if dir == "" {
 		return nil, nil, nil
 	}
 	d, err := pki.LoadDir(dir)
 	if err != nil {
+		return nil, nil, fmt.Errorf("tls: %w", err)
+	}
+	if err := trustCABundle(http.DefaultTransport.(*http.Transport), filepath.Join(dir, pki.CAFile)); err != nil {
 		return nil, nil, fmt.Errorf("tls: %w", err)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()

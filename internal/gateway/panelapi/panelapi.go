@@ -60,7 +60,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version})
 	})
-	mux.HandleFunc("GET /download/backup", h.signedProxy("backup-download"))
+	mux.HandleFunc("GET "+backupDownloadPath, h.signedProxy(backupDownloadScope))
 	mux.HandleFunc("GET /download/file", h.signedProxy("file-download"))
 	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload"))
 	mux.HandleFunc("GET /api/servers/{server}/ws", h.websocket)
@@ -599,6 +599,13 @@ func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// backupDownloadPath and backupDownloadScope are Wings' backup download route
+// and the scope of its JWT.
+const (
+	backupDownloadPath  = "/download/backup"
+	backupDownloadScope = "backup-download"
+)
+
 // sourceBackupTTL is how long the link to another server's local backup works.
 // The agent opens it before it answers the restore request.
 const sourceBackupTTL = 15 * time.Minute
@@ -641,13 +648,13 @@ func (h *Handler) linkSourceBackup(ctx context.Context, uuid, backup string, bod
 		if !ok {
 			return nil, false
 		}
-		link = h.Cfg.RemoteURL + "/download/backup?" + query
+		link = h.Cfg.RemoteURL + backupDownloadPath + "?" + query
 	case data.Adapter == "wings" && data.SourceServer != "" && data.SourceServer != uuid && h.Store.Exists(ctx, data.SourceServer):
 		token, err := h.sourceBackupToken(data.SourceServer, backup)
 		if err != nil {
 			return nil, false
 		}
-		link = h.Cfg.RemoteURL + "/download/backup?token=" + token
+		link = h.Cfg.RemoteURL + backupDownloadPath + "?token=" + token
 	default:
 		return nil, false
 	}
@@ -664,11 +671,11 @@ func (h *Handler) linkSourceBackup(ctx context.Context, uuid, backup string, bod
 // no other node's links are. It returns the link's query.
 func (h *Handler) ownBackupLink(link string) (string, bool) {
 	u, err := url.Parse(link)
-	if err != nil || u.Path != "/download/backup" {
+	if err != nil || u.Path != backupDownloadPath {
 		return "", false
 	}
 	claims, _, err := jwtx.Verify([]byte(u.Query().Get("token")), []byte(h.Cfg.NodeToken))
-	if err != nil || !strings.Contains(" "+claims.Scope+" ", " backup-download ") {
+	if err != nil || !strings.Contains(" "+claims.Scope+" ", " "+backupDownloadScope+" ") {
 		return "", false
 	}
 	return u.RawQuery, true
@@ -682,7 +689,7 @@ func (h *Handler) sourceBackupToken(server, backup string) (string, error) {
 	raw, err := json.Marshal(map[string]any{
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(sourceBackupTTL).Unix(),
 		"jti": googleuuid.NewString(), "unique_id": googleuuid.NewString(),
-		"server_uuid": server, "backup_uuid": backup, "scope": "backup-download",
+		"server_uuid": server, "backup_uuid": backup, "scope": backupDownloadScope,
 	})
 	if err != nil {
 		return "", err
@@ -696,7 +703,7 @@ func (h *Handler) sourceBackupToken(server, backup string) (string, error) {
 // It is the Panel-facing GET /download/backup: the token is verified with the
 // node token and re-signed for the agent of its server_uuid.
 func (h *Handler) BackupDownload() http.HandlerFunc {
-	return h.signedProxy("backup-download")
+	return h.signedProxy(backupDownloadScope)
 }
 
 // withoutBackup returns the entries other than backup.
