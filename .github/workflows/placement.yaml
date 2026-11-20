@@ -8,24 +8,10 @@ name: Placement
 on:
   push:
     branches: [master]
+  # Every pull request runs the workflow, so the required check always
+  # reports; the changes job decides whether the suite has anything to test.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    # Everything the suite builds and drives: the four images (the gateway
-    # serves the Panel API the suite uses, and writes the state it checks),
-    # the chart, and the suite itself.
-    paths:
-      - "api/**"
-      - "cmd/**"
-      - "internal/**"
-      - "build/**"
-      - "go.mod"
-      - "go.sum"
-      - "charts/pelican-k8s/**"
-      - "test/placement/**"
-      - "test/fakepanel/**"
-      - "hack/e2e-placement.sh"
-      - "hack/kind-placement.yaml"
-      - ".github/workflows/placement.yaml"
   # Scheduled runs come only from the default branch's workflow files.
   schedule:
     - cron: "17 3 * * *"
@@ -40,9 +26,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Placement inputs changed
+    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.files.outputs.relevant }}
+    steps:
+      - name: Does the pull request touch what the suite builds and drives?
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Pushes, the schedule and manual runs always run the suite.
+          if [ -z "$PR" ]; then echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          relevant=false
+          # Everything the suite builds and drives: the four images (the
+          # gateway serves the Panel API the suite uses, and writes the state
+          # it checks), the chart, and the suite itself.
+          while IFS= read -r f; do
+            case "$f" in
+              api/*|cmd/*|internal/*|build/*|go.mod|go.sum|charts/pelican-k8s/*|test/placement/*|test/fakepanel/*|\
+              hack/e2e-placement.sh|hack/kind-placement.yaml|.github/workflows/placement.yaml) relevant=true ;;
+              *) ;;
+            esac
+          done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          echo "relevant=$relevant" | tee -a "$GITHUB_OUTPUT"
+
   kind:
     name: Placement on kind
-    if: github.event.pull_request.draft != true || github.head_ref != 'release/next' || github.event.pull_request.head.repo.full_name != github.repository
+    needs: changes
+    # Skipped when the pull request touches nothing the suite covers, which a
+    # required check counts as passed.
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

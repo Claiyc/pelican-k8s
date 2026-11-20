@@ -11,11 +11,12 @@ coverage:
     project:
       default:
         informational: true
-    # Changed lines are what a pull request can answer for.
+    # Changed lines are what a pull request can answer for: codecov/patch fails
+    # below the target, and it is a required check on master.
     patch:
       default:
         target: 70%
-        informational: true
+        informational: false
 
 flags:
   unit:
