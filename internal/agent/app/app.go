@@ -252,9 +252,10 @@ func trustCABundle(t *http.Transport, caFile string) error {
 	if !pool.AppendCertsFromPEM(b) {
 		return fmt.Errorf("%s: no certificates", caFile)
 	}
-	cfg := &tls.Config{}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if t.TLSClientConfig != nil {
 		cfg = t.TLSClientConfig.Clone()
+		cfg.MinVersion = max(cfg.MinVersion, tls.VersionTLS12)
 	}
 	cfg.RootCAs = pool
 	t.TLSClientConfig = cfg

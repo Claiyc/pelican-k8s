@@ -544,23 +544,7 @@ func (h *Handler) proxy(w http.ResponseWriter, r *http.Request) {
 // restore, or cannot be reached, runs nothing, so its record is dropped again.
 func (h *Handler) backupProxy(w http.ResponseWriter, r *http.Request) {
 	uuid := r.PathValue("server")
-	backup := r.PathValue("backup")
-	if backup == "" {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		var data struct {
-			UUID string `json:"uuid"`
-		}
-		_ = json.Unmarshal(body, &data)
-		backup = data.UUID
-	} else {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if linked, ok := h.linkSourceBackup(r.Context(), uuid, backup, body); ok {
-			body = linked
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		r.ContentLength = int64(len(body))
-	}
+	backup := h.readBackupBody(r, uuid)
 	t, err := h.Agents.Wait(r.Context(), uuid)
 	if err != nil {
 		h.agentUnavailable(w, err)
@@ -704,6 +688,27 @@ func (h *Handler) sourceBackupToken(server, backup string) (string, error) {
 // node token and re-signed for the agent of its server_uuid.
 func (h *Handler) BackupDownload() http.HandlerFunc {
 	return h.signedProxy(backupDownloadScope)
+}
+
+// readBackupBody reads the body of a backup or restore request, puts it back
+// for the proxy and returns the backup's UUID: from the path for a restore,
+// whose body may get a link to another server's backup (linkSourceBackup), or
+// from the body for a new backup.
+func (h *Handler) readBackupBody(r *http.Request, uuid string) string {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	backup := r.PathValue("backup")
+	if backup == "" {
+		var data struct {
+			UUID string `json:"uuid"`
+		}
+		_ = json.Unmarshal(body, &data)
+		backup = data.UUID
+	} else if linked, ok := h.linkSourceBackup(r.Context(), uuid, backup, body); ok {
+		body = linked
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	r.ContentLength = int64(len(body))
+	return backup
 }
 
 // withoutBackup returns the entries other than backup.
