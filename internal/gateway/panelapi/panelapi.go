@@ -635,19 +635,14 @@ func (h *Handler) linkSourceBackup(ctx context.Context, uuid, backup string, bod
 		}
 		link = h.Cfg.RemoteURL + backupDownloadPath + "?" + query
 	case data.Adapter == "wings" && data.SourceServer != "" && data.SourceServer != uuid && h.Store.Exists(ctx, data.SourceServer):
-		token, err := h.sourceBackupToken(data.SourceServer, backup)
-		if err != nil {
-			return nil, false
-		}
-		link = h.Cfg.RemoteURL + backupDownloadPath + "?token=" + token
+		link = h.Cfg.RemoteURL + backupDownloadPath + "?token=" + h.sourceBackupToken(data.SourceServer, backup)
 	default:
 		return nil, false
 	}
+	// Marshalling a string, and an object of values that were decoded from
+	// JSON, cannot fail.
 	fields["download_url"], _ = json.Marshal(link)
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return nil, false
-	}
+	out, _ := json.Marshal(fields)
 	return out, true
 }
 
@@ -669,18 +664,17 @@ func (h *Handler) ownBackupLink(link string) (string, bool) {
 // sourceBackupToken returns a backup-download JWT for a local backup of
 // server, signed with the node token. Like the Panel's restore links it names
 // no user.
-func (h *Handler) sourceBackupToken(server, backup string) (string, error) {
+func (h *Handler) sourceBackupToken(server, backup string) string {
 	now := time.Now()
-	raw, err := json.Marshal(map[string]any{
+	// Neither can fail: the claims are strings and numbers, and HS256 signs
+	// any valid JSON payload.
+	raw, _ := json.Marshal(map[string]any{
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(sourceBackupTTL).Unix(),
 		"jti": googleuuid.NewString(), "unique_id": googleuuid.NewString(),
 		"server_uuid": server, "backup_uuid": backup, "scope": backupDownloadScope,
 	})
-	if err != nil {
-		return "", err
-	}
-	token, err := jwtx.Resign(raw, []byte(h.Cfg.NodeToken))
-	return string(token), err
+	token, _ := jwtx.Resign(raw, []byte(h.Cfg.NodeToken))
+	return string(token)
 }
 
 // BackupDownload serves backup downloads to agents on the remote API

@@ -813,6 +813,7 @@ func TestRestoreLinksAnotherServersLocalBackup(t *testing.T) {
 		`{"adapter":"s3","download_url":"https://s3.example/b","source_server":"` + otherUUID + `"}`,
 		`{"adapter":"wings","download_url":"https://node-2.example:8080/download/backup?token=x","source_server":"` + otherUUID + `"}`,
 		`{"adapter":"wings","source_server":"7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"}`,
+		`{"adapter":5,"source_server":"` + otherUUID + `"}`,
 		`not json`,
 	} {
 		if code, _ := f.node("POST", "/api/servers/"+uuid+"/backup/"+backup+"/restore", body); code != 200 {
