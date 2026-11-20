@@ -60,9 +60,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version.Version})
 	})
-	mux.HandleFunc("GET "+backupDownloadPath, h.signedProxy(backupDownloadScope))
-	mux.HandleFunc("GET /download/file", h.signedProxy("file-download"))
-	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload"))
+	mux.HandleFunc("GET "+backupDownloadPath, h.signedProxy(backupDownloadScope, false))
+	mux.HandleFunc("GET /download/file", h.signedProxy("file-download", false))
+	mux.HandleFunc("POST /upload/file", h.signedProxy("file-upload", false))
 	mux.HandleFunc("GET /api/servers/{server}/ws", h.websocket)
 	mux.HandleFunc("POST /api/transfers", h.transfers)
 
@@ -606,6 +606,22 @@ const (
 	backupDownloadScope = "backup-download"
 )
 
+// gatewayIssuer is the iss claim of the JWTs the gateway mints itself
+// (sourceBackupToken); the Panel's carry its own URL.
+const gatewayIssuer = "pelican-k8s-gateway"
+
+// issuedNow returns the claims with iat and nbf set to now.
+func issuedNow(raw json.RawMessage) json.RawMessage {
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(raw, &claims) != nil {
+		return raw
+	}
+	now, _ := json.Marshal(time.Now().Unix())
+	claims["iat"], claims["nbf"] = now, now
+	out, _ := json.Marshal(claims) // values decoded from JSON
+	return out
+}
+
 // sourceBackupTTL is how long the link to another server's local backup works.
 // The agent opens it before it answers the restore request.
 const sourceBackupTTL = 15 * time.Minute
@@ -685,7 +701,7 @@ func (h *Handler) sourceBackupToken(server, backup string) string {
 	// Neither can fail: the claims are strings and numbers, and HS256 signs
 	// any valid JSON payload.
 	raw, _ := json.Marshal(map[string]any{
-		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(sourceBackupTTL).Unix(),
+		"iss": gatewayIssuer, "iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(sourceBackupTTL).Unix(),
 		"jti": googleuuid.NewString(), "unique_id": googleuuid.NewString(),
 		"server_uuid": server, "backup_uuid": backup, "scope": backupDownloadScope,
 	})
@@ -700,7 +716,7 @@ func (h *Handler) sourceBackupToken(server, backup string) string {
 // gateway response it carries the Wings User-Agent, and a panic is answered
 // with a 500.
 func (h *Handler) BackupDownload() http.Handler {
-	return h.wrap(h.signedProxy(backupDownloadScope))
+	return h.wrap(h.signedProxy(backupDownloadScope, true))
 }
 
 // readBackupBody reads the body of a backup or restore request, puts it back
@@ -772,7 +788,13 @@ func (h *Handler) agentUnavailable(w http.ResponseWriter, err error) {
 
 // signedProxy verifies the Panel-signed JWT in ?token=, re-signs it for the
 // target agent and proxies the request (section 8.4).
-func (h *Handler) signedProxy(scope string) http.HandlerFunc {
+//
+// With refreshOwn, a token the gateway minted itself (sourceBackupToken) is
+// re-signed as issued now, once its agent is up: Wings refuses a token issued
+// before it started, and the source agent may have restarted while the
+// restore waited for the target agent and then for it. Tokens the Panel
+// issued keep their claims.
+func (h *Handler) signedProxy(scope string, refreshOwn bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
 		claims, raw, err := jwtx.Verify([]byte(token), []byte(h.Cfg.NodeToken))
@@ -790,6 +812,9 @@ func (h *Handler) signedProxy(scope string) http.HandlerFunc {
 		if err != nil {
 			h.agentUnavailable(w, err)
 			return
+		}
+		if refreshOwn && claims.Issuer == gatewayIssuer {
+			raw = issuedNow(raw)
 		}
 		resigned, err := jwtx.Resign(raw, []byte(t.Token))
 		if err != nil {

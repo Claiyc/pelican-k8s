@@ -1353,7 +1353,10 @@ in-flight work.
   link, expecting Wings to find the archive on its disk; here it is on the source server's agent.
   The gateway therefore adds a `download_url` to such a restore when the source server exists: a
   backup-download JWT for the source server (no user, 15 minutes), signed with the node token, for
-  `GET /download/backup` on the remote API listener (§5.7), which re-signs it for the source agent.
+  `GET /download/backup` on the remote API listener (§5.7), which re-signs it for the source agent. Once
+  that agent is up, the gateway's own token is re-signed as issued then, so a source agent that restarted
+  while the restore waited for the two agents still takes it (Wings refuses tokens issued before it
+  started).
   A link the Panel sets to this node's own `/download/backup` is moved to the same listener: the user's
   download link it sends with every in-place restore, and its restore link while that backup is being
   restored elsewhere (adapter `s3`). Wings in the target

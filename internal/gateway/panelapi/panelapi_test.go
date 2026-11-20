@@ -877,6 +877,56 @@ func TestBackupDownloadForAgents(t *testing.T) {
 	}
 }
 
+// A token the gateway minted is re-signed for the source agent as issued now,
+// so a source agent that restarted since the link was made still takes it.
+// The Panel's tokens, and the public route, keep the claims as they are.
+func TestBackupDownloadRefreshesOwnTokens(t *testing.T) {
+	f := newFixture(t)
+	f.create()
+	f.addPod()
+	old := time.Now().Add(-10 * time.Minute)
+	claims := func(iss string) map[string]any {
+		c := map[string]any{"iat": old.Unix(), "nbf": old.Unix(), "exp": time.Now().Add(time.Minute).Unix(), "jti": "j",
+			"server_uuid": uuid, "backup_uuid": "b", "unique_id": "u", "scope": "backup-download"}
+		if iss != "" {
+			c["iss"] = iss
+		}
+		return c
+	}
+	issuedAt := func(h http.Handler, token string) time.Time {
+		t.Helper()
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+		res, err := http.Get(srv.URL + "/download/backup?token=" + token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		got, _, err := jwtx.Verify([]byte(strings.TrimPrefix(f.calls()[len(f.calls())-1].uri, "/download/backup?token=")), []byte(agentTok))
+		if err != nil || got.IssuedAt == nil {
+			t.Fatalf("agent token: %v %+v", err, got)
+		}
+		return got.IssuedAt.Time
+	}
+	own := signToken(t, nodeToken, claims(gatewayIssuer))
+	if at := issuedAt(f.h.BackupDownload(), own); time.Since(at) > time.Minute {
+		t.Fatalf("a gateway token must be re-issued now, iat = %s", at)
+	}
+	if at := issuedAt(f.h.BackupDownload(), signToken(t, nodeToken, claims("https://panel.example"))); at.Unix() != old.Unix() {
+		t.Fatalf("a Panel token must keep its iat, got %s", at)
+	}
+	if at := issuedAt(f.h.Routes(), own); at.Unix() != old.Unix() {
+		t.Fatalf("the public route must not refresh tokens, got %s", at)
+	}
+	if !strings.Contains(f.h.sourceBackupToken(otherUUID, "b"), ".") {
+		t.Fatal("no token")
+	}
+	minted, _, err := jwtx.Verify([]byte(f.h.sourceBackupToken(otherUUID, "b")), []byte(nodeToken))
+	if err != nil || minted.Issuer != gatewayIssuer {
+		t.Fatalf("minted token: %v %+v", err, minted)
+	}
+}
+
 func TestDeleteKeptBackup(t *testing.T) {
 	f := newFixture(t)
 	f.create()
