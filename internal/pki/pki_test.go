@@ -61,6 +61,32 @@ func TestCARoundTrip(t *testing.T) {
 	}
 }
 
+// checkIssued issues a leaf for usage and checks its key pair, usages,
+// subject, lifetime and chain to ca.
+func checkIssued(t *testing.T, ca *CA, usage Usage, want []x509.ExtKeyUsage) {
+	t.Helper()
+	certPEM, keyPEM, err := ca.Issue("cn", []string{"a.example"}, usage, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := ParseCertificate(certPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cert.ExtKeyUsage, want) || cert.Subject.CommonName != "cn" || cert.IsCA {
+		t.Errorf("usage %v cn %q isCA %v", cert.ExtKeyUsage, cert.Subject.CommonName, cert.IsCA)
+	}
+	if cert.NotAfter.Sub(t0) != LeafLifetime {
+		t.Errorf("lifetime %v", cert.NotAfter.Sub(t0))
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{Roots: ca.Pool(), CurrentTime: t0, KeyUsages: want}); err != nil {
+		t.Errorf("verify: %v", err)
+	}
+}
+
 func TestIssue(t *testing.T) {
 	ca, _ := newCA(t)
 	cases := map[string]struct {
@@ -72,28 +98,7 @@ func TestIssue(t *testing.T) {
 		"server+client": {Server | Client, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}},
 	}
 	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			certPEM, keyPEM, err := ca.Issue("cn", []string{"a.example"}, tc.usage, t0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-				t.Fatal(err)
-			}
-			cert, err := ParseCertificate(certPEM)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(cert.ExtKeyUsage, tc.want) || cert.Subject.CommonName != "cn" || cert.IsCA {
-				t.Errorf("usage %v cn %q isCA %v", cert.ExtKeyUsage, cert.Subject.CommonName, cert.IsCA)
-			}
-			if cert.NotAfter.Sub(t0) != LeafLifetime {
-				t.Errorf("lifetime %v", cert.NotAfter.Sub(t0))
-			}
-			if _, err := cert.Verify(x509.VerifyOptions{Roots: ca.Pool(), CurrentTime: t0, KeyUsages: tc.want}); err != nil {
-				t.Errorf("verify: %v", err)
-			}
-		})
+		t.Run(name, func(t *testing.T) { checkIssued(t, ca, tc.usage, tc.want) })
 	}
 
 	t.Run("capped at the CA's expiry", func(t *testing.T) {
