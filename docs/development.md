@@ -107,7 +107,7 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |
 | Static analysis | CodeQL (Go, the `security-and-quality` suite) on pushes, PRs and weekly. golangci-lint in CI in two stages (`make lint`): the whole tree must pass the linters in the Makefile's `LINT_GATE`, and code changed since the base branch must pass every linter in `.golangci.yml`. Every finding of every linter on the existing code is uploaded as SARIF and fails nothing (`make lint-all` lists the same locally) | Security → Code scanning, CI job *golangci-lint* |
-| Test coverage | The unit tests and the spike (the agent in-process) each write a coverage profile; the CI job *Coverage and quality reports* uploads both to Codecov, which comments on pull requests with the coverage of the changed lines (target 70 %, reported and not enforced, `codecov.yml`). The kind suites run the images and are not counted | Codecov, coverage badge |
+| Test coverage | The unit tests and the spike (the agent in-process) each write a coverage profile; the CI job *Coverage and quality reports* uploads both to Codecov, which comments on pull requests with the coverage of the changed lines (target 70 %, enforced by the required check *codecov/patch*, `codecov.yml`; the project total is reported only). The kind suites run the images and are not counted | Codecov, coverage badge |
 | Maintainability, duplication, complexity, security | SonarQube Cloud, analysed from the same CI job with both coverage profiles and every golangci-lint finding, which it lists next to its own issues (`sonar-project.properties`). The job waits for the quality gate and fails with it, lists the pull request's open issues in its summary, and it is a required check, so a failed gate blocks the merge; pull requests from forks and Dependabot run without the token, skip the analysis and pass | SonarQube Cloud, quality gate badge, CI job *Coverage and quality reports* |
 | Review | CodeRabbit reviews pull requests as an advisory reader (`.coderabbit.yaml`); it skips Dependabot and release PRs and blocks nothing | Pull request comments |
 | Untrusted-input parsers | Native Go fuzzing of the shim protocol, the output ring buffer and the gateway's JWT verification | CI job *Fuzz* |
@@ -122,9 +122,18 @@ Branch protection on `master` requires these checks to pass before a pull
 request can merge, auto-merge included: *Build and test*, *golangci-lint*,
 *Fuzz*, *Spike (agent + shim in Docker)*, *Coverage and quality reports*
 (which carries the SonarQube Cloud quality gate), *Helm charts*, *Analyze Go*,
-*Panel pinned on kind* and the four *Image vulnerability scan* jobs. *Placement
-on kind* is not required: it runs only when the paths it covers change, and a
-required check that never reports would block the pull request.
+*Panel pinned on kind*, *Placement on kind*, the four *Image vulnerability
+scan* jobs, and the checks the code scanning and quality services post:
+*CodeQL* and *Trivy* (no new code scanning alert), *codecov/patch* (the
+changed lines' coverage target) and *SonarCloud Code Analysis*.
+
+A required check must report on every pull request. *Placement on kind* runs on
+every pull request and skips the suite when nothing it builds or drives changed
+(a skipped job counts as passed). *SonarCloud Code Analysis* reports only where
+the analysis runs, which needs `SONAR_TOKEN`: it is a repository secret and a
+Dependabot secret, so Dependabot pull requests are analysed too. A pull request
+from a fork gets neither and cannot produce the check, so a maintainer merges
+it after checking it otherwise.
 
 ### Standing Scorecard findings
 

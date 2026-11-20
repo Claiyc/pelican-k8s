@@ -36,9 +36,9 @@ handlers and the shim all have unit tests to extend.
   `make lint` runs the same two lint stages as CI: the whole tree on the
   baseline linters, your changes on all of them.
 - Codecov, SonarQube Cloud and CodeRabbit comment on the pull request.
-  SonarQube Cloud's quality gate blocks the merge (the CI job *Coverage and
-  quality reports* fails with it); Codecov and CodeRabbit are advisory: read
-  them, fix what is right, say so when it is not.
+  SonarQube Cloud's quality gate and Codecov's coverage target for the changed
+  lines (70 %) block the merge, as do new CodeQL and Trivy alerts; CodeRabbit is
+  advisory: read it, fix what is right, say so when it is not.
 - Do not modify vendored upstream behaviour: Wings changes go to the fork
   branch as opt-in hooks (see docs/development.md) and are proposed upstream.
 - A new or changed chart value also changes the chart's `values.schema.json`
