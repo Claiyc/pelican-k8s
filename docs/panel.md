@@ -17,7 +17,7 @@ No separate worker/scheduler Deployment is needed or wanted.
 
 ```
 charts/pelican-panel/
-  Chart.yaml            name pelican-panel, version 0.1.5, appVersion v1.0.0-rc.3
+  Chart.yaml            name pelican-panel, version 0.1.6, appVersion v1.0.0-rc.4
   values.yaml           fully commented defaults
   values.schema.json    types, allowed values and defaults of every value, checked by Helm
   README.md             every value documented

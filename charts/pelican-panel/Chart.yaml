@@ -8,10 +8,10 @@ description: |
 type: application
 
 # Chart version. Bump on every chart change.
-version: 0.1.5
+version: 0.1.6
 
 # Upstream Pelican Panel release deployed by default.
-appVersion: "v1.0.0-rc.3"
+appVersion: "v1.0.0-rc.4"
 
 keywords:
   - pelican
