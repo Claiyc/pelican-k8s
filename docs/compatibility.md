@@ -12,6 +12,7 @@
 | Egg config file rewriting | ✅ | Wings parser; the default allocation IP is presented as `0.0.0.0`, the real IP as `SERVER_PUBLIC_IP` |
 | Installs and reinstalls | ✅ | Kubernetes Job with the egg installer image; exit codes ignored unless `strictExitCode` |
 | Backups (wings, s3) and restore | ✅ | Local archives are lost when the agent pod is recreated or moves to another node |
+| Create a server from a backup | ⚠️ | From an S3 backup, a local backup of a server on this cluster (the gateway links the new server's agent to the source server's agent, ARCHITECTURE.md §8.7), another node's local backup or a URL. A local backup kept after its server was deleted is gone with that server's agent pod, so restoring or downloading it fails with `404`; kept S3 backups work. A Wings node on a private network is reachable only with an `inClusterEgress.additional` entry or a narrower `blockedEgressCIDRs` |
 | Activity log | ✅ | Per-agent SQLite on the volume, forwarded through the gateway |
 | Suspension, deauthorize | ✅ | |
 | Image change at next start | ✅ | A start from stopped creates a game pod with the current image, digest pinned. A running server's pod is replaced once the process is offline. A restart without an image change reuses the pod and its digest, where Wings would pull the tag again |

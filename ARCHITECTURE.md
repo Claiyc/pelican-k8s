@@ -215,6 +215,7 @@ not intercept is forwarded to the agent unchanged. Every `/api/servers/:s*` rout
 | `GET /api/system/utilization` | Totals are the summed node allocatable memory and ephemeral storage; usage is the sum of the servers' `status.usage` |
 | `GET /api/servers` | List from CRs plus the state cache |
 | `POST /api/servers` | Server create flow (§8.1); spec only. For an existing CR: sync plus a new install generation (not a reinstall) |
+| `DELETE /api/backups/:s/:b` | A backup kept after its server was deleted (§8.7): proxied to the agent while the server exists, `404` otherwise |
 | `POST /api/deauthorize-user` | Forward `{user, servers: [uuid]}` to the agent of each listed server, or of every server when `servers` is empty; a server whose agent is not available is skipped (§5.3). Wings in each agent denylists the user, closes every websocket of the server (of all users) and closes that user's SFTP sessions |
 | `POST /api/transfers` | Incoming transfer (§8.10): a JWT in `Authorization: Bearer`, verified with the node token (`401` without it; `403` for a bad signature, an expired token, a scope other than `transfer` or a `sub` that is not a UUID). The server is created from the Panel without an install (`404` when the Panel does not know it, `409` when it exists here unmarked or an earlier attempt is still being removed), and the request is re-signed for its agent and proxied (`503` when the agent is not up within 3 minutes) |
 | `DELETE /api/transfers/:s`, `POST`/`DELETE /api/servers/:s/transfer` | `501` |
@@ -223,9 +224,10 @@ not intercept is forwarded to the agent unchanged. Every `/api/servers/:s*` rout
 | `POST /api/servers/:s/sync` | Re-fetch the Panel configuration, update `spec.panel` and the env Secret; `204` (§8.6) |
 | `POST /api/servers/:s/install`, `/reinstall` | Re-sync the configuration, fetch the install payload, create the script ConfigMap, bump `spec.install.generation` (§8.2). `/reinstall` answers `409` within 3 s of the last power action |
 | `POST /api/servers/:s/power` | Re-sync the configuration on `start`/`restart`, then patch `spec.power` (§8.3); `202`. `400` for starting a suspended server, `422` for an unknown action |
-| `POST /api/servers/:s/commands`, `/ws/deny`, `GET /logs`, `/install-logs`, `/files/*`, `/backup*`, anything else under `/api/servers/:s/` | Proxy to the agent with the agent token |
+| `POST /api/servers/:s/backup`, `/backup/:b/restore` | Proxy to the agent and record the backup as pending (§8.7). A restore of another server's local backup gets a link to it (§8.7) |
+| `POST /api/servers/:s/commands`, `/ws/deny`, `GET /logs`, `/install-logs`, `/files/*`, `DELETE /backup/:b`, anything else under `/api/servers/:s/` | Proxy to the agent with the agent token |
 | `GET /api/servers/:s/ws` | Websocket proxy (§5.5) |
-| `GET /download/file`, `/download/backup`, `POST /upload/file` | Verify the JWT with the node token (`403` for a bad signature or an expired token, `404` for a wrong scope or a missing `server_uuid`), re-sign it with the agent token of the `server_uuid` claim (§5.4) and proxy to that agent, which runs Wings' scope, expiry, denylist and (uploads) one-time checks. `HEAD` and `Range` requests pass through, so downloads can be resumed |
+| `GET /download/file`, `/download/backup`, `POST /upload/file` | Verify the JWT with the node token (`403` for a bad signature or an expired token, `404` for a wrong scope, a missing `server_uuid` or a server this node does not have), re-sign it with the agent token of the `server_uuid` claim (§5.4) and proxy to that agent, which runs Wings' scope, expiry, denylist and (uploads) one-time checks. `HEAD` and `Range` requests pass through, so downloads can be resumed |
 | `GET /healthz` | Liveness and readiness of the gateway |
 
 **Response headers:** every response carries `User-Agent: Pelican Wings/v<advertisedVersion> (id:<token_id>)`.
@@ -343,6 +345,7 @@ the `token_id.token`, maps it to a server, and answers as a Panel that owns exac
 | `GET /backups/{b}?size=`, `POST /backups/{b}`, `POST /backups/{b}/restore` | Forward when `b` is in `status.backups.pending` for the caller (learned from the proxied backup and restore calls, §8.7); a result post removes the entry; unknown backups get `404` |
 | `POST /sftp/auth` | Verify the SFTP session credential (§5.6) and answer with the Panel response sealed in it when it is for the caller's server; never forwarded |
 | `POST /servers/{uuid}/transfer/{success,failure}` | Forward to the Panel, then finish the incoming transfer (§8.10): a failure always deletes the transfer's CR, a success the Panel refuses is settled by its server list; a Panel `4xx` is passed through, an unreachable Panel is answered `502` |
+| `GET /download/backup?token=` | Not an agent call and not authenticated with the agent token: the link a restore of another server's local backup downloads from (§8.7). Served like the Panel-facing `/download/backup` (§5.2): the JWT is verified with the node token and re-signed for the agent of its `server_uuid` |
 | anything else | `404`, logged as a warning |
 
 The gateway answers `container/status` and the install result with `204` whether or not forwarding them
@@ -1340,9 +1343,31 @@ in-flight work.
 | **s3** | The agent creates the archive on the scratch volume → remote API `GET /backups/{b}?size=` (forwarded by the gateway) → Panel presigned part URLs → the **agent uploads to S3** → `POST /backups/{b}` via the gateway → temp file removed. An in-cluster S3 needs an `inClusterEgress.additional` entry (§12.4) |
 
 - Backups and restores are Wings actions proxied by the gateway (`POST /backup`,
-  `POST /backup/:b/restore`, `DELETE /backup/:b`).
+  `POST /backup/:b/restore`, `DELETE /backup/:b`). The Panel's `pelican_config` (the server's
+  configuration) travels in the backup request; Wings stores it as the archive's first entry.
 - **Restore:** Panel → gateway → agent. The agent runs Wings' `RestoreBackup` (an S3 `download_url` is
   fetched by the agent) and reports through the remote API.
+- **Create a server from a backup.** The Panel creates the server with `skip_scripts`, waits for the
+  (skipped) install's report and then restores the backup into it, so a restore may name a backup of
+  another server. For a local backup the Panel sees one node and sends `source_server` without a
+  link, expecting Wings to find the archive on its disk; here it is on the source server's agent.
+  The gateway therefore adds a `download_url` to such a restore when the source server exists: a
+  backup-download JWT for the source server (no user, 15 minutes), signed with the node token, for
+  `GET /download/backup` on the remote API listener (§5.7), which re-signs it for the source agent.
+  A link the Panel sets to this node's own `/download/backup` (its restore link while that backup is
+  being restored elsewhere, sent with adapter `s3`) is moved to the same listener. Wings in the target
+  agent, not finding the backup locally, streams it agent → gateway → agent; the remote API listener
+  is the one destination agents already reach (§12.4). The agent adds the gateway's host to Wings'
+  `restore_host_allowlist`, so an `s3`-adapter link to that private address is allowed, and with
+  `tls.enabled` its default HTTP transport, which Wings' restore client is built from, trusts the
+  internal CA bundle as read at agent start (§12.6). A backup in S3, or a local backup on a Docker
+  Wings node, is downloaded from the Panel's link; a Wings node on a private network needs an
+  `inClusterEgress.additional` entry or a narrower `blockedEgressCIDRs` (§12.4). Other nodes restore
+  local backups of this cluster through the gateway's public `/download/backup`.
+- **Kept backups.** A local backup lives on the agent's scratch volume and goes with the agent pod,
+  so a backup the Panel keeps when it deletes a server (`?keep_backups=1`, §8.8) is gone here: a
+  restore of it fails with Wings' `404`, its download is a `404`, and `DELETE /api/backups/:s/:b` is a
+  `404`, which the Panel accepts. Kept S3 backups are the Panel's and stay usable.
 - The gateway adds the backup to `status.backups.pending` on backup and restore requests, which lets
   the agent's remote-API calls for it through (§5.7), and removes it when the agent posts the result
   or refuses the request (any answer other than 2xx, or no agent within the wait). Each entry names
@@ -1354,7 +1379,8 @@ in-flight work.
 
 ### 8.8 Delete server
 
-1. Panel `DELETE /api/servers/:s`. The gateway deletes the CR and answers `204`.
+1. Panel `DELETE /api/servers/:s`. The gateway deletes the CR and answers `204`. `?keep_backups=1`
+   changes nothing here: the local backups go with the agent pod (§8.7).
 2. Operator finalizer, by the class `deletionPolicy` (`Delete` when the class is missing). Agent calls
    are made only while the agent pod is ready and not terminating; their failures are recorded as events and
    do not block the deletion.
@@ -1778,6 +1804,11 @@ and the agent is SSH and needs none of it.
   every 30 s and switch to a renewed pair or bundle without a restart; Kubernetes updates mounted
   Secrets within about a minute. Clients take the bundle per connection, and the shim reads it on every
   connection.
+- **Restore downloads.** Wings builds its backup restore client from Go's default HTTP transport,
+  which the agent makes trust the system roots and the bundle as it reads it at start. That is the one
+  exception to per-connection bundles: an agent started before step 1 of a CA rotation cannot verify
+  the gateway's reissued certificate for a restore of another server's local backup (§8.7) until its
+  pod is replaced.
 - **CA rotation.** With `tls.ca.rotation.enabled` (default `false`) the leader replaces the CA once it
   enters the last third of its lifetime (`tls.ca.lifetime`, ten years by default) in three steps, each
   recorded on the CA Secret (`pelican-k8s.io/ca-rotation`, `-since`) and each waiting
