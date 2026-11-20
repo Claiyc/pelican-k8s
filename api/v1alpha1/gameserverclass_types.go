@@ -263,7 +263,7 @@ type InstallJobSpec struct {
 	// +kubebuilder:default=pelican-installer
 	ServiceAccountName string             `json:"serviceAccountName,omitempty"`
 	Resources          ContainerResources `json:"resources,omitempty"`
-	// StrictExitCode makes a non-zero script exit code fail the install (Wings ignores it).
+	// StrictExitCode makes a non-zero script exit code fail the install, as in Wings.
 	StrictExitCode bool `json:"strictExitCode,omitempty"`
 	// +kubebuilder:default=3600
 	ActiveDeadlineSeconds int64 `json:"activeDeadlineSeconds,omitempty"`

@@ -1356,8 +1356,10 @@ in-flight work.
   `GET /download/backup` on the remote API listener (§5.7), which re-signs it for the source agent.
   A link the Panel sets to this node's own `/download/backup` (its restore link while that backup is
   being restored elsewhere, sent with adapter `s3`) is moved to the same listener. Wings in the target
-  agent, not finding the backup locally, streams it agent → gateway → agent; the remote API listener
-  is the one destination agents already reach (§12.4). The agent adds the gateway's host to Wings'
+  agent, not finding the backup locally, downloads it agent → gateway → agent; the remote API listener
+  is the one destination agents already reach (§12.4). A restore that truncates the server's files (as
+  the Panel's always does for a new server) first saves the whole archive to the target agent's scratch
+  volume and checks it, so that volume must hold the archive (§10.1). The agent adds the gateway's host to Wings'
   `restore_host_allowlist`, so an `s3`-adapter link to that private address is allowed, and with
   `tls.enabled` its default HTTP transport, which Wings' restore client is built from, trusts the
   internal CA bundle as read at agent start (§12.6). A backup in S3, or a local backup on a Docker

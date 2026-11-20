@@ -1193,7 +1193,7 @@
               "default": {"cpu": "1", "memory": "1Gi"}
             },
             "strictExitCode": {
-              "description": "Fail the install when the script exits non-zero. Wings ignores the exit code, and many eggs rely on that.",
+              "description": "Fail the install when the script exits non-zero, as Wings does.",
               "type": "boolean",
               "default": false
             },
