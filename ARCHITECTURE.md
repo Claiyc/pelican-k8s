@@ -486,8 +486,11 @@ Everything else the agent serves is Wings' router: power, commands, files, backu
 downloads and uploads, `deauthorize-user`, `ws/deny`, an incoming transfer (`POST /api/transfers`, §8.10),
 and the SFTP server on `:2022`.
 
-**Hooks.** The agent plugs into Wings through six opt-in hooks on the `pelican-k8s-hooks` branch of
-[Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`:
+**Hooks.** The agent plugs into Wings through six opt-in hooks. Hooks 1 to 5 are in upstream Wings since
+[pelican/wings#223](https://github.com/pelican/wings/pull/223). Hook 6 is proposed in
+[pelican/wings#264](https://github.com/pelican/wings/pull/264); until it is merged, `go.mod` replaces Wings
+with a commit of the `pelican-k8s-hooks` branch of [Claiyc/wings](https://github.com/Claiyc/wings), which is
+upstream `main` plus that hook:
 
 | # | Hook | Used by the agent for |
 |---|---|---|
@@ -496,7 +499,7 @@ and the SFTP server on `:2022`.
 | 3 | `server.Installer` interface, set with `server.WithInstaller`; Wings takes the install lock before calling it | `internal/agent/installer`, the Job-backed installer (§8.2) |
 | 4 | Package `boot` (`boot.InitializeDatabase`, `boot.Scheduler`) over Wings' `internal/database` and `internal/cron` | Activity database and cron scheduler |
 | 5 | `server.WithTransfersIntoExistingServers`: `POST /api/transfers` fills a server the manager already has instead of refusing it, if that server is offline, not busy and its data directory empty; the transfer holds the server's power lock (`Server.LockForIncomingTransfer`), and a failed one keeps the server and empties the directory again | Incoming transfers into the agent's server (§8.10) |
-| 6 | `server.WithRestoreTLSConfig` (`func() *tls.Config`): called for every restore that downloads its archive; a non-nil result replaces the TLS configuration the restore client takes from `http.DefaultTransport`, and the restore client's address checks still apply | With `tls.enabled`, trust in the gateway's certificate for a restore of another server's local backup (§8.7, §12.6) |
+| 6 | `server.WithRestoreTLSConfig` (`func() *tls.Config`, fork only until pelican/wings#264 is merged): called for every restore that downloads its archive; a non-nil result replaces the TLS configuration the restore client takes from `http.DefaultTransport`, and the restore client's address checks still apply | With `tls.enabled`, trust in the gateway's certificate for a restore of another server's local backup (§8.7, §12.6) |
 
 **Configuration.** ConfigMap `pelican-agent-config` (`config.yml`, rendered from the chart's `agent.*`
 values, `agent.extra` merged in) plus the token Secret:
@@ -1981,8 +1984,9 @@ pelican-k8s/
 - **Go:** 1.27 (`go.mod`).
 - **Images:** `gateway`, `operator`, `agent` on `gcr.io/distroless/static-debian12:nonroot`; `shim` on
   `scratch` (UID 65534). Multi-arch (`linux/amd64`, `linux/arm64`).
-- **Wings:** `go.mod` requires `github.com/pelican/wings` and replaces it with a pinned commit of the
-  `pelican-k8s-hooks` branch of `github.com/Claiyc/wings` (§6.3).
+- **Wings:** `go.mod` requires an upstream `github.com/pelican/wings` commit and, until pelican/wings#264
+  is merged, replaces it with a pinned commit of the `pelican-k8s-hooks` branch of `github.com/Claiyc/wings`
+  (§6.3).
 - **Licensing:** Wings (MIT) is a dependency; the Panel (AGPL-3.0) runs unmodified as a separate service.
 - **Keeping the API surface current:**
   - Request, response and token types come from the Wings module.

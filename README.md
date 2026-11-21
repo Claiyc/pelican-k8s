@@ -104,8 +104,10 @@ kubectl -n pelican-servers describe gameserver gs-<uuid>   # conditions and even
 ## How it relates to Wings
 
 The agent imports [Wings](https://github.com/pelican/wings) as a Go module and
-plugs into it through a few opt-in hooks, kept on a branch of the
-[Claiyc/wings](https://github.com/Claiyc/wings) fork. CI checks compatibility
+plugs into it through a few opt-in hooks. Most are in upstream Wings; the last
+one ([pelican/wings#264](https://github.com/pelican/wings/pull/264)) is on a
+branch of the [Claiyc/wings](https://github.com/Claiyc/wings) fork until it is
+merged. CI checks compatibility
 with the pinned Wings on every run and with the tip of that branch every
 night. [docs/development.md](docs/development.md#wings-as-a-dependency) has
 the details.

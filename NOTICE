@@ -6,7 +6,8 @@ This product is licensed under the Apache License, Version 2.0.
 It embeds Pelican Wings (https://github.com/pelican/wings), which is
 licensed under the MIT License (Copyright (c) 2018-2026 Pelican and its
 contributors, originally Pterodactyl). The Wings source is used unmodified as
-a Go module dependency; the opt-in hooks it needs are carried on the
+a Go module dependency. Until https://github.com/pelican/wings/pull/264 is
+merged, the one opt-in hook not yet upstream is carried on the
 https://github.com/Claiyc/wings pelican-k8s-hooks branch under the same MIT
 License. See go.mod for the pinned version.
 

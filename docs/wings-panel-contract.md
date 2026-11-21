@@ -8,7 +8,7 @@ Wings node.
 
 | Repo | Commit | Notes |
 |---|---|---|
-| `github.com/pelican/wings` | `b32b813` (2026-11-19, `v1.0.0-rc.3`) | Go module `github.com/pelican/wings`, MIT; Docker client `github.com/moby/moby` |
+| `github.com/pelican/wings` | `c89076f` (2026-11-21, after `v1.0.0-rc.3`; `router/router.go` and `remote/` unchanged since `b32b813`) | Go module `github.com/pelican/wings`, MIT; Docker client `github.com/moby/moby` |
 | `github.com/pelican/panel` | `cb455ad` (2026-11-19, `v1.0.0-rc.4`) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still at release candidates

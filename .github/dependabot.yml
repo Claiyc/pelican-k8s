@@ -11,7 +11,8 @@ updates:
       golang-x:
         patterns: ["golang.org/x/*"]
     ignore:
-      # Wings is pinned to the hooks fork branch; bumped by hand (docs/development.md).
+      # Wings is pinned by hand, with a fork replace until pelican/wings#264 is
+      # merged (docs/development.md).
       - dependency-name: github.com/pelican/wings
       - dependency-name: github.com/Claiyc/wings
   - package-ecosystem: github-actions

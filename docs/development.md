@@ -51,8 +51,9 @@ created.
 ## Wings as a dependency
 
 The agent imports `github.com/pelican/wings`. Six opt-in hooks are needed
-(ARCHITECTURE.md 6.3) and live on the `pelican-k8s-hooks` branch of the
-[Claiyc/wings](https://github.com/Claiyc/wings) fork, pinned in `go.mod`:
+(ARCHITECTURE.md 6.3). Hooks 1 to 5 are upstream since
+[pelican/wings#223](https://github.com/pelican/wings/pull/223); hook 6 is
+proposed in [pelican/wings#264](https://github.com/pelican/wings/pull/264).
 
 1. `server.WithEnvironmentFactory` / `server.WithInstaller` options on the server manager (Docker stays the default)
 2. `server.ImageAndStopConfigurable` and `server.Attachable` interfaces for the image, stop configuration and attach calls
@@ -61,12 +62,22 @@ The agent imports `github.com/pelican/wings`. Six opt-in hooks are needed
 5. `server.WithTransfersIntoExistingServers`, so an incoming transfer fills the agent's (empty, offline) server under its power lock instead of being refused
 6. `server.WithRestoreTLSConfig`, the TLS configuration of each backup restore download, so the agent's trust in the gateway follows the internal CA bundle
 
-Bumping Wings: bring `pelican-k8s-hooks` up to date with upstream, push, point
-the `replace` line at the new tip
-(`go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@<commit> && go mod tidy`),
+`go.mod` requires an upstream Wings commit. Until #264 is merged it also
+replaces Wings with a commit of the `pelican-k8s-hooks` branch of the
+[Claiyc/wings](https://github.com/Claiyc/wings) fork, which is upstream `main`
+plus hook 6 and nothing else.
+
+Bumping Wings: merge upstream into `pelican-k8s-hooks`, push, point the
+`require` at the upstream commit
+(`go get github.com/pelican/wings@<commit>`) and the `replace` line at the new
+tip (`go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@<commit> && go mod tidy`),
 run `go test ./test/upstream/ ./...` and the spike, and update the upstream
 basis in `docs/wings-panel-contract.md`. The *Upstream drift* workflow tests
 the tip of the hooks branch nightly and warns when the `replace` is behind it.
+
+Once #264 is merged: `go mod edit -dropreplace github.com/pelican/wings`,
+`go get github.com/pelican/wings@<merge commit> && go mod tidy`, and point the
+*Upstream drift* workflow and Dependabot at upstream Wings.
 
 ## Code map
 
@@ -102,7 +113,7 @@ the tip of the hooks branch nightly and warns when the `replace` is behind it.
 | What | How | Where to look |
 |---|---|---|
 | Go modules, GitHub Actions, base images | Dependabot daily PRs (`.github/dependabot.yml`, Kubernetes libraries grouped) | Pull requests |
-| Wings | Pinned by hand (fork branch + `replace`); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it, opens an issue when the latest Wings release is not merged into the pinned commit and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
+| Wings | Pinned by hand (upstream commit, plus a fork `replace` until pelican/wings#264 is merged); the nightly *Upstream drift* workflow tests against the tip of `pelican-k8s-hooks`, warns when the pin is behind it, opens an issue when the latest Wings release is not merged into the pinned commit and opens or updates an `upstream` issue when it breaks | Issues labelled `upstream` |
 | Pelican Panel | The same workflow runs `hack/check-panel-contract.sh` against the latest Panel image (diffing it with `docs/wings-panel-contract.md`), compares the chart `appVersion` with the latest Panel release and opens an issue | Issues labelled `upstream` |
 | Known CVEs in Go dependencies | `govulncheck` in CI on every push and PR; fails when a reachable vulnerability has a fixed version, findings without a fix go to the step summary | CI job *Build and test* |
 | CVEs in the container images | Trivy scans all four images on every push, HIGH/CRITICAL, fixed vulnerabilities only, uploaded as SARIF | Security → Code scanning |

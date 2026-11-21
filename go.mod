@@ -2,7 +2,7 @@ module github.com/Claiyc/pelican-k8s
 
 go 1.27.4
 
-replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261120204157-584567a02d4a
+replace github.com/pelican/wings => github.com/Claiyc/wings v0.0.0-20261121222400-4c7c57c66606
 
 tool sigs.k8s.io/controller-tools/cmd/controller-gen
 
@@ -14,7 +14,7 @@ require (
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/pelican/wings v1.0.0-beta9
+	github.com/pelican/wings v1.0.0-rc.3.0.20261121221833-c89076fe42af
 	github.com/pkg/sftp v1.13.12
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.59.0
