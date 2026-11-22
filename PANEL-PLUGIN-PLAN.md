@@ -56,7 +56,8 @@ Panel version the chart deploys (`v1.0.0-rc.4`):
 | Permissions | `Role::registerCustomPermissions`, `Subuser::registerCustomPermissions` | best effort |
 | Settings page | `HasPluginSettings` (`getSettingsForm`, `getSettingsFormData`, `saveSettings`) | stable |
 | Migrations, views, translations, providers, commands | auto-discovered | stable |
-| Install | upload a zip under Plugins, or copy into `plugins/` and run `php artisan p:plugin:install`; installs run on the queue worker | |
+| Install | Admin → Plugins → Import (zip upload or a URL to a zip), Browse (Pelican Hub), or copy into `plugins/` and run `php artisan p:plugin:install`; installs, updates and uninstalls run on the queue worker (§4.6) | |
+| Update | `update_url` points to a JSON feed keyed by Panel version (§4.6) | |
 
 The docs call the plugin system "still in development". Internal services, models and Filament
 internals may change in any Panel release, so the plugin pins `panel_version` and is tested against
@@ -131,12 +132,70 @@ applied by the gateway at creation:
 - editable with `kubectl` or GitOps; the plugin only offers editing when the ConfigMap has no Helm or
   Argo CD ownership labels (UI-11)
 
-### 4.6 Code location and release
+### 4.6 Packaging, distribution and updates
 
-The plugin lives in this repository under `panel-plugin/pelican-k8s/`, because the extension API and
-the plugin change together. Each release attaches `pelican-k8s-panel-plugin-<version>.zip`. The plugin
-version equals the pelican-k8s version; `panel_version` matches the chart's Panel `appVersion`; the
-plugin category is `plugin`. The plugin has no database migrations (§9).
+The install and update behaviour below was read from the Panel's source (`app/Models/Plugin.php`,
+`app/Services/Helpers/PluginService.php`, `app/Filament/Admin/Resources/Plugins/`) on its `main`
+branch. P0 checks it against the tag the chart deploys.
+
+**Code location.** The plugin lives in this repository under `panel-plugin/pelican-k8s/`, because the
+extension API and the plugin change together.
+
+**What the Panel does on install, update and uninstall, and what follows for the plugin:**
+
+| Panel behaviour | Consequence for the plugin |
+|---|---|
+| Install runs `composer require` in the Panel's base path for the `composer_packages` of every loaded plugin; uninstall runs `composer remove` | No `composer_packages`. They need `composer` and a writable app directory in the container, and change the Panel's own dependencies. The plugin uses only what the Panel ships (Laravel's HTTP client, Filament) |
+| Install and update run the plugin's migrations and its seeder; uninstall resets the migrations | No migrations, no seeder. Nothing the plugin keeps needs a table: the toggles of UI-14 go to `.env`, which the chart keeps on `/pelican-data` |
+| Install and uninstall run `yarn install` and `yarn build` for the whole Panel; for category `plugin` a failed build is only logged | No frontend assets: Filament components and Blade only (§5.1), so the plugin does not depend on that build |
+| Status and load order are written into `plugins/<id>/plugin.json` under `meta`; the chart keeps `plugins/` on `/pelican-data` | Anything that replaces the plugin folder (an update, the chart, §9) has to keep `meta`, or the Panel treats the plugin as not installed |
+| `panel_version` is checked at boot only: a mismatch marks the plugin `incompatible`; install and update check nothing | `panel_version` is the exact Panel version the chart deploys (no caret range across release candidates), and the update feed offers a plugin version only for Panel versions it was tested with |
+| `api_version` above the Panel's supported version marks the plugin `incompatible` | `api_version: 1` |
+| `panels` limits which Filament panels load the plugin | `panels: ["admin", "server"]` |
+| A plugin that throws while booting is marked `crashed`; `PANEL_PLUGIN_SAFE_MODE=true` boots the Panel without any plugin | docs/operations.md names both for a Panel that fails after installing or updating the plugin |
+
+**Package.** Each release attaches `pelican-k8s-panel-plugin-<version>.zip` and its SHA-256. The zip
+holds the folder `pelican-k8s/` with `plugin.json` (without `meta`), `src/`, `lang/` and
+`resources/views/`. The Panel accepts `plugin.json` at the zip root or one directory deep, takes the
+id from `plugin.json` (`pelican-k8s` matches its id pattern `^[a-z0-9][a-z0-9._-]*$`) and moves the
+folder to `plugins/pelican-k8s`. Category `plugin`. The plugin version is the pelican-k8s version.
+
+**Channels.**
+
+| Channel | How an admin uses it | Integrity |
+|---|---|---|
+| GitHub release (P0) | Admin → Plugins → Import, either from URL (the release asset URL; the Panel requires the URL to end in `.zip`) or by uploading the zip, then Install | Import checks no checksum; docs/install.md gives the SHA-256 and a command to verify it before uploading |
+| Update feed (P0) | The Panel shows Update in its plugin list when the feed offers a newer version | The Panel checks `sha256` when the feed has it; the feed always has it |
+| Pelican Hub (decided after P1, §9) | Admin → Plugins → Browse, install from the Hub | The Hub requires a checksum and HTTPS for in-panel installs |
+| `charts/pelican-panel` (open, §9) | a chart value installs the plugin with the Panel | |
+
+The official plugin repository (`pelican/plugins`) accepts no new plugins, so it is no channel.
+
+**Update feed.** `plugin.json` sets `update_url` to
+`https://github.com/Claiyc/pelican-k8s/releases/latest/download/panel-plugin-update.json`. The Panel
+fetches it (5 s timeout, cached for 10 minutes), takes the entry whose key is its exact version, falls
+back to the key `"*"`, and offers the update when `version_compare` finds the entry's `version`
+newer than the installed one. The release workflow generates the feed from the compatibility matrix
+in docs/compatibility.md, one key per tested Panel version and no `"*"`:
+
+```json
+{
+  "v1.0.0-rc.4": {
+    "version": "2.5.0",
+    "download_url": "https://github.com/Claiyc/pelican-k8s/releases/download/v2.5.0/pelican-k8s-panel-plugin-2.5.0.zip",
+    "sha256": "<64 hex digits>"
+  }
+}
+```
+
+A Panel version without a key is offered no update, which is correct: the Panel would install it and
+mark it `incompatible` at the next boot. The key format (with or without the leading `v`, as the Panel
+reports `config('app.version')`) and whether the Panel's HTTP client follows the `latest/download`
+redirect are checked in P0.
+
+**Plugin and gateway versions drift.** An admin updates the plugin in the Panel independently of the
+cluster. A plugin newer than its gateway hides what the gateway's `/info` capabilities do not list
+(§4.3); a gateway keeps every `/v1` route as long as it serves `/v1`, so an older plugin keeps working.
 
 ### 4.7 Gateway unreachable
 
@@ -447,7 +506,7 @@ pelican-k8s node, every page has a node filter, defaulting to all.
   users" (UI-02, default on). Nothing else: everything else comes from the cluster.
 - **States**: no pelican-k8s node found → a warning explaining what detection calls and linking to the
   install docs.
-- **Data**: `GET /info` per node; toggles stored as described in §9.
+- **Data**: `GET /info` per node; the toggles are stored in `.env` (§4.6).
 - **Phase**: P0.
 
 #### UI-15 Permissions
@@ -549,8 +608,10 @@ the plugin gets a CI job that starts the chart's Panel image with the plugin ins
 gateway and checks that every page renders.
 
 - **P0 Foundation**: `/info` and the extension API's routing and auth; plugin skeleton (`plugin.json`,
-  panels `admin` and `server`), node detection (§4.2), UI-03 (versions), UI-14, UI-15; release zip;
-  CI job. Done when the plugin installs into the chart's Panel and shows UI-03 for a kind cluster.
+  panels `admin` and `server`), node detection (§4.2), UI-03 (versions), UI-14, UI-15; release
+  workflow for the zip, its SHA-256 and the update feed (§4.6); install and update docs; CI job. Done
+  when the plugin installs into the chart's Panel from the release URL, updates through the feed, and
+  shows UI-03 for a kind cluster.
 - **P1 Status**: `/servers`, `/servers/{uuid}`, events; reason catalog with user and admin texts;
   UI-01, UI-04, UI-05 sections 1 to 6.
 - **P2 Allocations**: `/allocations/check` (§7), UI-06, UI-07, UI-02, UI-03's allocation checks.
@@ -560,14 +621,21 @@ gateway and checks that every page renders.
 
 ## 9. Open questions
 
-- **Settings storage.** `HasPluginSettings` examples write to `.env`. In the chart's Panel the `.env`
-  location and whether it survives a pod restart have to be checked; otherwise UI-14's two toggles
-  live in the Panel's settings table or a plugin migration (and then the uninstall behaviour of
-  migrations, which the docs do not describe, matters).
+- **Install cost in the container.** Every plugin install and uninstall runs `yarn install` and
+  `yarn build` for the whole Panel (§4.6). Whether the upstream image has `yarn`, how long the build
+  takes on the queue worker, and whether a failed build leaves the Panel's assets intact is measured
+  in P0.
+- **Pelican Hub listing.** A listing gives in-panel install from Browse. The Hub needs a Discord
+  account, reviews every version, installs only free plugins from the Panel, and its terms forbid
+  undisclosed remote calls, so the listing has to state that the plugin calls the gateway of each
+  pelican-k8s node with that node's token. Decided after P1, when the plugin does something worth
+  listing.
 - **className through sync.** The gateway builds a server's desired `GameServer` with the default
   class. Before P4, confirm that updates keep an existing `spec.className` and add a test for it.
-- **Installing with the chart.** Whether `charts/pelican-panel` should offer to install the plugin (an
-  init container placing it in `plugins/` and running `p:plugin:install`, which runs on the queue).
+- **Installing with the chart.** Whether `charts/pelican-panel` should offer to install the plugin: an
+  init container placing the release zip's folder in `plugins/` when the version differs, keeping
+  `meta` in `plugin.json`, and running `p:plugin:install` only while the plugin is not installed.
+  Without that care every pod start would reinstall it (composer, migrations, `yarn build`).
 - **Creating allocations.** UI-07 creates allocations the way the Panel's form does. Whether that goes
   through a Panel service class (internal, may change) or the model directly is decided in P2.
 - **Several gateways.** A Panel can have several pelican-k8s nodes (several clusters). The node filter
