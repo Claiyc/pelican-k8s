@@ -23,7 +23,10 @@ jobs:
           go-version-file: go.mod
       - name: Require the tip of Wings main
         run: |
-          go get github.com/pelican/wings@main
+          # Resolve main to one pseudo-version first, so the build and the
+          # report below use the same commit.
+          tip=$(go list -m -f '{{.Version}}' github.com/pelican/wings@main)
+          go mod edit -require "github.com/pelican/wings@$tip"
           go mod tidy
       - name: Report a pin that is behind main
         run: |
