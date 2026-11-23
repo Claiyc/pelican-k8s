@@ -39,8 +39,8 @@ handlers and the shim all have unit tests to extend.
   SonarQube Cloud's quality gate and Codecov's coverage target for the changed
   lines (70 %) block the merge, as do new CodeQL and Trivy alerts; CodeRabbit is
   advisory: read it, fix what is right, say so when it is not.
-- Do not modify vendored upstream behaviour: Wings changes go to the fork
-  branch as opt-in hooks (see docs/development.md) and are proposed upstream.
+- Do not modify vendored upstream behaviour: Wings changes are proposed to
+  pelican/wings as opt-in hooks (see docs/development.md).
 - A new or changed chart value also changes the chart's `values.schema.json`
   (type, allowed values, default and a description); Helm rejects values the
   schema does not list.

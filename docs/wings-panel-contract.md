@@ -8,7 +8,7 @@ Wings node.
 
 | Repo | Commit | Notes |
 |---|---|---|
-| `github.com/pelican/wings` | `b32b813` (2026-11-19, `v1.0.0-rc.3`) | Go module `github.com/pelican/wings`, MIT; Docker client `github.com/moby/moby` |
+| `github.com/pelican/wings` | `27f67c8` (2026-11-23, after `v1.0.0-rc.3`) | Go module `github.com/pelican/wings`, MIT; Docker client `github.com/moby/moby` |
 | `github.com/pelican/panel` | `cb455ad` (2026-11-19, `v1.0.0-rc.4`) | Laravel 13 / Filament 5, AGPL-3.0 |
 
 Paths below are relative to the respective repo root. Pelican is still at release candidates
@@ -132,7 +132,7 @@ Legend for **Scope**: **N** = node-scoped; **S** = server UUID in path; **T** = 
 | GET | `/api/system/utilization` | 135 | N | `Node.php:660-664` (`memory_total`, …) |
 | GET | `/api/servers` | 136 | N | `DaemonServerRepository::getStates` (5 s; the node's mass-action table) reads `configuration.uuid` and `state` of each entry |
 | POST | `/api/servers` | 137 | N (UUID in body) | `DaemonServerRepository::create {uuid, start_on_completion}`. `409` when the node already has the UUID (`router/router_system.go:171-177,194-200`). On a connection error or any 4xx/5xx the Panel force-deletes the server it just stored (`ServerCreationService.php:128-138`) |
-| DELETE | `/api/backups/:server/:backup` | 140 | N (UUIDs in path; the server need not exist) | `DaemonBackupRepository::deleteKept` (§2.4). Deletes `<backup_dir>/<server>/<backup>.tar.gz`: `204`, `404` when the node does not have it, `400` for a non-canonical UUID (`router/router_server_backup.go:278-307`) |
+| DELETE | `/api/backups/:server/:backup` | 140 | N (UUIDs in path; the server need not exist) | `DaemonBackupRepository::deleteKept` (§2.4). Deletes `<backup_dir>/<server>/<backup>.tar.gz`: `204`, `404` when the node does not have it, `400` for a non-canonical UUID (`router/router_server_backup.go:279-308`) |
 | DELETE | `/api/transfers/:server` | 141 | S | `DaemonServerRepository::cancelTransfer` on the destination node; the response is ignored. Wings mounts it without `ServerExists`, so `ExtractServer` panics and it answers 500 |
 | POST | `/api/deauthorize-user` | 142 | N | `RevokeSftpAccessJob` |
 
@@ -330,7 +330,7 @@ up to 1 h (`ServerContainersController.php:17-26`).
 ```
 
 Wings refuses a configuration whose `uuid` is not a UUID, or is not the server it asked for
-(`server/server.go:326-331`, `server/manager.go:214-216`).
+(`server/server.go:326-331`, `server/manager.go:292-294`).
 
 Servers **without an allocation** (allowed since 2025-06) arrive as
 `"default": {"ip": "127.0.0.1", "port": 0}` and `"mappings": {"": []}`. `container.image` may carry a
@@ -424,9 +424,10 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
      with each server's **actual** environment state, so a server stopped from the console is not
      restarted after a reboot
   5. cron → SFTP → `POST /servers/reset` → HTTP server
-- **Manager** `InitServer(uuid, …)` (`server/manager.go:197-275`) refuses a configuration for another
+- **Manager** `InitServer(uuid, …)` (`server/manager.go:281-355`) refuses a configuration for another
   server, creates `<data>/<uuid>`, opens it as the server's filesystem (an `os.Root`, held open until the
-  server is removed) and builds the environment via a **hard-coded `docker.New(...)`** (257-266). A server
+  server is removed) and builds the environment through the manager's **`EnvironmentFactory`** (336-346):
+  the one set with `WithEnvironmentFactory`, or `DockerEnvironmentFactory` when none is set. A server
   listed twice by the Panel is loaded once.
 - **Power** `HandlePowerAction` (`server/power.go:70-200`): refused while installing, transferring or
   restoring; takes a power lock. Start: `onBeforeStart` (Sync, suspend check, `SyncWithEnvironment`, disk
@@ -474,13 +475,13 @@ Stats JSON: `{memory_bytes, memory_limit_bytes, cpu_absolute, network{rx_bytes,t
 | `cmd/root.go:102-130` | Docker `Info`, `log.Fatalf` if unreachable | remove |
 | `cmd/root.go:148` `EnsurePelicanUser` | `useradd` | skip (rootless/distroless path) |
 | `cmd/root.go:152,160` passwd, logrotate | host files | disable via config |
-| `server/manager.go:257-266` | hard-coded `docker.New` | **replace with factory** |
+| `server/manager.go:336-346` | `DockerEnvironmentFactory` unless `WithEnvironmentFactory` sets another | agent sets the shim environment factory |
 | `cmd/root.go:197` `ConfigureDocker` | network setup (fatal) | skip |
 | `system/system.go:103-171,373-392` | `/api/system` fails without Docker | gateway answers |
 | `system/system.go:332-371` | docker disk, prune | gateway stubs |
-| `server/install.go` | installer container | **replace** (external install) |
-| `server/update.go:36-40` | docker type assertion for image and stop config | **generic interface** |
-| `router/websocket/websocket.go:534-538` | `IsAttached` gate | n/a for non-docker env |
+| `server/install.go:125-162` | installer container (`dockerInstaller`) unless `WithInstaller` sets another `Installer` | agent sets the Job-backed installer |
+| `server/update.go:34` | image and stop config through `ImageAndStopConfigurable` | shim environment implements it |
+| `router/websocket/websocket.go:533-534` | `IsAttached` gate through `Attachable` | n/a for non-docker env |
 | `server/power.go:255-262` | chown to uid 988 | `check_permissions_on_boot: false` |
 | `internal/diagnostics` | docker info | optional |
 

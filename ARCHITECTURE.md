@@ -4,7 +4,7 @@
 |---|---|
 | **Kubernetes** | ≥ 1.33, single- or multi-node (1.35+ recommended for in-place pod resize) |
 | **API group** | `pelican-k8s.io/v1alpha1` |
-| **Upstream basis** | Pelican Wings `9fb682f`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
+| **Upstream basis** | Pelican Wings `27f67c8`, Pelican Panel `6ba5264` (see [`docs/wings-panel-contract.md`](docs/wings-panel-contract.md)) |
 
 ---
 
@@ -49,8 +49,8 @@ centrally (gateway). Kubernetes owns scheduling, storage, networking and restart
    capabilities dropped and the `RuntimeDefault` seccomp profile. Install Jobs run as root in the same
    namespace, so the namespace is labelled `baseline` and the shape of game and agent pods is enforced by
    `ValidatingAdmissionPolicy`s that match pods in the servers namespace by ServiceAccount (§12.2).
-5. **Wings as a dependency.** The agent imports Wings as a Go module; six opt-in hooks on a fork
-   branch plug in the shim, the Job installer, incoming transfers and the restore download's trust (§6.3).
+5. **Wings as a dependency.** The agent imports Wings as a Go module; six opt-in hooks in upstream
+   Wings plug in the shim, the Job installer, incoming transfers and the restore download's trust (§6.3).
 
 **Not provided:** transfers away from the cluster (one gateway is one node; incoming transfers are
 supported, §8.10), Panel mounts, `force_outgoing_ip`,
@@ -486,8 +486,9 @@ Everything else the agent serves is Wings' router: power, commands, files, backu
 downloads and uploads, `deauthorize-user`, `ws/deny`, an incoming transfer (`POST /api/transfers`, §8.10),
 and the SFTP server on `:2022`.
 
-**Hooks.** The agent plugs into Wings through six opt-in hooks on the `pelican-k8s-hooks` branch of
-[Claiyc/wings](https://github.com/Claiyc/wings), which `go.mod` pins with a `replace`:
+**Hooks.** The agent plugs into Wings through six opt-in hooks. All are in upstream Wings: hooks 1 to 5 since
+[pelican/wings#223](https://github.com/pelican/wings/pull/223), hook 6 since
+[pelican/wings#264](https://github.com/pelican/wings/pull/264):
 
 | # | Hook | Used by the agent for |
 |---|---|---|
@@ -1981,8 +1982,7 @@ pelican-k8s/
 - **Go:** 1.27 (`go.mod`).
 - **Images:** `gateway`, `operator`, `agent` on `gcr.io/distroless/static-debian12:nonroot`; `shim` on
   `scratch` (UID 65534). Multi-arch (`linux/amd64`, `linux/arm64`).
-- **Wings:** `go.mod` requires `github.com/pelican/wings` and replaces it with a pinned commit of the
-  `pelican-k8s-hooks` branch of `github.com/Claiyc/wings` (§6.3).
+- **Wings:** `go.mod` requires an upstream `github.com/pelican/wings` commit (§6.3).
 - **Licensing:** Wings (MIT) is a dependency; the Panel (AGPL-3.0) runs unmodified as a separate service.
 - **Keeping the API surface current:**
   - Request, response and token types come from the Wings module.
@@ -1991,7 +1991,7 @@ pelican-k8s/
     shim environment does not implement.
   - The *Contract* workflow (`hack/e2e-kind.sh`) runs a kind cluster with the real Panel on pushes to master
     and on every pull request, and nightly against the latest Panel image. The nightly *Upstream drift* workflow
-    runs `test/upstream` against the tip of the hooks branch and `hack/check-panel-contract.sh` against
+    runs `test/upstream` against upstream Wings `main` and `hack/check-panel-contract.sh` against
     the latest Panel image.
 
 ---

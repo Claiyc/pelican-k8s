@@ -43,6 +43,21 @@ tinker() {
   fi
   printf '%s\n' "$out" | tail -n "${2:-1}"
 }
+# tinker for a statement that is safe to run again after SQLite refused it with
+# "database is locked": the Panel's queue worker shares the SQLite file and can
+# still hold the write lock just after a job's status changed. A refused
+# statement is rolled back, so it is retried a few times.
+tinker_retry_locked() {
+  local out i
+  for i in 1 2 3 4 5; do
+    if out=$(tinker "$@" 2>&1); then printf '%s\n' "$out"; return 0; fi
+    [[ "$out" == *"database is locked"* ]] || break
+    echo "database is locked, retrying ($i)" >&2
+    sleep 2
+  done
+  printf '%s\n' "$out" >&2
+  return 1
+}
 # The Panel's view of the server state, asked from the gateway (an enum on current Panels, a string on older ones).
 panel_status() { tinker '$x = App\Models\Server::find(1)->retrieveStatus(); echo $x instanceof BackedEnum ? $x->value : $x, PHP_EOL;' || true; }
 cleanup() {
@@ -202,7 +217,7 @@ done
 # The archive came from the first server's agent: its eula.txt is in the new server.
 eula=$(curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/servers/$NEW/files/contents?file=%2Feula.txt")
 echo "restored eula.txt: $eula"; [[ "$eula" = "eula=true" ]]
-tinker 'app(App\Services\Servers\ServerDeletionService::class)->handle(App\Models\Server::where("uuid", "'"$NEW"'")->firstOrFail()); echo "restored server deleted", PHP_EOL;'
+tinker_retry_locked 'app(App\Services\Servers\ServerDeletionService::class)->handle(App\Models\Server::where("uuid", "'"$NEW"'")->firstOrFail()); echo "restored server deleted", PHP_EOL;'
 tinker '$s = App\Models\Server::find(1); app(App\Services\Servers\SuspensionService::class)->handle($s, App\Enums\SuspendAction::Suspend); echo "suspended", PHP_EOL;'
 for i in $(seq 1 40); do st=$(panel_status); [[ "$st" = offline ]] && break; sleep 5; done
 echo "after suspend=$st"; [[ "$st" = offline ]]

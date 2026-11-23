@@ -1,7 +1,7 @@
-# Early warning for Pelican upstream drift: builds and tests against the tip of
-# the Wings fork's hooks branch (not the pinned commit) and the latest Panel
-# image once a day, and opens an issue when a Wings or Panel release is newer
-# than the pinned Wings or the Panel chart's appVersion.
+# Early warning for Pelican upstream drift: builds and tests against upstream
+# Wings main (not the pinned commit) and the latest Panel image once a day, and
+# opens an issue when a Wings or Panel release is newer than the pinned Wings or
+# the Panel chart's appVersion.
 name: Upstream drift
 
 on:
@@ -13,33 +13,32 @@ permissions:
   contents: read
 
 jobs:
-  wings-branch:
-    name: Against the Wings hooks branch
+  wings-main:
+    name: Against Wings main
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - name: Point the replace at the tip of the hooks branch
+      - name: Require the tip of Wings main
         run: |
-          # The agent compiles against the pelican-k8s-hooks branch of the
-          # Claiyc/wings fork, which carries the five hooks (ARCHITECTURE.md
-          # 6.3) on top of upstream, so this checks the tip of that branch.
-          go mod edit -replace github.com/pelican/wings=github.com/Claiyc/wings@pelican-k8s-hooks
+          # Resolve main to one pseudo-version first, so the build and the
+          # report below use the same commit.
+          tip=$(go list -m -f '{{.Version}}' github.com/pelican/wings@main)
+          go mod edit -require "github.com/pelican/wings@$tip"
           go mod tidy
-      - name: Report a pin that is behind the branch
+      - name: Report a pin that is behind main
         run: |
           if git diff --quiet go.mod go.sum; then
-            echo "go.mod is pinned at the tip of pelican-k8s-hooks" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "go.mod is pinned at the tip of Wings main" | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            tip=$(go list -m -f '{{with .Replace}}{{.Version}}{{end}}' github.com/pelican/wings)
-            echo "::warning::the pinned Wings replace is behind pelican-k8s-hooks ($tip); bump it in go.mod"
-            echo "Wings branch tip: \`$tip\` (go.mod is behind)" | tee -a "$GITHUB_STEP_SUMMARY"
+            tip=$(go list -m -f '{{.Version}}' github.com/pelican/wings)
+            echo "Wings main: \`$tip\` (go.mod is behind)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
       - name: Route table, remote client and ProcessEnvironment diffs
         run: go test -count=1 -run 'TestGatewayCoversWingsRoutes|TestGatewayServesWingsRemoteCalls|TestProcessEnvironmentInterface' ./test/upstream/
-      - name: Build and test against the branch tip
+      - name: Build and test against Wings main
         run: |
           go build ./...
           go test -count=1 ./...
@@ -56,17 +55,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The replace pins a pseudo-version whose last field is the commit
-          # on pelican-k8s-hooks. The release is in the pin when its tag is an
-          # ancestor of that commit (the branch merges upstream tags).
+          # go.mod requires a tag or a pseudo-version whose last field is a
+          # commit on Wings main. The release is in the pin when its tag is an
+          # ancestor of that commit.
           latest=$(gh api repos/pelican/wings/releases/latest --jq .tag_name)
-          pin=$(awk '$1 == "replace" && $2 == "github.com/pelican/wings" {print $NF}' go.mod)
-          # The pin is fetched by its full hash, so the check also works when the
-          # branch no longer contains it.
-          commit=$(gh api "repos/Claiyc/wings/commits/${pin##*-}" --jq .sha)
+          pin=$(awk '$1 == "github.com/pelican/wings" {print $2}' go.mod)
+          ref=$pin
+          if [[ "$pin" =~ [.-][0-9]{14}-([0-9a-f]{12})$ ]]; then ref=${BASH_REMATCH[1]}; fi
+          commit=$(gh api "repos/pelican/wings/commits/$ref" --jq .sha)
           git init -q "$RUNNER_TEMP/wings"
           cd "$RUNNER_TEMP/wings"
-          git fetch -q --filter=blob:none https://github.com/Claiyc/wings "$commit"
+          git fetch -q --filter=blob:none https://github.com/pelican/wings "$commit"
           git fetch -q --filter=blob:none https://github.com/pelican/wings "refs/tags/$latest:refs/tags/$latest"
           echo "pinned Wings $pin, latest Wings release=$latest" | tee -a "$GITHUB_STEP_SUMMARY"
           git merge-base --is-ancestor "refs/tags/$latest" "$commit" || { echo "::warning::the pinned Wings ($pin) does not contain Wings $latest"; echo "WINGS_BEHIND=$latest" >> "$GITHUB_ENV"; }
@@ -75,11 +74,11 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const title = `Pelican Wings ${process.env.WINGS_BEHIND} released: merge it into pelican-k8s-hooks, bump the replace in go.mod and re-verify the contract`;
+            const title = `Pelican Wings ${process.env.WINGS_BEHIND} released: bump Wings in go.mod and re-verify the contract`;
             const {data: issues} = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'upstream'});
             if (issues.some(i => i.title === title)) return;
             await github.rest.issues.create({...context.repo, title, labels: ['upstream'],
-              body: 'Detected by the nightly upstream-drift workflow. Merge the release tag into the `pelican-k8s-hooks` branch of Claiyc/wings, point the `replace` in go.mod at the new tip, run `go test ./test/upstream/ ./...` and the spike, re-verify docs/wings-panel-contract.md against the new Wings version and run the e2e suite (docs/development.md).'});
+              body: 'Detected by the nightly upstream-drift workflow. Bump Wings in go.mod (`go get github.com/pelican/wings@<tag> && go mod tidy`), run `go test ./test/upstream/ ./...` and the spike, re-verify docs/wings-panel-contract.md against the new Wings version and run the e2e suite (docs/development.md).'});
 
   panel-image:
     name: Against the latest Panel image
@@ -113,7 +112,7 @@ jobs:
   notify:
     name: Report drift
     runs-on: ubuntu-latest
-    needs: [wings-branch, wings-release, panel-image]
+    needs: [wings-main, wings-release, panel-image]
     if: failure()
     permissions:
       contents: read
@@ -122,7 +121,7 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const title = 'Upstream drift: the Wings hooks branch or the Panel image no longer match the gateway/agent';
+            const title = 'Upstream drift: Wings main or the Panel image no longer match the gateway/agent';
             const {data: issues} = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'upstream'});
             const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const existing = issues.find(i => i.title === title);
@@ -130,5 +129,5 @@ jobs:
               await github.rest.issues.createComment({...context.repo, issue_number: existing.number, body: `Still failing: ${url}`});
             } else {
               await github.rest.issues.create({...context.repo, title, labels: ['upstream'],
-                body: `The nightly workflow failed: ${url}\n\nWings side: test/upstream (route table, remote client, ProcessEnvironment) against the tip of \`pelican-k8s-hooks\`; rebase that branch on the new upstream tag and bump the \`replace\` in go.mod.\nPanel side: \`hack/check-panel-contract.sh\` (runnable locally, \`PANEL_IMAGE=\` to pick a version) against docs/wings-panel-contract.md.`});
+                body: `The nightly workflow failed: ${url}\n\nWings side: test/upstream (route table, remote client, ProcessEnvironment) against Wings \`main\`; adapt the gateway or agent before the next Wings bump.\nPanel side: \`hack/check-panel-contract.sh\` (runnable locally, \`PANEL_IMAGE=\` to pick a version) against docs/wings-panel-contract.md.`});
             }
