@@ -12,11 +12,7 @@ The components in this repository: shim, agent, gateway, operator and the Helm
 charts. Issues in Pelican Panel or Wings themselves belong to
 [pelican/panel](https://github.com/pelican/panel) and
 [pelican/wings](https://github.com/pelican/wings). The agent embeds upstream
-Wings. Until [pelican/wings#264](https://github.com/pelican/wings/pull/264) is
-merged it uses the `pelican-k8s-hooks` branch of
-[Claiyc/wings](https://github.com/Claiyc/wings), which is upstream `main` plus
-that one opt-in hook; fixes in Wings flow in when that branch is brought up to
-date and the pinned version is bumped.
+Wings as a Go module; fixes in Wings flow in when the pinned version is bumped.
 
 ## Design notes
 

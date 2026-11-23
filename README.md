@@ -97,19 +97,16 @@ kubectl -n pelican-servers describe gameserver gs-<uuid>   # conditions and even
 | [docs/operations.md](docs/operations.md) | Day-2: inspecting servers, upgrades, backups and snapshots, troubleshooting |
 | [docs/compatibility.md](docs/compatibility.md) | Wings feature parity and tested platforms |
 | [docs/security.md](docs/security.md) | Trust boundaries, tokens, pod security, network policies |
-| [docs/development.md](docs/development.md) | Building, testing, the code map, the Wings fork and its hooks, release process |
+| [docs/development.md](docs/development.md) | Building, testing, the code map, Wings and its hooks, release process |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the system works: components, resources, flows, security |
 | [docs/wings-panel-contract.md](docs/wings-panel-contract.md) | Wings ⇄ Panel protocol reference |
 
 ## How it relates to Wings
 
 The agent imports [Wings](https://github.com/pelican/wings) as a Go module and
-plugs into it through a few opt-in hooks. Most are in upstream Wings; the last
-one ([pelican/wings#264](https://github.com/pelican/wings/pull/264)) is on a
-branch of the [Claiyc/wings](https://github.com/Claiyc/wings) fork until it is
-merged. CI checks compatibility
-with the pinned Wings on every run and with the tip of that branch every
-night. [docs/development.md](docs/development.md#wings-as-a-dependency) has
+plugs into it through a few opt-in hooks, all of them in upstream Wings. CI
+checks compatibility with the pinned Wings on every run and with upstream
+`main` every night. [docs/development.md](docs/development.md#wings-as-a-dependency) has
 the details.
 
 ## Contributing
