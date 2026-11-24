@@ -23,6 +23,12 @@ updates:
       # arrive as separate pull requests, each of which fails on its own.
       codeql-action:
         patterns: ["github/codeql-action*"]
+    ignore:
+      # The v2.6.0 action image cannot be pulled: its GHCR index lists
+      # manifests that return 404 (ossf/scorecard-action#1752). A later
+      # release is still offered; drop this once v2.6.0 pulls again.
+      - dependency-name: ossf/scorecard-action
+        versions: ["2.6.0"]
   - package-ecosystem: docker
     directories: ["/build"]
     schedule: {interval: daily}
