@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-11-27
+
+### What's Changed
+* ci: pin the Scorecard action back to v2.5.0 by @Claiyc in https://github.com/Claiyc/pelican-k8s/pull/188
+* build(deps): bump SonarSource/sonarqube-scan-action from 8.5.0 to 8.5.1 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/190
+* build(deps): bump github.com/pkg/sftp from 1.13.12 to 1.13.13 by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/191
+* build(deps): bump the codeql-action group with 3 updates by @dependabot[bot] in https://github.com/Claiyc/pelican-k8s/pull/192
+
 ## [2.4.1] - 2026-11-23
 
 ### What's Changed
@@ -340,7 +348,8 @@ with the Paper and Vanilla Minecraft eggs.
 - Local (`wings` adapter) backups live on the pod's scratch volume and do not survive pod recreation; use the S3 adapter.
 - Wings is pinned to a fork branch carrying four opt-in hooks until they are merged upstream.
 
-[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.4.1...HEAD
+[Unreleased]: https://github.com/Claiyc/pelican-k8s/compare/v2.4.2...HEAD
+[2.4.2]: https://github.com/Claiyc/pelican-k8s/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/Claiyc/pelican-k8s/compare/v2.3.0...v2.3.1
