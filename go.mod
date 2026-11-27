@@ -13,7 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/pelican/wings v1.0.0-rc.3.0.20261123161028-27f67c88260f
-	github.com/pkg/sftp v1.13.12
+	github.com/pkg/sftp v1.13.13
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
